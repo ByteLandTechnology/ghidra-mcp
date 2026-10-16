@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 480" width="100%">
+  <defs>
+    <marker id="arr-gray" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" class="marker-gray" />
+    </marker>
+  </defs>
+  <style>
+    /* Default / Light theme */
+    .layer-box { fill: #f8fafc; stroke: #d0d7de; stroke-width: 1px; }
+    .mod-box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1px; }
+    .tool-box { fill: #f0f7ff; stroke: #54aeff; stroke-width: 1.5px; }
+
+    .layer-label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; font-weight: 600; fill: #656d76; text-transform: uppercase; letter-spacing: 0.5px; }
+    .mod-label { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; font-weight: 600; fill: #1f2328; text-anchor: middle; }
+    .tool-label { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; font-weight: 700; fill: #0969da; text-anchor: middle; }
+
+    .arrow-line { stroke: #8c959f; stroke-width: 1.5px; fill: none; marker-end: url(#arr-gray); }
+    .marker-gray { fill: #8c959f; }
+
+    /* Dark theme */
+    @media (prefers-color-scheme: dark) {
+      .layer-box { fill: #161b22; stroke: #30363d; }
+      .mod-box { fill: #0d1117; stroke: #30363d; }
+      .tool-box { fill: #0d213a; stroke: #1f6feb; }
+
+      .layer-label { fill: #8b949e; }
+      .mod-label { fill: #f0f6fc; }
+      .tool-label { fill: #58a6ff; }
+
+      .arrow-line { stroke: #6e7681; }
+      .marker-gray { fill: #6e7681; }
+    }
+  </style>
+
+  <!-- Layer 1: Front ends -->
+  <g transform="translate(60, 20)">
+    <rect width="640" height="54" rx="8" class="layer-box" />
+    <text x="16" y="16" class="layer-label">Front Ends</text>
+    <rect x="20" y="22" width="105" height="26" rx="5" class="mod-box" />
+    <text x="72" y="39" class="mod-label">cli</text>
+    <rect x="135" y="22" width="115" height="26" rx="5" class="mod-box" />
+    <text x="192" y="39" class="mod-label">daemon</text>
+    <rect x="260" y="22" width="105" height="26" rx="5" class="mod-box" />
+    <text x="312" y="39" class="mod-label">mcp</text>
+    <rect x="375" y="22" width="130" height="26" rx="5" class="mod-box" />
+    <text x="440" y="39" class="mod-label">mcp_http</text>
+    <rect x="515" y="22" width="105" height="26" rx="5" class="mod-box" />
+    <text x="567" y="39" class="mod-label">upload</text>
+  </g>
+
+  <!-- Arrow down -->
+  <path d="M 380 74 L 380 96" class="arrow-line" />
+
+  <!-- Layer 2: Tools -->
+  <g transform="translate(60, 98)">
+    <rect x="220" y="0" width="200" height="34" rx="6" class="tool-box" />
+    <text x="320" y="22" class="tool-label">tools (dispatch)</text>
+  </g>
+
+  <!-- Arrow down -->
+  <path d="M 380 132 L 380 154" class="arrow-line" />
+
+  <!-- Layer 3: Domain -->
+  <g transform="translate(60, 156)">
+    <rect width="640" height="54" rx="8" class="layer-box" />
+    <text x="16" y="16" class="layer-label">Domain</text>
+    <rect x="60" y="22" width="160" height="26" rx="5" class="mod-box" />
+    <text x="140" y="39" class="mod-label">session</text>
+    <rect x="240" y="22" width="160" height="26" rx="5" class="mod-box" />
+    <text x="320" y="39" class="mod-label">analysis</text>
+    <rect x="420" y="22" width="160" height="26" rx="5" class="mod-box" />
+    <text x="500" y="39" class="mod-label">project</text>
+  </g>
+
+  <!-- Arrow down -->
+  <path d="M 380 210 L 380 232" class="arrow-line" />
+
+  <!-- Layer 4: Bridge -->
+  <g transform="translate(60, 234)">
+    <rect width="640" height="54" rx="8" class="layer-box" />
+    <text x="16" y="16" class="layer-label">Bridge</text>
+    <rect x="140" y="22" width="170" height="26" rx="5" class="mod-box" />
+    <text x="225" y="39" class="mod-label">bridge</text>
+    <rect x="330" y="22" width="170" height="26" rx="5" class="mod-box" />
+    <text x="415" y="39" class="mod-label">jsonrpc</text>
+  </g>
+
+  <!-- Arrow down -->
+  <path d="M 380 288 L 380 310" class="arrow-line" />
+
+  <!-- Layer 5: State -->
+  <g transform="translate(60, 312)">
+    <rect width="640" height="54" rx="8" class="layer-box" />
+    <text x="16" y="16" class="layer-label">State</text>
+    <rect x="60" y="22" width="160" height="26" rx="5" class="mod-box" />
+    <text x="140" y="39" class="mod-label">state</text>
+    <rect x="240" y="22" width="160" height="26" rx="5" class="mod-box" />
+    <text x="320" y="39" class="mod-label">model</text>
+    <rect x="420" y="22" width="160" height="26" rx="5" class="mod-box" />
+    <text x="500" y="39" class="mod-label">error</text>
+  </g>
+
+  <!-- Arrow down -->
+  <path d="M 380 366 L 380 388" class="arrow-line" />
+
+  <!-- Layer 6: Platform -->
+  <g transform="translate(60, 390)">
+    <rect width="640" height="54" rx="8" class="layer-box" />
+    <text x="16" y="16" class="layer-label">Platform</text>
+    <rect x="20" y="22" width="110" height="26" rx="5" class="mod-box" />
+    <text x="75" y="39" class="mod-label">config</text>
+    <rect x="140" y="22" width="110" height="26" rx="5" class="mod-box" />
+    <text x="195" y="39" class="mod-label">paths</text>
+    <rect x="260" y="22" width="115" height="26" rx="5" class="mod-box" />
+    <text x="317" y="39" class="mod-label">process</text>
+    <rect x="385" y="22" width="115" height="26" rx="5" class="mod-box" />
+    <text x="442" y="39" class="mod-label">ghidra</text>
+    <rect x="510" y="22" width="110" height="26" rx="5" class="mod-box" />
+    <text x="565" y="39" class="mod-label">java_path</text>
+  </g>
+</svg>

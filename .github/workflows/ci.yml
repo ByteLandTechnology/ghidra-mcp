@@ -1,0 +1,271 @@
+# Continuous integration for the ghidra-mcp workspace.
+#
+# Builds standalone x86_64 and ARM64 executables for macOS, Linux and Windows.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+
+jobs:
+  release-please:
+    name: Prepare release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: release-please-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - name: Update release PR or create release
+        id: release
+        uses: googleapis/release-please-action@v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  security-audit:
+    name: Security Audit
+    needs: release-please
+    if: >-
+      always() && !cancelled() &&
+      (needs.release-please.result == 'success' || needs.release-please.result == 'skipped')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.sha || github.sha }}
+          persist-credentials: false
+      - name: Run security audit
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: release (${{ matrix.target }})
+    needs: release-please
+    if: >-
+      always() && !cancelled() &&
+      (needs.release-please.result == 'success' || needs.release-please.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact: ghidra-mcp-macos-x86_64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            artifact: ghidra-mcp-macos-arm64
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact: ghidra-mcp-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: ghidra-mcp-linux-arm64
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            artifact: ghidra-mcp-windows-x86_64.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact: ghidra-mcp-windows-arm64.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.sha || github.sha }}
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check repository rules
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo xtask check
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Cache Ghidra distribution
+        id: cache-ghidra
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ghidra_12.1.4_PUBLIC
+          key: ghidra-12.1.4-${{ runner.os }}
+
+      - name: Install Ghidra build prerequisites
+        if: steps.cache-ghidra.outputs.cache-hit != 'true'
+        run: |
+          ${{ runner.os == 'Windows' && 'python' || 'python3' }} - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import urllib.request
+          import zipfile
+
+          download_dir = Path(os.environ['RUNNER_TEMP'])
+          archive = download_dir / 'ghidra.zip'
+          urllib.request.urlretrieve(
+              'https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip',
+              archive,
+          )
+          with archive.open('rb') as file:
+              digest = hashlib.file_digest(file, 'sha256').hexdigest()
+          if digest != 'ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db':
+              raise RuntimeError('Ghidra archive checksum mismatch')
+          with zipfile.ZipFile(archive) as distribution:
+              distribution.extractall(download_dir)
+          archive.unlink()
+          PY
+
+      - name: Set Ghidra Environment
+        run: |
+          echo "GHIDRA_INSTALL_DIR=${RUNNER_TEMP}/ghidra_12.1.4_PUBLIC" >> "$GITHUB_ENV"
+
+      - name: Build Bridge
+        run: cargo xtask build-bridge
+
+      - name: Clippy
+        run: cargo clippy --all-targets --target ${{ matrix.target }} --locked -- -D warnings
+
+      - name: Documentation
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --document-private-items --locked
+
+      - name: Build release executable
+        env:
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-D warnings -C target-feature=+crt-static' || '-D warnings' }}
+        run: cargo build --release --target ${{ matrix.target }} --locked --bin ghidra-mcp
+
+      - name: Prepare executable artifact
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/ghidra-mcp${{ runner.os == 'Windows' && '.exe' || '' }}" "dist/${{ matrix.artifact }}"
+
+      - name: Upload single executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          compression-level: 0
+          overwrite: true
+          if-no-files-found: error
+
+      - name: Collect dependency licenses
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo xtask collect-licenses > dist/THIRD_PARTY_LICENSES.txt
+
+      - name: Upload dependency licenses
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@v4
+        with:
+          name: third-party-licenses
+          path: dist/THIRD_PARTY_LICENSES.txt
+          overwrite: true
+          if-no-files-found: error
+
+  publish:
+    name: Publish verified release
+    needs: [release-please, build, security-audit]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Verify release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
+          RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$RELEASE_TAG" = "v$RELEASE_VERSION"
+          test "$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha)" = "$RELEASE_SHA"
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          test "$(jq -r '."."' .release-please-manifest.json)" = "$RELEASE_VERSION"
+          metadata="$(cargo metadata --no-deps --locked --format-version 1)"
+          for package in ghidra-mcp xtask; do
+            actual="$(jq -r --arg package "$package" \
+              '.packages[] | select(.name == $package) | .version' <<< "$metadata")"
+            test "$actual" = "$RELEASE_VERSION"
+          done
+
+      - name: Download release executables
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ghidra-mcp-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download dependency licenses
+        uses: actions/download-artifact@v4
+        with:
+          name: third-party-licenses
+          path: dist
+
+      - name: Upload release executables
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          assets=(dist/ghidra-mcp-*)
+          test "${#assets[@]}" -eq 6
+          for asset in "${assets[@]}"; do test -s "$asset"; done
+          sha256sum "${assets[@]}" | sed 's@  dist/@  @' > dist/SHA256SUMS
+          cp LICENSE dist/LICENSE
+          cp bridge/LICENSE dist/LICENSE-ghidra-bridge
+          gh release upload "$RELEASE_TAG" "${assets[@]}" dist/SHA256SUMS dist/LICENSE dist/LICENSE-ghidra-bridge dist/THIRD_PARTY_LICENSES.txt --clobber
+          release_api="$(gh release view "$RELEASE_TAG" --json apiUrl --jq .apiUrl)"
+          gh api --method PATCH "$release_api" -F draft=false -f make_latest=legacy --silent

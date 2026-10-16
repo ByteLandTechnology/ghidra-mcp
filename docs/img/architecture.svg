@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 430" width="100%">
+  <defs>
+    <marker id="arr-accent" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" class="marker-accent" />
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" class="marker-green" />
+    </marker>
+  </defs>
+  <style>
+    /* Default / Light theme */
+    .group-box { fill: #f8fafc; stroke: #d0d7de; stroke-width: 1px; }
+    .node-box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5px; }
+    .proxy-box { fill: #f0f7ff; stroke: #54aeff; stroke-width: 1.5px; }
+    .ghidra-box { fill: #f0fdf4; stroke: #4ac26b; stroke-width: 1.5px; }
+
+    .text-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; font-weight: 600; fill: #1f2328; }
+    .text-sub { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; fill: #57606a; }
+    .text-group { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; font-weight: 600; fill: #656d76; text-transform: uppercase; letter-spacing: 0.5px; }
+    .text-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; fill: #0969da; }
+    .text-ghidra-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; font-weight: 600; fill: #1a7f37; }
+    .text-ghidra-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; fill: #1a7f37; }
+    .text-line { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; fill: #57606a; text-anchor: middle; }
+    .label-bg { fill: #ffffff; }
+
+    .line-flow { stroke: #0969da; stroke-width: 1.5px; fill: none; marker-end: url(#arr-accent); }
+    .line-green { stroke: #1a7f37; stroke-width: 1.5px; fill: none; marker-end: url(#arr-green); }
+    .marker-accent { fill: #0969da; }
+    .marker-green { fill: #1a7f37; }
+
+    /* Dark theme */
+    @media (prefers-color-scheme: dark) {
+      .group-box { fill: #161b22; stroke: #30363d; }
+      .node-box { fill: #0d1117; stroke: #30363d; }
+      .proxy-box { fill: #0d213a; stroke: #1f6feb; }
+      .ghidra-box { fill: #0f241a; stroke: #238636; }
+
+      .text-title { fill: #f0f6fc; }
+      .text-sub { fill: #8b949e; }
+      .text-group { fill: #8b949e; }
+      .text-mono { fill: #58a6ff; }
+      .text-ghidra-title { fill: #3fb950; }
+      .text-ghidra-mono { fill: #3fb950; }
+      .text-line { fill: #8b949e; }
+      .label-bg { fill: #0d1117; }
+
+      .line-flow { stroke: #58a6ff; }
+      .line-green { stroke: #3fb950; }
+      .marker-accent { fill: #58a6ff; }
+      .marker-green { fill: #3fb950; }
+    }
+  </style>
+
+  <!-- Clients Zone -->
+  <g transform="translate(30, 40)">
+    <rect width="180" height="340" rx="8" class="group-box" />
+    <text x="16" y="24" class="text-group">Clients</text>
+
+    <!-- MCP Client -->
+    <g transform="translate(15, 40)">
+      <rect width="150" height="70" rx="6" class="node-box" />
+      <text x="12" y="26" class="text-title">MCP Client</text>
+      <text x="12" y="44" class="text-sub">Claude, Cursor, and other clients</text>
+      <text x="12" y="58" class="text-mono">stdio transport</text>
+    </g>
+
+    <!-- CLI User -->
+    <g transform="translate(15, 140)">
+      <rect width="150" height="60" rx="6" class="node-box" />
+      <text x="12" y="24" class="text-title">CLI User</text>
+      <text x="12" y="44" class="text-mono">ghidra-mcp call</text>
+    </g>
+
+    <!-- Remote Client -->
+    <g transform="translate(15, 230)">
+      <rect width="150" height="70" rx="6" class="node-box" />
+      <text x="12" y="24" class="text-title">Remote Client</text>
+      <text x="12" y="44" class="text-sub">Streamable HTTP</text>
+      <text x="12" y="58" class="text-mono">POST /upload</text>
+    </g>
+  </g>
+
+  <!-- Stdio Proxy -->
+  <g transform="translate(260, 80)">
+    <rect width="170" height="70" rx="6" class="proxy-box" />
+    <text x="14" y="26" class="text-title">Stdio Proxy</text>
+    <text x="14" y="44" class="text-sub">Stateless forwarder</text>
+    <text x="14" y="58" class="text-mono">ghidra-mcp</text>
+  </g>
+
+  <!-- Arrow MCP Client -> Proxy -->
+  <path d="M 195 115 L 260 115" class="line-flow" />
+  <rect x="207" y="98" width="40" height="14" rx="3" class="label-bg" />
+  <text x="227" y="109" class="text-line">stdio</text>
+
+  <!-- Daemon Container -->
+  <g transform="translate(480, 40)">
+    <rect width="280" height="230" rx="8" class="group-box" />
+    <text x="16" y="24" class="text-group">Daemon Process (One Instance)</text>
+
+    <g transform="translate(16, 36)">
+      <rect width="248" height="50" rx="5" class="node-box" />
+      <text x="12" y="20" class="text-title">IPC &amp; HTTP Listeners</text>
+      <text x="12" y="38" class="text-sub">Local Socket (UDS or Pipe) and :PORT</text>
+    </g>
+
+    <g transform="translate(16, 96)">
+      <rect width="248" height="50" rx="5" class="node-box" />
+      <text x="12" y="20" class="text-title">Session &amp; Job State</text>
+      <text x="12" y="38" class="text-sub">McpState (MD5 lookup, auto-recovery)</text>
+    </g>
+
+    <g transform="translate(16, 156)">
+      <rect width="248" height="56" rx="5" class="node-box" />
+      <text x="12" y="20" class="text-title">Process Ownership</text>
+      <text x="12" y="38" class="text-sub">Starts analyzeHeadless and bridge</text>
+    </g>
+  </g>
+
+  <!-- Arrow Stdio Proxy -> Daemon -->
+  <path d="M 430 115 L 480 115" class="line-flow" />
+  <rect x="440" y="98" width="30" height="14" rx="3" class="label-bg" />
+  <text x="455" y="109" class="text-line">UDS</text>
+
+  <!-- Arrow CLI -> Daemon -->
+  <path d="M 195 210 L 480 210" class="line-flow" />
+  <rect x="290" y="196" width="90" height="14" rx="3" class="label-bg" />
+  <text x="335" y="207" class="text-line">local socket</text>
+
+  <!-- Arrow Remote Client -> Daemon HTTP -->
+  <path d="M 195 295 L 540 295 L 540 270" class="line-flow" />
+  <rect x="290" y="281" width="90" height="14" rx="3" class="label-bg" />
+  <text x="335" y="292" class="text-line">HTTP /upload</text>
+
+  <!-- Ghidra Child Process -->
+  <g transform="translate(480, 325)">
+    <rect width="280" height="85" rx="8" class="ghidra-box" />
+    <text x="16" y="24" class="text-ghidra-title">Ghidra Session (Child Process)</text>
+    <text x="16" y="44" class="text-sub">analyzeHeadless -postScript Bridge.java</text>
+    <text x="16" y="64" class="text-ghidra-mono">WebSocket: /ws/agent (JSON-RPC 2.0)</text>
+  </g>
+
+  <!-- Arrow Daemon -> Ghidra -->
+  <path d="M 680 270 L 680 325" class="line-green" />
+  <rect x="640" y="288" width="80" height="14" rx="3" class="label-bg" />
+  <text x="680" y="299" class="text-line">start, WebSocket</text>
+</svg>
