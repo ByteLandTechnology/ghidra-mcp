@@ -185,7 +185,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/ghidra-mcp${{ runner.os == 'Windows' && '.exe' || '' }}" "dist/${{ matrix.artifact }}"
 
       - name: Upload single executable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
@@ -199,7 +199,7 @@ jobs:
 
       - name: Upload dependency licenses
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: third-party-licenses
           path: dist/THIRD_PARTY_LICENSES.txt
