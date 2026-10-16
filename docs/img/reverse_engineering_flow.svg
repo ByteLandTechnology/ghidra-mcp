@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 190" width="100%">
+  <defs>
+    <marker id="arr-blue" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" class="marker-blue" />
+    </marker>
+  </defs>
+  <style>
+    /* Default / Light theme */
+    .step-box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5px; }
+    .step-accent-box { fill: #f0f7ff; stroke: #54aeff; stroke-width: 1.5px; }
+    .step-green-box { fill: #f0fdf4; stroke: #4ac26b; stroke-width: 1.5px; }
+
+    .step-num { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; font-weight: 700; fill: #0969da; }
+    .step-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 12px; font-weight: 600; fill: #1f2328; }
+    .step-cmd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; fill: #0969da; }
+    .step-sub { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 10px; fill: #57606a; }
+
+    .step-green-num { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; font-weight: 700; fill: #1a7f37; }
+    .step-green-cmd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; fill: #1a7f37; }
+
+    .flow-line { stroke: #0969da; stroke-width: 1.5px; fill: none; marker-end: url(#arr-blue); }
+    .marker-blue { fill: #0969da; }
+
+    /* Dark theme */
+    @media (prefers-color-scheme: dark) {
+      .step-box { fill: #161b22; stroke: #30363d; }
+      .step-accent-box { fill: #0d213a; stroke: #1f6feb; }
+      .step-green-box { fill: #0f241a; stroke: #238636; }
+
+      .step-num { fill: #58a6ff; }
+      .step-title { fill: #f0f6fc; }
+      .step-cmd { fill: #58a6ff; }
+      .step-sub { fill: #8b949e; }
+
+      .step-green-num { fill: #3fb950; }
+      .step-green-cmd { fill: #3fb950; }
+
+      .flow-line { stroke: #58a6ff; }
+      .marker-blue { fill: #58a6ff; }
+    }
+  </style>
+
+  <!-- Step 1: Open / Ingest -->
+  <g transform="translate(20, 30)">
+    <rect width="130" height="120" rx="8" class="step-box" />
+    <text x="12" y="22" class="step-num">STEP 1</text>
+    <text x="12" y="42" class="step-title">Ingest Binary</text>
+    <text x="12" y="65" class="step-cmd">session.open</text>
+    <text x="12" y="80" class="step-cmd">upload.prepare</text>
+    <text x="12" y="102" class="step-sub">Local path or upload</text>
+  </g>
+
+  <path d="M 150 90 L 170 90" class="flow-line" />
+
+  <!-- Step 2: Auto Analysis -->
+  <g transform="translate(170, 30)">
+    <rect width="125" height="120" rx="8" class="step-box" />
+    <text x="12" y="22" class="step-num">STEP 2</text>
+    <text x="12" y="42" class="step-title">Auto Analyze</text>
+    <text x="12" y="65" class="step-cmd">analysis.auto</text>
+    <text x="12" y="80" class="step-cmd">jobs.poll</text>
+    <text x="12" y="102" class="step-sub">Background task</text>
+  </g>
+
+  <path d="M 295 90 L 315 90" class="flow-line" />
+
+  <!-- Step 3: Explore -->
+  <g transform="translate(315, 30)">
+    <rect width="130" height="120" rx="8" class="step-box" />
+    <text x="12" y="22" class="step-num">STEP 3</text>
+    <text x="12" y="42" class="step-title">Explore Symbols</text>
+    <text x="12" y="65" class="step-cmd">function.list</text>
+    <text x="12" y="80" class="step-cmd">symbol.list</text>
+    <text x="12" y="102" class="step-sub">Find entry points</text>
+  </g>
+
+  <path d="M 445 90 L 465 90" class="flow-line" />
+
+  <!-- Step 4: Decompile & Inspect -->
+  <g transform="translate(465, 30)">
+    <rect width="130" height="120" rx="8" class="step-accent-box" />
+    <text x="12" y="22" class="step-num">STEP 4</text>
+    <text x="12" y="42" class="step-title">Decompile</text>
+    <text x="12" y="65" class="step-cmd">decompile</text>
+    <text x="12" y="80" class="step-cmd">xref.to / from</text>
+    <text x="12" y="102" class="step-sub">C-like pseudocode</text>
+  </g>
+
+  <path d="M 595 90 L 615 90" class="flow-line" />
+
+  <!-- Step 5: Mutate / Annotate -->
+  <g transform="translate(615, 30)">
+    <rect width="125" height="120" rx="8" class="step-green-box" />
+    <text x="12" y="22" class="step-green-num">STEP 5</text>
+    <text x="12" y="42" class="step-title">Annotate &amp; Save</text>
+    <text x="12" y="65" class="step-green-cmd">function.rename</text>
+    <text x="12" y="80" class="step-green-cmd">type.set</text>
+    <text x="12" y="102" class="step-sub">Project changes</text>
+  </g>
+</svg>

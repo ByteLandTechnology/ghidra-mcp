@@ -1,0 +1,70 @@
+name: Bug report
+description: Report a problem with ghidra-mcp.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report security problems privately. [SECURITY.md](../../SECURITY.md) tells you how.
+        Remove credentials, private paths and sensitive program data from the text that you paste.
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Steps to reproduce
+      description: List each action in sequence. Include the commands or the tool calls.
+      placeholder: |
+        1. Run `ghidra-mcp call ghidra '{"command":"session.open","path":"/tmp/sample","wait":true}'`.
+        2. Run `ghidra-mcp call ghidra '{"command":"function.list","md5":"…"}'`.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the error message or the response.
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: Connection to the daemon
+      options:
+        - MCP client over stdio
+        - MCP client over HTTP
+        - ghidra-mcp CLI
+        - Other or unknown
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ghidra-mcp version
+      description: The output of `ghidra-mcp --version`.
+    validations:
+      required: true
+  - type: input
+    id: ghidra-version
+    attributes:
+      label: Ghidra and Java versions
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and architecture
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Paste `daemon.log` and `logs/<md5>/stderr.log` from the runtime directory.
+        The README section "Files and directories" tells where the runtime directory is.
+      render: shell

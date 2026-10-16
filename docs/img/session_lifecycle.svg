@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 380" width="100%">
+  <defs>
+    <marker id="arr-gray" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" class="marker-gray" />
+    </marker>
+    <marker id="arr-blue" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" class="marker-blue" />
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" class="marker-green" />
+    </marker>
+    <marker id="arr-red" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" class="marker-red" />
+    </marker>
+  </defs>
+  <style>
+    /* Default / Light theme */
+    .state-initial { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5px; }
+    .state-launching { fill: #f0f7ff; stroke: #54aeff; stroke-width: 1.5px; }
+    .state-ready { fill: #f0fdf4; stroke: #4ac26b; stroke-width: 2px; }
+    .state-warn { fill: #fffbeb; stroke: #d4a72c; stroke-width: 1.5px; }
+    .state-error { fill: #fef2f2; stroke: #ff8182; stroke-width: 1.5px; }
+    .state-closed { fill: #f8fafc; stroke: #d0d7de; stroke-width: 1.5px; }
+
+    .title-normal { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; font-weight: 700; fill: #1f2328; text-anchor: middle; }
+    .title-blue { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; font-weight: 700; fill: #0969da; text-anchor: middle; }
+    .title-green { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; font-weight: 700; fill: #1a7f37; text-anchor: middle; }
+    .title-warn { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; font-weight: 700; fill: #9a6700; text-anchor: middle; }
+    .title-red { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; font-weight: 700; fill: #cf222e; text-anchor: middle; }
+    .title-closed { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; font-weight: 700; fill: #656d76; text-anchor: middle; }
+
+    .desc-text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 10px; fill: #57606a; text-anchor: middle; }
+    .trans-label { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; fill: #57606a; text-anchor: middle; }
+    .label-bg { fill: #ffffff; }
+
+    .line-gray { stroke: #8c959f; stroke-width: 1.5px; fill: none; marker-end: url(#arr-gray); }
+    .line-blue { stroke: #0969da; stroke-width: 1.5px; fill: none; marker-end: url(#arr-blue); }
+    .line-green { stroke: #1a7f37; stroke-width: 1.5px; fill: none; marker-end: url(#arr-green); }
+    .line-red { stroke: #cf222e; stroke-width: 1.5px; fill: none; stroke-dasharray: 4,3; marker-end: url(#arr-red); }
+
+    .marker-gray { fill: #8c959f; }
+    .marker-blue { fill: #0969da; }
+    .marker-green { fill: #1a7f37; }
+    .marker-red { fill: #cf222e; }
+
+    /* Dark theme */
+    @media (prefers-color-scheme: dark) {
+      .state-initial { fill: #0d1117; stroke: #30363d; }
+      .state-launching { fill: #0d213a; stroke: #1f6feb; }
+      .state-ready { fill: #0f241a; stroke: #238636; }
+      .state-warn { fill: #2d2005; stroke: #9e6a03; }
+      .state-error { fill: #2c0e11; stroke: #da3633; }
+      .state-closed { fill: #161b22; stroke: #30363d; }
+
+      .title-normal { fill: #f0f6fc; }
+      .title-blue { fill: #58a6ff; }
+      .title-green { fill: #3fb950; }
+      .title-warn { fill: #d29922; }
+      .title-red { fill: #f85149; }
+      .title-closed { fill: #8b949e; }
+
+      .desc-text { fill: #8b949e; }
+      .trans-label { fill: #8b949e; }
+      .label-bg { fill: #0d1117; }
+
+      .line-gray { stroke: #6e7681; }
+      .line-blue { stroke: #58a6ff; }
+      .line-green { stroke: #3fb950; }
+      .line-red { stroke: #f85149; }
+
+      .marker-gray { fill: #6e7681; }
+      .marker-blue { fill: #58a6ff; }
+      .marker-green { fill: #3fb950; }
+      .marker-red { fill: #f85149; }
+    }
+  </style>
+
+  <!-- Row 1: Active Lifecycle Pipeline -->
+  <!-- 1. initial -->
+  <g transform="translate(40, 40)">
+    <rect width="110" height="52" rx="6" class="state-initial" />
+    <text x="55" y="24" class="title-normal">initial</text>
+    <text x="55" y="42" class="desc-text">new session</text>
+  </g>
+
+  <!-- 2. launching -->
+  <g transform="translate(240, 40)">
+    <rect width="120" height="52" rx="6" class="state-launching" />
+    <text x="60" y="24" class="title-blue">launching</text>
+    <text x="60" y="42" class="desc-text">launch job exists</text>
+  </g>
+
+  <!-- 3. starting -->
+  <g transform="translate(450, 40)">
+    <rect width="120" height="52" rx="6" class="state-launching" />
+    <text x="60" y="24" class="title-blue">starting</text>
+    <text x="60" y="42" class="desc-text">process runs</text>
+  </g>
+
+  <!-- 4. ready -->
+  <g transform="translate(660, 40)">
+    <rect width="120" height="52" rx="6" class="state-ready" />
+    <text x="60" y="24" class="title-green">ready</text>
+    <text x="60" y="42" class="desc-text">bridge serves requests</text>
+  </g>
+
+  <!-- Happy path pipeline arrows -->
+  <!-- initial -> launching -->
+  <path d="M 150 66 L 240 66" class="line-blue" />
+  <rect x="173" y="52" width="44" height="14" rx="3" class="label-bg" />
+  <text x="195" y="63" class="trans-label">open</text>
+
+  <!-- launching -> starting -->
+  <path d="M 360 66 L 450 66" class="line-blue" />
+  <rect x="381" y="52" width="48" height="14" rx="3" class="label-bg" />
+  <text x="405" y="63" class="trans-label">spawn</text>
+
+  <!-- starting -> ready -->
+  <path d="M 570 66 L 660 66" class="line-green" />
+  <rect x="583" y="52" width="64" height="14" rx="3" class="label-bg" />
+  <text x="615" y="63" class="trans-label">handshake</text>
+
+  <!-- Row 2: Secondary / Terminal States -->
+  <!-- 5. error -->
+  <g transform="translate(130, 210)">
+    <rect width="120" height="52" rx="6" class="state-error" />
+    <text x="60" y="24" class="title-red">error</text>
+    <text x="60" y="42" class="desc-text">launch error</text>
+  </g>
+
+  <!-- 6. stale -->
+  <g transform="translate(340, 210)">
+    <rect width="120" height="52" rx="6" class="state-warn" />
+    <text x="60" y="24" class="title-warn">stale</text>
+    <text x="60" y="42" class="desc-text">daemon restart</text>
+  </g>
+
+  <!-- 7. disconnected -->
+  <g transform="translate(550, 210)">
+    <rect width="120" height="52" rx="6" class="state-warn" />
+    <text x="60" y="24" class="title-warn">disconnected</text>
+    <text x="60" y="42" class="desc-text">process stopped</text>
+  </g>
+
+  <!-- 8. closed -->
+  <g transform="translate(730, 210)">
+    <rect width="100" height="52" rx="6" class="state-closed" />
+    <text x="50" y="24" class="title-closed">closed</text>
+    <text x="50" y="42" class="desc-text">client closed session</text>
+  </g>
+
+  <!-- Inter-row transitions -->
+  <!-- ready -> closed (right side of ready to top of closed) -->
+  <path d="M 780 66 L 800 66 L 800 210" class="line-gray" />
+  <rect x="780" y="132" width="40" height="14" rx="3" class="label-bg" />
+  <text x="800" y="143" class="trans-label">close</text>
+
+  <!-- ready -> disconnected (bottom of ready to top of disconnected) -->
+  <path d="M 700 92 L 700 145 L 620 145 L 620 210" class="line-gray" />
+  <rect x="632" y="138" width="68" height="14" rx="3" class="label-bg" />
+  <text x="666" y="149" class="trans-label">disconnect</text>
+
+  <!-- disconnected -> launching (recovery: up to y=170, left to x=320, up to launching) -->
+  <path d="M 580 210 L 580 170 L 320 170 L 320 92" class="line-blue" />
+  <rect x="410" y="163" width="84" height="14" rx="3" class="label-bg" />
+  <text x="452" y="174" class="trans-label">auto-recovery</text>
+
+  <!-- stale -> launching (relaunch: up to y=130, left to x=280, up to launching) -->
+  <path d="M 400 210 L 400 130 L 280 130 L 280 92" class="line-blue" />
+  <rect x="300" y="123" width="80" height="14" rx="3" class="label-bg" />
+  <text x="340" y="134" class="trans-label">auto-relaunch</text>
+
+  <!-- launching -> error (failure: down from launching x=250 to y=150, left to x=210, down into error) -->
+  <path d="M 250 92 L 250 150 L 210 150 L 210 210" class="line-red" />
+  <rect x="180" y="143" width="70" height="14" rx="3" class="label-bg" />
+  <text x="215" y="154" class="trans-label">launch error</text>
+
+  <!-- starting -> error (start failure: down from starting x=510, through bottom corridor y=315, to error bottom) -->
+  <path d="M 510 92 L 510 108 L 535 108 L 535 315 L 190 315 L 190 262" class="line-red" />
+  <rect x="325" y="308" width="80" height="14" rx="3" class="label-bg" />
+  <text x="365" y="319" class="trans-label">start error</text>
+
+  <!-- error -> launching (open retry: from error left side x=130, left to x=80, up to y=110, right into launching left x=240) -->
+  <path d="M 130 236 L 80 236 L 80 110 L 240 110 L 240 82" class="line-blue" />
+  <rect x="90" y="103" width="64" height="14" rx="3" class="label-bg" />
+  <text x="122" y="114" class="trans-label">open retry</text>
+</svg>
