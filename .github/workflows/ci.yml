@@ -128,7 +128,7 @@ jobs:
 
       - name: Cache Ghidra distribution
         id: cache-ghidra
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ghidra_12.1.4_PUBLIC
           key: ghidra-12.1.4-${{ runner.os }}
