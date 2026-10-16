@@ -54,7 +54,7 @@
   <!-- Layer 2: Tools -->
   <g transform="translate(60, 98)">
     <rect x="220" y="0" width="200" height="34" rx="6" class="tool-box" />
-    <text x="320" y="22" class="tool-label">tools (dispatch)</text>
+    <text x="320" y="22" class="tool-label">tools (catalog)</text>
   </g>
 
   <!-- Arrow down -->

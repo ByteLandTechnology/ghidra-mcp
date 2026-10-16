@@ -171,8 +171,8 @@ Tool calls return standard JSON-RPC 2.0 error codes in `structuredContent`:
 
 | Code | Name | Cause | Resolution |
 | --- | --- | --- | --- |
-| `-32602` | `invalid_argument` | Absent or invalid command parameters. | Check parameters with `help`. |
-| `-32001` | `session_lock_timeout` | Session lock timeout or request collision. | Wait for active command to finish. |
-| `-32002` | `missing_target` | The daemon did not find the binary, session, or job ID. | Open session or upload binary first. |
-| `-32000` | `disconnected` | Bridge disconnected or daemon shutdown in progress. | Reopen session with `session.open`. |
+| `-32602` | `invalid_argument` | An unknown tool, or absent or invalid tool arguments or operation parameters. | Check parameters with `ghidra_help`. |
+| `-32001` | `session_lock_timeout` | Session lock timeout or request collision. | Wait for the active operation to finish. |
+| `-32002` | `missing_target` | The daemon did not find the binary, session, job ID, domain, or operation. | Open session or upload binary first. |
+| `-32000` | `disconnected` | Bridge disconnected or daemon shutdown in progress. | Reopen session with `ghidra_session open`. |
 | `-32603` | `transaction_failed` | Internal database transaction or bridge fault. | Inspect child process logs. |

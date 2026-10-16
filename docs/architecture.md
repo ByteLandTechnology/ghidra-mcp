@@ -61,7 +61,7 @@ A module uses only the modules in the layers below it:
 | `mcp` | The MCP handler. It runs calls in the daemon, or sends them from the proxy to the daemon. |
 | `mcp_http` | Streamable HTTP, legacy SSE sessions, CORS and HTTP compatibility. |
 | `upload` | Upload credentials and the `POST /upload` endpoint. |
-| `tools` | The `ghidra` tool: the local command table, the dispatch, the catalog and `help`. |
+| `tools` | The MCP tools: the domain catalog, the local operations, the call validation and `ghidra_help`. |
 | `session` | Open, launch, wait, relaunch, call and close for sessions. |
 | `analysis` | Auto-analysis as a background job. |
 | `project` | Saved binaries and the preparation of Ghidra projects. |
@@ -82,11 +82,17 @@ To read the API documentation of each module and item, use `cargo doc --document
 
 ![Tool Call Sequence](img/tool_call.svg)
 
-All commands go through the MCP tool `ghidra`. The `command` argument selects the command.
-`tools::dispatch` validates the arguments against the schema of the command.
+The daemon shows `ghidra_help` and one MCP tool for each domain, for example `ghidra_function`.
+The domains and the operations are the same as in the MCP server of the bridge.
+A call has an `operation` and its `params`. An operation that names one session also has the `md5` of that session, never in `params`.
+`ghidra_help` shows the md5 rule (`required`, `optional` or `absent`) and the effects of each operation.
+This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
+
+`tools::call` finds the domain and the operation in the catalog (`tools/catalog.rs`).
+It validates `params` against the schema of the operation.
 Then it does one of these:
 
-- It runs a **local command** from `LOCAL_COMMANDS`: help, sessions, jobs, uploads and analysis.
+- It runs a **local operation** from `LOCAL_OPERATIONS` (`tools/local.rs`): sessions, jobs, uploads and the start of an analysis.
 - It sends a **bridge method** from the bridge contract `bridge/docs/asyncapi.yaml` to the bridge.
 
 When the bridge returns an error, the tool call fails. The failed result still contains the structured response.
@@ -95,13 +101,13 @@ The bridge distinguishes database transaction failures (HTTP 500 `transaction_fa
 
 ### Open a binary
 
-`session.open` accepts a `path` on the daemon host, or the `md5` of a binary that the daemon saved before.
+`ghidra_session open` accepts a `path` on the daemon host, or the `md5` of a binary that the daemon saved before.
 For a path, the daemon calculates the MD5 and copies the file into the persistent home.
 Then later calls need only the MD5.
 The daemon uses a connected session again, or joins a launch in progress, or starts a new launch.
 [Session lifecycle](#session-lifecycle) describes the launch.
 
-`session.open` returns the launch job immediately. If the client sets `wait`, it waits for the job.
+`ghidra_session open` returns the launch job immediately. If the client sets `wait`, it waits for the job.
 
 ### Upload a binary
 
@@ -109,7 +115,7 @@ The daemon uses a connected session again, or joins a launch in progress, or sta
 
 The client can use a credential only one time.
 The request uses the credential before the daemon reads the first byte.
-The client must start the upload within ten minutes after `upload.prepare`.
+The client must start the upload within ten minutes after `ghidra_upload prepare`.
 The daemon does not stop an active upload.
 
 ### Shutdown
@@ -152,7 +158,7 @@ Each step first makes sure that its launch job or its credential still owns the 
 A newer launch can replace a launch, and a client can close a session.
 In these conditions, the old step stops and does not change the newer state.
 
-The next command relaunches a session that is `disconnected` or `stale`.
+The next tool call for a session that is `disconnected` or `stale` relaunches the session.
 The client does not see the relaunch.
 
 ## Concurrency
@@ -250,14 +256,14 @@ This alias is a symbolic link to the `projects/` directory in the persistent hom
 
 | Interface | Format | Contract |
 |---|---|---|
-| MCP tool `ghidra` | MCP through stdio, a local socket, Streamable HTTP or legacy SSE. | The commands in `tools::LOCAL_COMMANDS` and in the bridge contract. `help` describes them. |
+| MCP tools `ghidra_*` | MCP through stdio, a local socket, Streamable HTTP or legacy SSE. | The operations in `LOCAL_OPERATIONS` and in the bridge contract. `ghidra_help` describes them. |
 | Bridge WebSocket `/ws/agent` | Strict JSON-RPC 2.0 (`jsonrpc.rs`). | `bridge/docs/asyncapi.yaml`, from the bridge build. |
-| Upload `POST /upload` | Raw bytes with a bearer credential. | The result of `upload.prepare`. |
+| Upload `POST /upload` | Raw bytes with a bearer credential. | The result of `ghidra_upload prepare`. |
 | `server.json` | JSON with `pid`, `mcpUrl`, `bridgeWsUrl` and `localSocket`. | Local clients read it. |
 | `config.toml` | TOML. | The README and `config.rs`. |
 | Error Envelope | JSON inside MCP `structured_content`. | Standard JSON-RPC error codes (`-32602` to `-32603`) and machine-readable error variants. |
 
-The MCP tool definitions, the command schemas, the help output and the response shapes are public contracts.
+The MCP tool definitions, the operation schemas, the help output and the response shapes are public contracts.
 Change them only in a deliberate change.
 Record the change in the changelog.
 
@@ -289,13 +295,16 @@ Do not make it available to other hosts.
 
 ## Extend the system
 
-- **A local command.** Add one entry to `LOCAL_COMMANDS` in `src/tools.rs`.
-  Give its name, description, input schema, mutation flag and handler.
-  Use `parse` to read its arguments into a `Deserialize` struct.
-  `help` and the validation then include the command.
+- **A local operation.** Add one entry to `LOCAL_OPERATIONS` in `src/tools/local.rs`.
+  Give its domain, name, description, params schema, md5 rule, effects and handler.
+  If it adds lifecycle behavior to a bridge method, set `extends` to the method.
+  Use `parse` to read its parameters into a `Deserialize` struct.
+  `ghidra_help`, the tool definitions and the validation then include the operation.
 - **A bridge method.** Add the method to the bridge.
   Regenerate the contract after you add the method.
-  The daemon reads the contract at compile time and shows the method without changes.
+  The daemon reads the contract at compile time and shows the method in its domain tool.
+  For a new domain, add the domain to `DOMAINS` in `src/tools/catalog.rs`.
+  If the bridge MCP server puts the method in a different domain, add the same domain and operation names to `bridge_target`.
 - **A session state or a transition.** Add a `mark_*` method to `SessionRecord` in `model.rs`.
   Call it while you have the lifecycle lock.
 - **A long operation.** Make a job with `McpState::insert_job`.

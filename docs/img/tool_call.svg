@@ -72,8 +72,8 @@
   <!-- Step 1: C -> P -->
   <path d="M 80 92 L 300 92" class="msg-line" />
   <rect x="95" y="66" width="190" height="22" rx="3" class="label-bg" />
-  <text x="190" y="77" class="msg-text">tools/call ghidra</text>
-  <text x="190" y="87" class="msg-sub">function.list (md5)</text>
+  <text x="190" y="77" class="msg-text">tools/call ghidra_function</text>
+  <text x="190" y="87" class="msg-sub">list (md5)</text>
 
   <!-- Step 2: P -> D -->
   <path d="M 300 130 L 520 130" class="msg-line" />
@@ -83,7 +83,7 @@
   <!-- Step 3: D validate -->
   <path d="M 520 152 L 565 152 L 565 172 L 522 172" class="self-line" />
   <rect x="570" y="154" width="165" height="16" rx="3" class="label-bg" />
-  <text x="572" y="166" class="self-text">validate arguments, find command</text>
+  <text x="572" y="166" class="self-text">find operation, validate params</text>
 
   <!-- Step 4: D session call -->
   <path d="M 520 192 L 565 192 L 565 212 L 522 212" class="self-line" />

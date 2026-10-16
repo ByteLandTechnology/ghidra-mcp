@@ -30,7 +30,7 @@ The MD5 of a binary identifies its session for all clients.
 - [Usage](#usage)
 - [Use with coding agents](#use-with-coding-agents)
 - [Configuration](#configuration)
-- [The `ghidra` tool](#the-ghidra-tool)
+- [The MCP tools](#the-mcp-tools)
 - [Files and directories](#files-and-directories)
 - [Validation and releases](#validation-and-releases)
 - [Troubleshooting](#troubleshooting)
@@ -41,16 +41,16 @@ The MD5 of a binary identifies its session for all clients.
 ## Features
 
 - **MCP through stdio, Streamable HTTP, or legacy SSE.** One daemon keeps the shared state.
-- **Command-line client.** It lists the tools locally. It calls Ghidra commands through the daemon.
+- **Command-line client.** It lists the tools locally. It calls the tools through the daemon.
 - **Sessions identified by MD5.** The daemon uses a session again or opens the saved analysis again.
 - **Persistent sessions and jobs.** Sessions and analysis jobs continue after a client disconnects.
 - **Remote upload.** A client that is not on the daemon host sends a binary through a separate HTTP endpoint.
 - **Full Ghidra access.** The Java bridge gives program data, functions, decompilation, symbols, references, memory and comments.
 - **One executable.** The executable contains the bridge JAR and its launcher script.
-- **Background jobs.** `job.get` and `job.wait` monitor a long analysis.
+- **Background jobs.** `ghidra_job get` and `ghidra_job wait` monitor a long analysis.
 
 Sessions can change the program by default.
-Coding agents must get approval from the user before they use a command that changes the program.
+Coding agents must get approval from the user before they use an operation that changes the program.
 
 ## Get started
 
@@ -119,7 +119,7 @@ This one file is the complete distribution.
 
 The command `cargo xtask build` builds the bridge with Gradle.
 Then it embeds the bridge JAR and `Bridge.java` in the executable.
-The command catalog comes from the bridge contract `bridge/docs/asyncapi.yaml` at compile time.
+The operation catalog comes from the bridge contract `bridge/docs/asyncapi.yaml` at compile time.
 
 To embed a bridge JAR that you built before, set `GHIDRA_MCP_BRIDGE_JAR`.
 A relative path starts at the workspace root.
@@ -216,10 +216,10 @@ To list the tools without a daemon, use this command:
 ghidra-mcp tools
 ```
 
-To call the `ghidra` tool through the daemon, use this command:
+To call a tool through the daemon, use this command:
 
 ```sh
-ghidra-mcp call ghidra '{"command":"session.list"}'
+ghidra-mcp call ghidra_session '{"operation":"list"}'
 ```
 
 `call TOOL [JSON]` accepts one JSON object. The default is `{}`.
@@ -240,10 +240,10 @@ Use this procedure when the client is not on the daemon host.
 ![Remote Upload Sequence](docs/img/remote_upload.svg)
 
 1. On the client, calculate the MD5 and the size in bytes of the file.
-2. Call the `ghidra` tool:
+2. Call the `ghidra_upload` tool:
 
    ```json
-   {"command":"upload.prepare","md5":"0123456789abcdef0123456789abcdef","fileName":"program.bin","size":1024}
+   {"operation":"prepare","md5":"0123456789abcdef0123456789abcdef","params":{"fileName":"program.bin","size":1024}}
    ```
 
    `fileName` is a display name. It must not contain a directory.
@@ -263,17 +263,17 @@ Use this procedure when the client is not on the daemon host.
 
 5. Read the response:
    - HTTP `200`: the session is ready.
-   - HTTP `202`: the session starts. Use `job.wait` with the returned `jobId`.
+   - HTTP `202`: the session starts. Use `ghidra_job wait` with the returned `jobId`.
 
-You do not need a separate `session.open` call.
+You do not need a separate `ghidra_session open` call.
 
 > [!NOTE]
 > - The upload goes directly to disk. It can be larger than the MCP request limit. The daemon accepts HTTP chunked transfer.
-> - You must start the upload within ten minutes after `upload.prepare`.
+> - You must start the upload within ten minutes after `ghidra_upload prepare`.
 >   This limit does not apply to an active upload.
 > - The request uses the credential when it starts. After an upload fails, get a new credential.
 > - The daemon examines the size and the MD5 before it saves the binary. A failed upload leaves no file and no session.
-> - If Ghidra does not start, the binary stays saved. Use `session.open` with the MD5 to retry.
+> - If Ghidra does not start, the binary stays saved. Use `ghidra_session open` with the MD5 to retry.
 > - A reverse proxy must send both `/mcp` and `/upload` to the daemon, with the same prefix.
 
 ## Use with coding agents
@@ -295,21 +295,21 @@ The status must be `Status: ✓ Connected`.
 Use this procedure in an agent:
 
 1. Open the binary:
-   - For a binary that the daemon saved before, use `{"command":"session.open","md5":"..."}`.
-   - For a file on the daemon host, use `{"command":"session.open","path":"..."}`. The daemon calculates the MD5 and saves the binary.
+   - For a binary that the daemon saved before, call `ghidra_session` with `{"operation":"open","md5":"..."}`.
+   - For a file on the daemon host, call `ghidra_session` with `{"operation":"open","params":{"path":"..."}}`. The daemon calculates the MD5 and saves the binary.
    - For a file on a remote client, upload it (see [Upload a binary from a remote client](#upload-a-binary-from-a-remote-client)).
-2. If the session starts, wait with `{"command":"job.wait","jobId":"...","timeoutMs":...}`.
-   You can use `job.get` to monitor the job.
-3. Confirm the ready status with `{"command":"session.get","md5":"..."}`.
-4. Start the analysis with `{"command":"analysis.start","md5":"..."}`.
-5. Monitor the analysis job with `job.get` or `job.wait`.
-6. Use the bridge commands, for example `program.get`, `function.list` and `data_type.create`.
-7. Save the analysis and the changes with `program.save`. The session stays open.
-8. Get approval from the user before you use a command that changes the program.
+2. If the session starts, call `ghidra_job` with `{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}`.
+   You can use `ghidra_job get` to monitor the job.
+3. Confirm the ready status with `ghidra_session get`.
+4. Start the analysis: call `ghidra_analysis` with `{"operation":"start","md5":"..."}`.
+5. Monitor the analysis job with `ghidra_job get` or `ghidra_job wait`.
+6. Use the domain tools of the bridge, for example `ghidra_program get`, `ghidra_function list` and `ghidra_data_type create`.
+7. Save the analysis and the changes with `ghidra_program save`. The session stays open.
+8. Get approval from the user before you use an operation that changes the program.
 
 A session summary contains only `md5`, `fileName`, `status` and `connected`.
-All session commands use `md5`. There is no separate session ID.
-`session.list` is optional.
+All session operations use `md5`. There is no separate session ID.
+`ghidra_session list` is optional.
 For an MD5 that the daemon does not know, the daemon tells you to upload the binary.
 
 ## Configuration
@@ -344,7 +344,7 @@ ipc_handshake_timeout_sec = 5
 | `ghidra.analyze_headless` | The path of `analyzeHeadless`. |
 | `analysis.max_cpu` | The value of `analyzeHeadless -max-cpu`. |
 | `timeouts.process_spawn_timeout_sec` | The time to start the Ghidra process. |
-| `timeouts.analysis_import_timeout_sec` | The time to import a binary. It is also the default wait for `analysis.start`. |
+| `timeouts.analysis_import_timeout_sec` | The time to import a binary. It is also the default wait for `ghidra_analysis start`. |
 | `timeouts.bridge_connect_timeout_sec` | A part of the total time to start a session. |
 | `timeouts.agent_ready_timeout_sec` | The time for the bridge to complete its handshake. |
 | `timeouts.bridge_disconnect_grace_sec` | The time for a process to stop by itself after its bridge disconnects or its session closes. |
@@ -359,36 +359,47 @@ ipc_handshake_timeout_sec = 5
 - Java temporary files always go into the `tmp/` directory of the runtime directory.
 - The daemon does not accept the removed keys `ghidra.java_tmp_dir`, `ghidra.script_path` and `ghidra.bridge_script`. Remove them from your file.
 
-## The `ghidra` tool
+## The MCP tools
 
-`tools/list` shows one MCP tool: `ghidra`.
-Each call has flat arguments with a necessary `command` field:
+`tools/list` shows 18 MCP tools: `ghidra_help` and one tool for each domain.
+The domains and the operations are the same as in the MCP server of the bridge.
+This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
+
+A domain tool has these arguments:
+
+- `operation`: necessary. The operation in the domain, for example `list`.
+- `md5`: the MD5 of the session that the operation names. It is never in `params`. Each operation has an md5 rule: `required`, `optional` or `absent`.
+- `params`: the parameters of the operation. The default is `{}`.
+
+| Tool | Operations | Runs in |
+| --- | --- | --- |
+| `ghidra_session` | `open`, `list`, `get`, `close` | The daemon. |
+| `ghidra_upload` | `prepare` | The daemon. |
+| `ghidra_job` | `get`, `wait` | The daemon. |
+| `ghidra_analysis` | `start`, `get` | `start`: the daemon, then the bridge. `get`: the bridge. |
+| `ghidra_bridge`, `ghidra_program`, `ghidra_address`, `ghidra_memory`, `ghidra_listing`, `ghidra_global_variable`, `ghidra_function`, `ghidra_decompilation`, `ghidra_symbol`, `ghidra_reference`, `ghidra_comment`, `ghidra_data_type`, `ghidra_batch` | The bridge methods of the domain. | The bridge of the session. |
+
+The bridge contract `bridge/docs/asyncapi.yaml` gives the bridge methods, their schemas and their `read_only` effects.
+The daemon sends only the methods in this contract.
+It does not show `interface.get` and `session.shutdown`. To stop a session, use `ghidra_session close`.
+The parameters use the objects of the bridge, for example `selector`, `filter`, `page`, `patch` and `resource`.
+
+Examples for `ghidra_function get` and `ghidra_comment upsert`:
 
 ```json
-{"command":"function.list","md5":"0123456789abcdef0123456789abcdef"}
+{"operation":"get","md5":"0123456789abcdef0123456789abcdef","params":{"selector":{"entry":"ram:00100000"}}}
+{"operation":"upsert","md5":"0123456789abcdef0123456789abcdef","params":{"resource":{"address":"ram:00100000","type":"eol","text":"checked"}}}
 ```
 
-There are two types of commands:
+The `ghidra_help` tool describes all tools:
 
-- **Local commands.** The daemon runs these commands: `help`, `session.open`, `session.list`, `session.get`, `session.close`, `job.get`, `job.wait`, `analysis.start` and `upload.prepare`.
-- **Bridge commands.** The daemon sends these commands to the bridge of the session, for example `program.get`, `function.list` and `data_type.create`. The bridge contract `bridge/docs/asyncapi.yaml` gives their names, schemas and mutation flags. The daemon sends only the methods in this contract. The arguments use the objects of the bridge, for example `selector`, `filter`, `page`, `patch` and `resource`.
-
-Examples:
-
-```json
-{"command":"function.get","md5":"0123456789abcdef0123456789abcdef","selector":{"entry":"ram:00100000"}}
-{"command":"comment.upsert","md5":"0123456789abcdef0123456789abcdef","resource":{"address":"ram:00100000","type":"eol","text":"checked"}}
-```
-
-The `help` command describes all commands:
-
-- `{"command":"help"}` lists the command categories.
-- `{"command":"help","category":"function"}` lists the commands in one category.
-- `{"command":"help","commandName":"function.list"}` shows the full schema of one command.
+- `{}` lists the domain tools.
+- `{"domain":"function"}` lists the operations of one domain.
+- `{"domain":"function","operation":"list"}` shows the full parameter schema, the md5 rule and the effects of one operation. The effects are the same as in the bridge contract, for example `read_only`, `mutates_program` and `destructive`.
 
 If the Ghidra process does not start, the session goes to `error` and its launch job goes to `failed`.
-With `wait=false`, `session.open` returns immediately. Use `session.get` and `job.get` to see the result.
-With `wait=true`, `session.open` waits and returns the error.
+With `wait=false`, `ghidra_session open` returns immediately. Use `ghidra_session get` and `ghidra_job get` to see the result.
+With `wait=true`, `ghidra_session open` waits and returns the error.
 
 The MD5 hash identifies each session.
 The daemon manages session states through a finite state machine:
@@ -396,9 +407,9 @@ The daemon manages session states through a finite state machine:
 ![Session Lifecycle](docs/img/session_lifecycle.svg)
 
 When a tool call fails, `structuredContent` contains a machine-readable JSON-RPC error code:
-- `-32602` (`invalid_argument`): Invalid or absent command arguments.
+- `-32602` (`invalid_argument`): An unknown tool, or invalid or absent tool arguments or operation parameters.
 - `-32001` (`session_lock_timeout`, `agent_timeout`, `request_in_flight`): Lock timeout or request collision.
-- `-32002` (`missing_target`): Unknown binary MD5, session, or job ID.
+- `-32002` (`missing_target`): Unknown binary MD5, session, job ID, domain, or operation.
 - `-32000` (`disconnected`, `shutting_down`): Disconnected bridge session or daemon shutdown.
 - `-32603` (`transaction_failed`, `bridge_internal`, `internal_error`): Ghidra transaction failure or internal error.
 Database transaction failures return code `-32603` (`transaction_failed`).
@@ -467,7 +478,7 @@ On all platforms:
 
 - One daemon runs for each runtime directory. A file lock enforces this rule. There is no PID file.
 - Each runtime directory uses one persistent home. To change `GHIDRA_MCP_HOME`, stop the daemon and clear the runtime directory first. The projects in the old home stay available.
-- You can delete the runtime directory when the daemon does not run. Then `session.open` with the MD5 opens the saved project again.
+- You can delete the runtime directory when the daemon does not run. Then `ghidra_session open` with the MD5 opens the saved project again.
 - The daemon opens a project again when `project.gpr` and `project.rep` exist. Ghidra replays its recovery journal.
 - The daemon does not change a project directory that it does not recognize. It shows an error.
 - The daemon bounds all log files (`daemon.log`, `stdout.log`, `stderr.log`) to 10 MiB.

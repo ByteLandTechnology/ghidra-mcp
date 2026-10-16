@@ -204,27 +204,29 @@ claude mcp get ghidra-mcp
 
 ## 首次分析过程
 
-所有交互均使用名为 `ghidra` 的统一 MCP 工具。
-`command` 参数选择具体操作。
+守护进程提供 `ghidra_help`，并为每个领域提供一个 MCP 工具。
+每个领域工具接受一个 `operation` 及其 `params`。
+指定一个会话的操作还接受该会话的 `md5`。
+本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
 
 ### 1. 打开二进制会话
 
-打开本地二进制文件：
+使用 `ghidra_session` 打开本地二进制文件：
 
 ```json
 {
-  "command": "session.open",
-  "path": "/path/to/target_binary"
+  "operation": "open",
+  "params": { "path": "/path/to/target_binary" }
 }
 ```
 
 守护进程计算 MD5 哈希并将二进制文件复制到持久存储中。
 调用返回一个启动作业记录。
-检查会话状态：
+使用 `ghidra_session` 检查会话状态：
 
 ```json
 {
-  "command": "session.get",
+  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
@@ -233,11 +235,11 @@ claude mcp get ghidra-mcp
 
 ### 2. 启动后台分析
 
-在打开的二进制文件上启动自动分析：
+使用 `ghidra_analysis` 在打开的二进制文件上启动自动分析：
 
 ```json
 {
-  "command": "analysis.start",
+  "operation": "start",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
@@ -246,12 +248,12 @@ claude mcp get ghidra-mcp
 
 ### 3. 轮询作业进度
 
-以 500 毫秒间隔轮询作业状态：
+使用 `ghidra_job` 以 500 毫秒间隔轮询作业状态：
 
 ```json
 {
-  "command": "job.get",
-  "jobId": "job-12345"
+  "operation": "get",
+  "params": { "jobId": "job-12345" }
 }
 ```
 
@@ -259,9 +261,8 @@ claude mcp get ghidra-mcp
 
 ```json
 {
-  "command": "job.wait",
-  "jobId": "job-12345",
-  "timeoutMs": 60000
+  "operation": "wait",
+  "params": { "jobId": "job-12345", "timeoutMs": 60000 }
 }
 ```
 
@@ -269,52 +270,53 @@ claude mcp get ghidra-mcp
 
 ### 4. 检查符号与反编译
 
-列出二进制文件中的函数：
+使用 `ghidra_function` 列出二进制文件中的函数：
 
 ```json
 {
-  "command": "function.list",
+  "operation": "list",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-检查符号：
+使用 `ghidra_symbol` 检查符号：
 
 ```json
 {
-  "command": "symbol.list",
+  "operation": "list",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-在入口点反编译函数：
+使用 `ghidra_decompilation` 在入口点反编译函数：
 
 ```json
 {
-  "command": "decompilation.get",
+  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef",
-  "address": "0x140001000"
+  "params": { "selector": { "entry": "ram:140001000" } }
 }
 ```
 
 桥接返回结构化 C 伪代码、函数签名和局部变量。
+要查看一个操作的参数，请使用 `domain` 和 `operation` 调用 `ghidra_help`。
 
 ### 5. 保存更改与关闭
 
-将程序更改保存到 Ghidra 项目中：
+使用 `ghidra_program` 将程序更改保存到 Ghidra 项目中：
 
 ```json
 {
-  "command": "program.save",
+  "operation": "save",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-关闭活动会话：
+使用 `ghidra_session` 关闭活动会话：
 
 ```json
 {
-  "command": "session.close",
+  "operation": "close",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```

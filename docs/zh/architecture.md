@@ -59,7 +59,7 @@
 | `mcp` | MCP 处理程序。它在守护进程中运行调用，或从代理把调用发送给守护进程。 |
 | `mcp_http` | Streamable HTTP、旧式 SSE 会话、CORS 和 HTTP 兼容层。 |
 | `upload` | 上传凭据和 `POST /upload` 端点。 |
-| `tools` | `ghidra` 工具：本地命令表、分派、目录和 `help`。 |
+| `tools` | MCP 工具：领域目录、本地操作、调用验证和 `ghidra_help`。 |
 | `session` | 会话的打开、启动、等待、重新启动、调用和关闭。 |
 | `analysis` | 作为后台作业的自动分析。 |
 | `project` | 已保存的二进制文件和 Ghidra 项目的准备。 |
@@ -80,11 +80,17 @@
 
 ![工具调用流程](../img/tool_call.svg)
 
-所有命令都通过 MCP 工具 `ghidra`。`command` 参数选择命令。
-`tools::dispatch` 根据命令的模式验证参数。
+守护进程提供 `ghidra_help`，并为每个领域提供一个 MCP 工具，例如 `ghidra_function`。
+领域和操作与桥接的 MCP 服务器相同。
+一次调用包含 `operation` 和它的 `params`。指定一个会话的操作还包含该会话的 `md5`，它从不放在 `params` 中。
+`ghidra_help` 显示每个操作的 md5 规则（`required`、`optional` 或 `absent`）和效果。
+本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
+
+`tools::call` 在目录（`tools/catalog.rs`）中查找领域和操作。
+它根据操作的模式验证 `params`。
 然后它执行以下操作之一：
 
-- 运行 `LOCAL_COMMANDS` 中的**本地命令**：帮助、会话、作业、上传和分析。
+- 运行 `LOCAL_OPERATIONS`（`tools/local.rs`）中的**本地操作**：会话、作业、上传和分析的启动。
 - 把桥接契约 `bridge/docs/asyncapi.yaml` 中的**桥接方法**发送给桥接。
 
 当桥接返回错误时，工具调用失败。失败的结果仍然包含结构化响应。
@@ -93,12 +99,12 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 
 ### 打开二进制文件
 
-`session.open` 接受守护进程主机上的 `path`，或守护进程以前保存过的二进制文件的 `md5`。
+`ghidra_session open` 接受守护进程主机上的 `path`，或守护进程以前保存过的二进制文件的 `md5`。
 对于路径，守护进程计算 MD5，并把文件复制到持久主目录。
 之后的调用只需要 MD5。
 守护进程重用已连接的会话，或加入正在进行的启动，或开始新的启动。
 [会话生命周期](#会话生命周期)描述启动过程。
-`session.open` 立即返回启动作业。如果客户端设置了 `wait`，它会等待该作业。
+`ghidra_session open` 立即返回启动作业。如果客户端设置了 `wait`，它会等待该作业。
 
 ### 上传二进制文件
 
@@ -106,7 +112,7 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 
 客户端只能使用凭据一次。
 请求在守护进程读取第一个字节之前使用凭据。
-客户端必须在 `upload.prepare` 之后十分钟内开始上传。
+客户端必须在 `ghidra_upload prepare` 之后十分钟内开始上传。
 守护进程不会停止活动上传。
 
 ### 关闭
@@ -149,7 +155,7 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 较新的启动可以替换一次启动，客户端也可以关闭会话。
 在这些情况下，旧的步骤停止，不会修改较新的状态。
 
-下一条命令会重新启动处于 `disconnected` 或 `stale` 状态的会话。
+对处于 `disconnected` 或 `stale` 状态的会话的下一次工具调用会重新启动该会话。
 客户端不会察觉这次重新启动。
 
 ## 并发
@@ -243,14 +249,14 @@ Ghidra 不接受包含隐藏段的项目路径。但默认主目录是一个隐�
 
 | 接口 | 格式 | 契约 |
 |---|---|---|
-| MCP 工具 `ghidra` | 通过 stdio、本地套接字、Streamable HTTP 或旧式 SSE 的 MCP。 | `tools::LOCAL_COMMANDS` 和桥接契约中的命令。`help` 描述它们。 |
+| MCP 工具 `ghidra_*` | 通过 stdio、本地套接字、Streamable HTTP 或旧式 SSE 的 MCP。 | `LOCAL_OPERATIONS` 和桥接契约中的操作。`ghidra_help` 描述它们。 |
 | 桥接 WebSocket `/ws/agent` | 严格的 JSON-RPC 2.0（`jsonrpc.rs`）。 | 桥接构建生成的 `bridge/docs/asyncapi.yaml`。 |
-| 上传 `POST /upload` | 带 bearer 凭据的原始字节。 | `upload.prepare` 的结果。 |
+| 上传 `POST /upload` | 带 bearer 凭据的原始字节。 | `ghidra_upload prepare` 的结果。 |
 | `server.json` | 包含 `pid`、`mcpUrl`、`bridgeWsUrl` 和 `localSocket` 的 JSON。 | 本地客户端读取它。 |
 | `config.toml` | TOML。 | README 和 `config.rs`。 |
 | 错误信封 | MCP `structured_content` 内的 JSON。 | 标准 JSON-RPC 错误码（`-32602` 至 `-32603`）与机器可读错误变体。 |
 
-MCP 工具定义、命令模式、帮助输出和响应格式都是公共契约。
+MCP 工具定义、操作模式、帮助输出和响应格式都是公共契约。
 只能在有意的变更中修改它们。
 请在变更日志中记录该变更。
 
@@ -282,13 +288,16 @@ MCP 工具定义、命令模式、帮助输出和响应格式都是公共契约�
 
 ## 扩展系统
 
-- **本地命令。** 在 `src/tools.rs` 的 `LOCAL_COMMANDS` 中添加一个条目。
-  提供它的名称、描述、输入模式、修改标志和处理程序。
+- **本地操作。** 在 `src/tools/local.rs` 的 `LOCAL_OPERATIONS` 中添加一个条目。
+  提供它的领域、名称、描述、参数模式、md5 规则、效果和处理程序。
+  如果它为一个桥接方法添加生命周期行为，请把 `extends` 设为该方法。
   使用 `parse` 把它的参数读入一个 `Deserialize` 结构体。
-  之后 `help` 和验证会包含该命令。
+  之后 `ghidra_help`、工具定义和验证会包含该操作。
 - **桥接方法。** 在桥接中添加该方法。
   添加方法后重新生成契约。
-  守护进程在编译时读取契约，并原样提供该方法。
+  守护进程在编译时读取契约，并在该方法的领域工具中提供它。
+  对于新领域，请把该领域添加到 `src/tools/catalog.rs` 的 `DOMAINS` 中。
+  如果桥接的 MCP 服务器把该方法映射到其他领域，请在 `bridge_target` 中添加相同的领域和操作名称。
 - **会话状态或转换。** 在 `model.rs` 中为 `SessionRecord` 添加一个 `mark_*` 方法。
   在持有生命周期锁时调用它。
 - **长时间操作。** 用 `McpState::insert_job` 创建作业。

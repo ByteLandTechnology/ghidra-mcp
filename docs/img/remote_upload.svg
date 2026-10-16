@@ -68,10 +68,10 @@
     <text x="80" y="22" class="part-text">Daemon</text>
   </g>
 
-  <!-- Step 1: upload.prepare -->
+  <!-- Step 1: ghidra_upload prepare -->
   <path d="M 160 85 L 520 85" class="msg-line" />
-  <rect x="200" y="68" width="280" height="15" rx="3" class="label-bg" />
-  <text x="340" y="79" class="msg-text">upload.prepare {md5, fileName, size}</text>
+  <rect x="190" y="68" width="300" height="15" rx="3" class="label-bg" />
+  <text x="340" y="79" class="msg-text">ghidra_upload prepare md5 + {fileName, size}</text>
 
   <!-- Step 2: prepare grant response -->
   <path d="M 520 125 L 160 125" class="ret-line" />

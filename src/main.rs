@@ -21,7 +21,7 @@
 //! | Layer | Modules |
 //! |---|---|
 //! | Front ends | [`cli`], [`daemon`], [`mcp`], [`mcp_http`], [`upload`] |
-//! | Commands | [`tools`] (the `ghidra` MCP tool) |
+//! | Tools | [`tools`] (`ghidra_help` and the domain tools) |
 //! | Domain | [`session`], [`analysis`], [`project`] |
 //! | Bridge | [`bridge`], [`jsonrpc`] |
 //! | State | [`state`], [`model`] |

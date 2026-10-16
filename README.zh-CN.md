@@ -30,7 +30,7 @@ MCP 客户端通过 stdio 或 HTTP 连接守护进程。
 - [使用方法](#使用方法)
 - [与编码代理一起使用](#与编码代理一起使用)
 - [配置](#配置)
-- [`ghidra` 工具](#ghidra-工具)
+- [MCP 工具](#mcp-工具)
 - [文件和目录](#文件和目录)
 - [验证和发布](#验证和发布)
 - [故障排除](#故障排除)
@@ -41,16 +41,16 @@ MCP 客户端通过 stdio 或 HTTP 连接守护进程。
 ## 功能
 
 - **通过 stdio、Streamable HTTP 或旧式 SSE 提供 MCP。** 一个守护进程保存共享状态。
-- **命令行客户端。** 在本地列出工具，并通过守护进程调用 Ghidra 命令。
+- **命令行客户端。** 在本地列出工具，并通过守护进程调用这些工具。
 - **用 MD5 标识会话。** 守护进程重用会话，或重新打开已保存的分析。
 - **持久的会话和作业。** 客户端断开连接后，会话和分析作业继续运行。
 - **远程上传。** 不在守护进程主机上的客户端通过单独的 HTTP 端点发送二进制文件。
 - **完整的 Ghidra 访问。** Java 桥接提供程序数据、函数、反编译、符号、引用、内存和注释。
 - **单个可执行文件。** 可执行文件包含桥接 JAR 及其启动脚本。
-- **后台作业。** `job.get` 和 `job.wait` 监视长时间运行的分析。
+- **后台作业。** `ghidra_job get` 和 `ghidra_job wait` 监视长时间运行的分析。
 
 默认情况下，会话可以修改程序。
-编码代理在使用会修改程序的命令之前，必须获得用户的批准。
+编码代理在使用会修改程序的操作之前，必须获得用户的批准。
 
 ## 快速开始
 
@@ -118,7 +118,7 @@ MCP 客户端通过 stdio 或 HTTP 连接守护进程。
 
 `cargo xtask build` 命令用 Gradle 构建桥接。
 然后它把桥接 JAR 和 `Bridge.java` 嵌入可执行文件。
-命令目录在编译时来自桥接契约 `bridge/docs/asyncapi.yaml`。
+操作目录在编译时来自桥接契约 `bridge/docs/asyncapi.yaml`。
 
 要嵌入事先构建好的桥接 JAR，请设置 `GHIDRA_MCP_BRIDGE_JAR`。
 相对路径从工作区根目录开始。
@@ -214,10 +214,10 @@ ghidra-mcp --daemon --listen 127.0.0.1:18490
 ghidra-mcp tools
 ```
 
-要通过守护进程调用 `ghidra` 工具，请使用以下命令：
+要通过守护进程调用一个工具，请使用以下命令：
 
 ```sh
-ghidra-mcp call ghidra '{"command":"session.list"}'
+ghidra-mcp call ghidra_session '{"operation":"list"}'
 ```
 
 `call TOOL [JSON]` 接受一个 JSON 对象，默认值为 `{}`。
@@ -238,10 +238,10 @@ ghidra-mcp call ghidra '{"command":"session.list"}'
 ![远程上传流程](docs/img/remote_upload.svg)
 
 1. 在客户端上，计算文件的 MD5 和字节大小。
-2. 调用 `ghidra` 工具：
+2. 调用 `ghidra_upload` 工具：
 
    ```json
-   {"command":"upload.prepare","md5":"0123456789abcdef0123456789abcdef","fileName":"program.bin","size":1024}
+   {"operation":"prepare","md5":"0123456789abcdef0123456789abcdef","params":{"fileName":"program.bin","size":1024}}
    ```
 
    `fileName` 是显示名称，不能包含目录。
@@ -261,16 +261,16 @@ ghidra-mcp call ghidra '{"command":"session.list"}'
 
 5. 读取响应：
    - HTTP `200`：会话已就绪。
-   - HTTP `202`：会话正在启动。请对返回的 `jobId` 使用 `job.wait`。
+   - HTTP `202`：会话正在启动。请对返回的 `jobId` 使用 `ghidra_job wait`。
 
-不需要另外调用 `session.open`。
+不需要另外调用 `ghidra_session open`。
 
 > [!NOTE]
 > - 上传内容直接写入磁盘，可以大于 MCP 请求的大小限制。守护进程接受 HTTP 分块传输。
-> - 必须在 `upload.prepare` 之后十分钟内开始上传。此限制不适用于活动上传。
+> - 必须在 `ghidra_upload prepare` 之后十分钟内开始上传。此限制不适用于活动上传。
 > - 请求在开始时使用凭据。上传失败后，请获取新的凭据。
 > - 守护进程在保存二进制文件之前检查大小和 MD5。失败的上传不会留下文件，也不会创建会话。
-> - 如果 Ghidra 没有启动，二进制文件仍然保存着。请使用 `session.open` 和 MD5 重试操作。
+> - 如果 Ghidra 没有启动，二进制文件仍然保存着。请使用 `ghidra_session open` 和 MD5 重试操作。
 > - 反向代理必须以相同的前缀把 `/mcp` 和 `/upload` 都转发给守护进程。
 
 ## 与编码代理一起使用
@@ -292,21 +292,21 @@ claude mcp add --transport stdio --scope local ghidra-mcp -- /absolute/path/to/g
 在代理中请使用以下步骤：
 
 1. 打开二进制文件：
-   - 对于守护进程以前保存过的二进制文件，使用 `{"command":"session.open","md5":"..."}`。
-   - 对于守护进程主机上的文件，使用 `{"command":"session.open","path":"..."}`。守护进程计算 MD5 并保存二进制文件。
+   - 对于守护进程以前保存过的二进制文件，用 `{"operation":"open","md5":"..."}` 调用 `ghidra_session`。
+   - 对于守护进程主机上的文件，用 `{"operation":"open","params":{"path":"..."}}` 调用 `ghidra_session`。守护进程计算 MD5 并保存二进制文件。
    - 对于远程客户端上的文件，请上传它（参见[从远程客户端上传二进制文件](#从远程客户端上传二进制文件)）。
-2. 如果会话正在启动，请用 `{"command":"job.wait","jobId":"...","timeoutMs":...}` 等待。
-   您可以用 `job.get` 监视作业。
-3. 用 `{"command":"session.get","md5":"..."}` 确认就绪状态。
-4. 用 `{"command":"analysis.start","md5":"..."}` 启动分析。
-5. 用 `job.get` 或 `job.wait` 监视分析作业。
-6. 使用桥接命令，例如 `program.get`、`function.list` 和 `data_type.create`。
-7. 用 `program.save` 保存分析结果和修改。会话保持打开。
-8. 在使用会修改程序的命令之前，请获得用户的批准。
+2. 如果会话正在启动，请用 `{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}` 调用 `ghidra_job` 等待。
+   您可以用 `ghidra_job get` 监视作业。
+3. 用 `ghidra_session get` 确认就绪状态。
+4. 启动分析：用 `{"operation":"start","md5":"..."}` 调用 `ghidra_analysis`。
+5. 用 `ghidra_job get` 或 `ghidra_job wait` 监视分析作业。
+6. 使用桥接的领域工具，例如 `ghidra_program get`、`ghidra_function list` 和 `ghidra_data_type create`。
+7. 用 `ghidra_program save` 保存分析结果和修改。会话保持打开。
+8. 在使用会修改程序的操作之前，请获得用户的批准。
 
 会话摘要只包含 `md5`、`fileName`、`status` 和 `connected`。
-所有会话命令都使用 `md5`，没有单独的会话 ID。
-`session.list` 是可选的。
+所有会话操作都使用 `md5`，没有单独的会话 ID。
+`ghidra_session list` 是可选的。
 对于守护进程不认识的 MD5，守护进程会提示您上传二进制文件。
 
 ## 配置
@@ -341,7 +341,7 @@ ipc_handshake_timeout_sec = 5
 | `ghidra.analyze_headless` | `analyzeHeadless` 的路径。 |
 | `analysis.max_cpu` | `analyzeHeadless -max-cpu` 的值。 |
 | `timeouts.process_spawn_timeout_sec` | 启动 Ghidra 进程的时间。 |
-| `timeouts.analysis_import_timeout_sec` | 导入二进制文件的时间。也是 `analysis.start` 的默认等待时间。 |
+| `timeouts.analysis_import_timeout_sec` | 导入二进制文件的时间。也是 `ghidra_analysis start` 的默认等待时间。 |
 | `timeouts.bridge_connect_timeout_sec` | 启动会话总时间的一部分。 |
 | `timeouts.agent_ready_timeout_sec` | 桥接完成握手的时间。 |
 | `timeouts.bridge_disconnect_grace_sec` | 桥接断开或会话关闭后，进程自行停止的时间。 |
@@ -356,36 +356,47 @@ ipc_handshake_timeout_sec = 5
 - Java 临时文件始终放在运行时目录的 `tmp/` 目录中。
 - 守护进程不接受已删除的键 `ghidra.java_tmp_dir`、`ghidra.script_path` 和 `ghidra.bridge_script`。请从文件中删除它们。
 
-## `ghidra` 工具
+## MCP 工具
 
-`tools/list` 显示一个 MCP 工具：`ghidra`。
-每次调用都使用扁平参数，并包含必需的 `command` 字段：
+`tools/list` 显示 18 个 MCP 工具：`ghidra_help`，以及每个领域一个工具。
+领域和操作与桥接的 MCP 服务器相同。
+本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
+
+领域工具有以下参数：
+
+- `operation`：必需。领域中的操作，例如 `list`。
+- `md5`：操作所指定会话的 MD5。它从不放在 `params` 中。每个操作都有一个 md5 规则：`required`、`optional` 或 `absent`。
+- `params`：操作的参数。默认值为 `{}`。
+
+| 工具 | 操作 | 运行位置 |
+| --- | --- | --- |
+| `ghidra_session` | `open`、`list`、`get`、`close` | 守护进程。 |
+| `ghidra_upload` | `prepare` | 守护进程。 |
+| `ghidra_job` | `get`、`wait` | 守护进程。 |
+| `ghidra_analysis` | `start`、`get` | `start`：守护进程，然后是桥接。`get`：桥接。 |
+| `ghidra_bridge`、`ghidra_program`、`ghidra_address`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_decompilation`、`ghidra_symbol`、`ghidra_reference`、`ghidra_comment`、`ghidra_data_type`、`ghidra_batch` | 该领域的桥接方法。 | 会话的桥接。 |
+
+桥接契约 `bridge/docs/asyncapi.yaml` 给出桥接方法、它们的模式和 `read_only` 效果。
+守护进程只发送契约中的方法。
+它不提供 `interface.get` 和 `session.shutdown`。要停止会话，请使用 `ghidra_session close`。
+参数使用桥接的对象，例如 `selector`、`filter`、`page`、`patch` 和 `resource`。
+
+`ghidra_function get` 和 `ghidra_comment upsert` 的示例：
 
 ```json
-{"command":"function.list","md5":"0123456789abcdef0123456789abcdef"}
+{"operation":"get","md5":"0123456789abcdef0123456789abcdef","params":{"selector":{"entry":"ram:00100000"}}}
+{"operation":"upsert","md5":"0123456789abcdef0123456789abcdef","params":{"resource":{"address":"ram:00100000","type":"eol","text":"checked"}}}
 ```
 
-命令分为两类：
+`ghidra_help` 工具描述所有工具：
 
-- **本地命令。** 守护进程运行这些命令：`help`、`session.open`、`session.list`、`session.get`、`session.close`、`job.get`、`job.wait`、`analysis.start` 和 `upload.prepare`。
-- **桥接命令。** 守护进程把这些命令发送给会话的桥接，例如 `program.get`、`function.list` 和 `data_type.create`。桥接契约 `bridge/docs/asyncapi.yaml` 给出它们的名称、模式和修改标志。守护进程只发送契约中的方法。参数使用桥接的对象，例如 `selector`、`filter`、`page`、`patch` 和 `resource`。
-
-示例：
-
-```json
-{"command":"function.get","md5":"0123456789abcdef0123456789abcdef","selector":{"entry":"ram:00100000"}}
-{"command":"comment.upsert","md5":"0123456789abcdef0123456789abcdef","resource":{"address":"ram:00100000","type":"eol","text":"checked"}}
-```
-
-`help` 命令描述所有命令：
-
-- `{"command":"help"}` 列出命令类别。
-- `{"command":"help","category":"function"}` 列出一个类别中的命令。
-- `{"command":"help","commandName":"function.list"}` 显示一个命令的完整模式。
+- `{}` 列出领域工具。
+- `{"domain":"function"}` 列出一个领域的操作。
+- `{"domain":"function","operation":"list"}` 显示一个操作的完整参数模式、md5 规则和效果。效果与桥接契约相同，例如 `read_only`、`mutates_program` 和 `destructive`。
 
 如果 Ghidra 进程没有启动，会话进入 `error` 状态，它的启动作业进入 `failed` 状态。
-使用 `wait=false` 时，`session.open` 立即返回。请使用 `session.get` 和 `job.get` 查看结果。
-使用 `wait=true` 时，`session.open` 会等待并返回错误。
+使用 `wait=false` 时，`ghidra_session open` 立即返回。请使用 `ghidra_session get` 和 `ghidra_job get` 查看结果。
+使用 `wait=true` 时，`ghidra_session open` 会等待并返回错误。
 
 二进制文件的 MD5 标识每个会话。
 守护进程通过有限状态机管理会话状态：
@@ -393,9 +404,9 @@ ipc_handshake_timeout_sec = 5
 ![会话生命周期](docs/img/session_lifecycle.svg)
 
 当工具调用失败时，`structuredContent` 包含机器可读的 JSON-RPC 错误码：
-- `-32602`（`invalid_argument`）：无效或不存在的命令参数。
+- `-32602`（`invalid_argument`）：未知的工具，或无效或不存在的工具参数或操作参数。
 - `-32001`（`session_lock_timeout`、`agent_timeout`、`request_in_flight`）：锁超时或请求冲突。
-- `-32002`（`missing_target`）：未知的二进制 MD5、会话或作业 ID。
+- `-32002`（`missing_target`）：未知的二进制 MD5、会话、作业 ID、领域或操作。
 - `-32000`（`disconnected`、`shutting_down`）：已断开连接的桥接会话或守护进程关闭。
 - `-32603`（`transaction_failed`、`bridge_internal`、`internal_error`）：Ghidra 事务失败或内部错误。
 数据库事务失败返回错误码 `-32603`（`transaction_failed`）。
@@ -464,7 +475,7 @@ GHIDRA_MCP_HOME/                 # 默认：~/.ghidra-mcp
 
 - 每个运行时目录运行一个守护进程，由文件锁保证。不使用 PID 文件。
 - 每个运行时目录使用一个持久主目录。要更改 `GHIDRA_MCP_HOME`，请先停止守护进程并清空运行时目录。旧主目录中的项目仍然可用。
-- 守护进程没有运行时，可以删除运行时目录。之后，使用 MD5 调用 `session.open` 会重新打开已保存的项目。
+- 守护进程没有运行时，可以删除运行时目录。之后，使用 MD5 调用 `ghidra_session open` 会重新打开已保存的项目。
 - 当 `project.gpr` 和 `project.rep` 存在时，守护进程重新打开项目。Ghidra 会重放它的恢复日志。
 - 守护进程不会修改它不认识的项目目录，而是显示错误。
 - 守护进程将所有日志文件（`daemon.log`、`stdout.log`、`stderr.log`）限制为 10 MiB。

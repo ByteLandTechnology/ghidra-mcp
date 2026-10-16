@@ -4,7 +4,7 @@
 //! The MCP server handler. All transports use it.
 //!
 //! In the daemon, it runs the tool calls. In the stdio proxy, it sends them to
-//! the daemon. In both roles, it shows the same tool, `ghidra`.
+//! the daemon. In both roles, it shows the same tools (see [`crate::tools`]).
 
 use crate::{error::DomainError, tools::Daemon};
 use anyhow::Result;
@@ -77,7 +77,7 @@ impl ToolServer {
                     res.structured_content = Some(err.to_envelope());
                     return res;
                 }
-                to_tool_result(local_call(daemon, &name, arguments).await)
+                to_tool_result(crate::tools::call(daemon, &name, arguments).await)
             }
             Backend::Proxy(manager) => match manager.call_tool(name, arguments).await {
                 Ok(result) => result,
@@ -96,18 +96,6 @@ impl ToolServer {
             },
         }
     }
-}
-
-/// Runs a call in the daemon. `ghidra` is the only tool.
-async fn local_call(
-    daemon: &Daemon,
-    name: &str,
-    arguments: Map<String, Value>,
-) -> Result<(String, Value)> {
-    if name != "ghidra" {
-        return Err(DomainError::invalid_argument("tool", format!("unknown tool: {name}")).into());
-    }
-    crate::tools::dispatch(daemon, Value::Object(arguments)).await
 }
 
 /// Keeps the structured result. If an error occurs, formats it with `DomainError`

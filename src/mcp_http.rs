@@ -787,7 +787,7 @@ mod tests {
             .await
             .expect("tools/list body");
         let response: Value = serde_json::from_slice(&bytes).expect("tools/list JSON");
-        assert_eq!(response["result"]["tools"][0]["name"], "ghidra");
+        assert_eq!(response["result"]["tools"][0]["name"], "ghidra_help");
         assert!(response["result"].get("resultType").is_none());
 
         let mut request = test_request(Method::POST, "/mcp", "{}");
@@ -869,7 +869,7 @@ mod tests {
         );
         let listed = next_sse_event(&mut stream).await;
         let listed: Value = serde_json::from_str(&sse_data(&listed)).expect("tools/list");
-        assert_eq!(listed["result"]["tools"][0]["name"], "ghidra");
+        assert_eq!(listed["result"]["tools"][0]["name"], "ghidra_help");
         assert!(listed["result"].get("resultType").is_none());
 
         drop(stream);

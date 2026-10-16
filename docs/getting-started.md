@@ -206,27 +206,29 @@ claude mcp get ghidra-mcp
 
 ## First analysis procedure
 
-All interactions use the single MCP tool named `ghidra`.
-The `command` parameter selects the action.
+The daemon shows `ghidra_help` and one MCP tool for each domain.
+Each domain tool takes an `operation` and its `params`.
+An operation that names one session also takes the `md5` of that session.
+This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
 
 ### 1. Open a binary session
 
-Open a local binary file:
+Open a local binary file with `ghidra_session`:
 
 ```json
 {
-  "command": "session.open",
-  "path": "/path/to/target_binary"
+  "operation": "open",
+  "params": { "path": "/path/to/target_binary" }
 }
 ```
 
 The daemon calculates the MD5 hash and copies the binary into persistent storage.
 The call returns a launch job record.
-Check the session status:
+Check the session status with `ghidra_session`:
 
 ```json
 {
-  "command": "session.get",
+  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
@@ -235,11 +237,11 @@ The `status` field shows `ready` when the session is ready.
 
 ### 2. Start background analysis
 
-Start auto-analysis on the opened binary:
+Start auto-analysis on the opened binary with `ghidra_analysis`:
 
 ```json
 {
-  "command": "analysis.start",
+  "operation": "start",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
@@ -248,12 +250,12 @@ The call returns a job record with `status: "running"`.
 
 ### 3. Poll job progress
 
-Poll the job status at intervals of 500 ms:
+Poll the job status at intervals of 500 ms with `ghidra_job`:
 
 ```json
 {
-  "command": "job.get",
-  "jobId": "job-12345"
+  "operation": "get",
+  "params": { "jobId": "job-12345" }
 }
 ```
 
@@ -261,9 +263,8 @@ As an alternative, wait for the job to complete:
 
 ```json
 {
-  "command": "job.wait",
-  "jobId": "job-12345",
-  "timeoutMs": 60000
+  "operation": "wait",
+  "params": { "jobId": "job-12345", "timeoutMs": 60000 }
 }
 ```
 
@@ -271,52 +272,53 @@ The job record shows `status: "completed"` when analysis finishes.
 
 ### 4. Inspect symbols and decompile
 
-List the functions in the binary:
+List the functions in the binary with `ghidra_function`:
 
 ```json
 {
-  "command": "function.list",
+  "operation": "list",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-Inspect symbols:
+Inspect symbols with `ghidra_symbol`:
 
 ```json
 {
-  "command": "symbol.list",
+  "operation": "list",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-Decompile a function at an entry point:
+Decompile a function at an entry point with `ghidra_decompilation`:
 
 ```json
 {
-  "command": "decompilation.get",
+  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef",
-  "address": "0x140001000"
+  "params": { "selector": { "entry": "ram:140001000" } }
 }
 ```
 
 The bridge returns structured C pseudocode, signatures, and local variables.
+To see the parameters of an operation, call `ghidra_help` with `domain` and `operation`.
 
 ### 5. Save changes and close
 
-Save program changes to the Ghidra project:
+Save program changes to the Ghidra project with `ghidra_program`:
 
 ```json
 {
-  "command": "program.save",
+  "operation": "save",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-Close the active session:
+Close the active session with `ghidra_session`:
 
 ```json
 {
-  "command": "session.close",
+  "operation": "close",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```

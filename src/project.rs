@@ -58,24 +58,18 @@ pub fn normalize_md5(value: &str) -> Result<String> {
     Ok(value.to_ascii_lowercase())
 }
 
-/// Deserializes an MD5 argument with [`normalize_md5`].
+/// Deserializes an optional MD5 argument with [`normalize_md5`]. JSON `null`
+/// is the same as no value. Use it with `#[serde(default)]`.
 ///
 /// # Errors
 ///
-/// Fails if the value is not a string of 32 hexadecimal digits.
-pub fn deserialize_md5<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
-    normalize_md5(&String::deserialize(deserializer)?).map_err(D::Error::custom)
-}
-
-/// Deserializes an optional MD5 argument. Use it with `#[serde(default)]`.
-///
-/// # Errors
-///
-/// Fails if the value is not a string of 32 hexadecimal digits.
+/// Fails if the value is not `null` or a string of 32 hexadecimal digits.
 pub fn deserialize_optional_md5<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<String>, D::Error> {
-    deserialize_md5(deserializer).map(Some)
+    Option::<String>::deserialize(deserializer)?
+        .map(|value| normalize_md5(&value).map_err(D::Error::custom))
+        .transpose()
 }
 
 /// Validates a display file name from a client.

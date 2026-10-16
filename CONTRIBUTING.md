@@ -148,17 +148,17 @@ Do not translate code, identifiers, commands, file names and command output.
 
 ## Extend the code
 
-- A new local command is one entry in `LOCAL_COMMANDS` (`src/tools.rs`), with a `Deserialize` argument struct.
+- A new local operation is one entry in `LOCAL_OPERATIONS` (`src/tools/local.rs`), with a `Deserialize` parameter struct.
 - A new session state transition is a `mark_*` method on `SessionRecord` (`src/model.rs`).
 - docs/architecture.md gives the procedures for other changes.
 
-## Commands that change the program
+## Operations that change the program
 
-Some commands change the analyzed program, for example a patch of a function, a new symbol name, a data type change or a memory patch.
-The bridge contract `bridge/docs/asyncapi.yaml` gives the bridge commands and their `mutation` flags.
+Some operations change the analyzed program, for example a patch of a function, a new symbol name, a data type change or a memory patch.
+The bridge contract `bridge/docs/asyncapi.yaml` gives the bridge methods and their `read_only` effects.
 `src/bridge.rs` reads the contract at compile time.
 The daemon sends only the methods in the contract.
-When you add or change such a command, make sure that the `read_only` effect in the contract is correct.
+When you add or change such a method, make sure that the `read_only` effect in the contract is correct.
 
 ## Commit messages
 

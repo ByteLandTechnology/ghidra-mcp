@@ -5,7 +5,7 @@
 //!
 //! A client that cannot share a file path with the daemon uploads a binary in two steps:
 //!
-//! 1. The `upload.prepare` command gives a single-use **upload credential** for
+//! 1. The `ghidra_upload prepare` operation gives a single-use **upload credential** for
 //!    a declared MD5, file name and size. It also returns a URL that is relative
 //!    to the MCP endpoint. Then the URL also works behind a reverse proxy with a prefix.
 //! 2. The client sends the raw bytes with `POST /upload` and the credential as a
@@ -20,7 +20,7 @@
 //! that is in progress. The daemon compares the Host and Origin headers with
 //! the addresses of its listener. This stops DNS rebinding and cross-site requests from browsers.
 
-use crate::project::{deserialize_md5, persist_binary, validate_file_name};
+use crate::project::{persist_binary, validate_file_name};
 use crate::state::McpState;
 use anyhow::{Context, Result};
 use axum::{
@@ -53,13 +53,10 @@ const DRAIN_LIMIT: u64 = 1024 * 1024 * 1024;
 /// The maximum time that the daemon reads and discards bytes after it refuses an upload.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The arguments of `upload.prepare`.
+/// The parameters of `ghidra_upload prepare`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PrepareArgs {
-    /// The MD5 of the binary. The upload must have this MD5.
-    #[serde(deserialize_with = "deserialize_md5")]
-    md5: String,
+pub struct PrepareParams {
     /// The display name of the binary.
     file_name: String,
     /// The exact size of the upload in bytes.
@@ -126,21 +123,17 @@ impl UploadService {
         }))
     }
 
-    /// Runs `upload.prepare`. Makes a credential and returns the upload request
-    /// that the client must send.
+    /// Runs `ghidra_upload prepare` for the binary with the MD5 `md5`. Makes a
+    /// credential and returns the upload request that the client must send.
     ///
     /// # Errors
     ///
     /// Fails during the shutdown, or for a file name that is not valid.
-    pub fn prepare(&self, args: PrepareArgs) -> Result<(String, Value)> {
+    pub fn prepare(&self, md5: String, params: PrepareParams) -> Result<(String, Value)> {
         if self.state.is_shutting_down() {
             return Err(crate::error::DomainError::ShuttingDown.into());
         }
-        let PrepareArgs {
-            md5,
-            file_name,
-            size,
-        } = args;
+        let PrepareParams { file_name, size } = params;
         validate_file_name(&file_name)?;
         let size = size.get();
         let now = Instant::now();

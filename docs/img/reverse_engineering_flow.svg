@@ -45,8 +45,8 @@
     <rect width="130" height="120" rx="8" class="step-box" />
     <text x="12" y="22" class="step-num">STEP 1</text>
     <text x="12" y="42" class="step-title">Ingest Binary</text>
-    <text x="12" y="65" class="step-cmd">session.open</text>
-    <text x="12" y="80" class="step-cmd">upload.prepare</text>
+    <text x="12" y="65" class="step-cmd">session open</text>
+    <text x="12" y="80" class="step-cmd">upload prepare</text>
     <text x="12" y="102" class="step-sub">Local path or upload</text>
   </g>
 
@@ -57,8 +57,8 @@
     <rect width="125" height="120" rx="8" class="step-box" />
     <text x="12" y="22" class="step-num">STEP 2</text>
     <text x="12" y="42" class="step-title">Auto Analyze</text>
-    <text x="12" y="65" class="step-cmd">analysis.auto</text>
-    <text x="12" y="80" class="step-cmd">jobs.poll</text>
+    <text x="12" y="65" class="step-cmd">analysis start</text>
+    <text x="12" y="80" class="step-cmd">job get / wait</text>
     <text x="12" y="102" class="step-sub">Background task</text>
   </g>
 
@@ -69,8 +69,8 @@
     <rect width="130" height="120" rx="8" class="step-box" />
     <text x="12" y="22" class="step-num">STEP 3</text>
     <text x="12" y="42" class="step-title">Explore Symbols</text>
-    <text x="12" y="65" class="step-cmd">function.list</text>
-    <text x="12" y="80" class="step-cmd">symbol.list</text>
+    <text x="12" y="65" class="step-cmd">function list</text>
+    <text x="12" y="80" class="step-cmd">symbol list</text>
     <text x="12" y="102" class="step-sub">Find entry points</text>
   </g>
 
@@ -81,8 +81,8 @@
     <rect width="130" height="120" rx="8" class="step-accent-box" />
     <text x="12" y="22" class="step-num">STEP 4</text>
     <text x="12" y="42" class="step-title">Decompile</text>
-    <text x="12" y="65" class="step-cmd">decompile</text>
-    <text x="12" y="80" class="step-cmd">xref.to / from</text>
+    <text x="12" y="65" class="step-cmd">decompilation get</text>
+    <text x="12" y="80" class="step-cmd">reference list</text>
     <text x="12" y="102" class="step-sub">C-like pseudocode</text>
   </g>
 
@@ -93,8 +93,8 @@
     <rect width="125" height="120" rx="8" class="step-green-box" />
     <text x="12" y="22" class="step-green-num">STEP 5</text>
     <text x="12" y="42" class="step-title">Annotate &amp; Save</text>
-    <text x="12" y="65" class="step-green-cmd">function.rename</text>
-    <text x="12" y="80" class="step-green-cmd">type.set</text>
+    <text x="12" y="65" class="step-green-cmd">function patch</text>
+    <text x="12" y="80" class="step-green-cmd">data_type patch</text>
     <text x="12" y="102" class="step-sub">Project changes</text>
   </g>
 </svg>

@@ -205,27 +205,29 @@ claude mcp get ghidra-mcp
 
 ## 初回解析手順
 
-すべての操作は `ghidra` という単一の MCP ツールを使用します。
-`command` パラメータで実行するアクションを選択します。
+デーモンは `ghidra_help` と、ドメインごとに 1 つの MCP ツールを提供します。
+各ドメインツールは `operation` とその `params` を受け取ります。
+1 つのセッションを指定する操作は、そのセッションの `md5` も受け取ります。
+このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。
 
 ### 1. バイナリセッションを開く
 
-ローカルのバイナリファイルを開きます：
+`ghidra_session` でローカルのバイナリファイルを開きます：
 
 ```json
 {
-  "command": "session.open",
-  "path": "/path/to/target_binary"
+  "operation": "open",
+  "params": { "path": "/path/to/target_binary" }
 }
 ```
 
 デーモンは MD5 ハッシュを計算し、バイナリを永続ストレージにコピーします。
 呼び出しは起動ジョブのレコードを返します。
-セッションの状態を確認します：
+`ghidra_session` でセッションの状態を確認します：
 
 ```json
 {
-  "command": "session.get",
+  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
@@ -234,11 +236,11 @@ claude mcp get ghidra-mcp
 
 ### 2. バックグラウンド解析を開始する
 
-開いたバイナリの自動解析を開始します：
+`ghidra_analysis` で開いたバイナリの自動解析を開始します：
 
 ```json
 {
-  "command": "analysis.start",
+  "operation": "start",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
@@ -247,12 +249,12 @@ claude mcp get ghidra-mcp
 
 ### 3. ジョブの進捗をポーリングする
 
-500 ミリ秒間隔でジョブの状態をポーリングします：
+`ghidra_job` で 500 ミリ秒間隔でジョブの状態をポーリングします：
 
 ```json
 {
-  "command": "job.get",
-  "jobId": "job-12345"
+  "operation": "get",
+  "params": { "jobId": "job-12345" }
 }
 ```
 
@@ -260,9 +262,8 @@ claude mcp get ghidra-mcp
 
 ```json
 {
-  "command": "job.wait",
-  "jobId": "job-12345",
-  "timeoutMs": 60000
+  "operation": "wait",
+  "params": { "jobId": "job-12345", "timeoutMs": 60000 }
 }
 ```
 
@@ -270,52 +271,53 @@ claude mcp get ghidra-mcp
 
 ### 4. シンボル検査と逆コンパイル
 
-バイナリ内の関数を一覧表示します：
+`ghidra_function` でバイナリ内の関数を一覧表示します：
 
 ```json
 {
-  "command": "function.list",
+  "operation": "list",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-シンボルを検査します：
+`ghidra_symbol` でシンボルを検査します：
 
 ```json
 {
-  "command": "symbol.list",
+  "operation": "list",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-エントリポイントの関数を逆コンパイルします：
+`ghidra_decompilation` でエントリポイントの関数を逆コンパイルします：
 
 ```json
 {
-  "command": "decompilation.get",
+  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef",
-  "address": "0x140001000"
+  "params": { "selector": { "entry": "ram:140001000" } }
 }
 ```
 
 ブリッジは構造化された C 疑似コード、シグネチャ、ローカル変数を返します。
+操作のパラメータを確認するには、`domain` と `operation` を指定して `ghidra_help` を呼び出します。
 
 ### 5. 変更の保存と終了
 
-プログラムの変更を Ghidra プロジェクトに保存します：
+`ghidra_program` でプログラムの変更を Ghidra プロジェクトに保存します：
 
 ```json
 {
-  "command": "program.save",
+  "operation": "save",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-アクティブなセッションを閉じます：
+`ghidra_session` でアクティブなセッションを閉じます：
 
 ```json
 {
-  "command": "session.close",
+  "operation": "close",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
