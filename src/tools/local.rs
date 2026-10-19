@@ -185,8 +185,9 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         domain: "upload",
         name: "prepare",
         description: concat!(
-            "Prepare a single-use HTTP upload for a remote binary. Returns a POST URL relative to ",
-            "the MCP URL, headers, and an expiration time. Stream raw bytes to that endpoint. A ",
+            "Prepare a single-use HTTP upload for a remote binary. Returns a POST URL, headers, ",
+            "and an expiration time. HTTP calls return an absolute URL from request headers. ",
+            "Other transports return a URL relative to the MCP URL. Stream raw bytes there. A ",
             "valid upload opens or reuses the MD5 session."
         ),
         schema: || {

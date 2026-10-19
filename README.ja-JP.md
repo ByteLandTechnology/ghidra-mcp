@@ -247,7 +247,8 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
    `fileName` は表示名です。ディレクトリを含めてはいけません。
 3. 結果を読み取ります。結果には次のフィールドがあります：
    - `method`：`POST`。
-   - `url`：`upload`。この URL は MCP の URL に対する相対 URL です。たとえば、`https://host/ghidra/mcp` からは `https://host/ghidra/upload` になります。
+   - `url`：HTTP 呼び出しでは `https://host/ghidra/upload` などの絶対 URL。
+     その他の転送方式では、MCP URL に対する相対 URL `upload`。
    - `headers`：1 回だけ使用できる `Authorization: Bearer` 資格情報と、`Content-Type: application/octet-stream`。
    - `expiresAt`：Unix 秒で表した有効期限。
 4. 結果のヘッダーを使用して、ファイルを生のリクエスト本文として送信します：
@@ -272,6 +273,14 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
 > - デーモンは、バイナリを保存する前にサイズと MD5 を確認します。失敗したアップロードは、ファイルもセッションも残しません。
 > - Ghidra が起動しなかった場合でも、バイナリは保存されたままです。MD5 を指定して `ghidra_session open` を再実行します。
 > - リバースプロキシは、`/mcp` と `/upload` の両方を同じプレフィックスでデーモンに転送する必要があります。
+
+サーバーは `Forwarded` のホストとプロトコルを優先し、次に `X-Forwarded-Host` と
+`X-Forwarded-Proto` を使います。`X-Forwarded-Prefix` はプロキシが除去したパスを補います。
+パスが `/mcp` で終わる HTTP または HTTPS の絶対 `Referer` URL も使用できます。
+クライアントページを指す Referer はサーバーアドレスとして使用しません。
+これらのヘッダーがなければ HTTP リクエストのアドレスを使います。
+プロトコルまたはパスプレフィックスが無効な場合は相対 URL を返します。
+プロキシは、クライアントが指定したアドレスヘッダーを正しい公開アドレスで置き換える必要があります。
 
 ## コーディングエージェントでの使用
 

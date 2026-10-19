@@ -152,15 +152,30 @@ impl ServerHandler for ToolServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, ErrorData> {
-        Ok(self
+        let upload_url = (request.name == "ghidra_upload")
+            .then(|| context.extensions.get::<axum::http::request::Parts>())
+            .flatten()
+            .and_then(|parts| crate::upload::request_url(&parts.uri, &parts.headers));
+        let mut result = self
             .call(
                 request.name.into_owned(),
                 request.arguments.unwrap_or_default(),
             )
-            .await
-            .into())
+            .await;
+        if result.is_error != Some(true) {
+            if let (Some(url), Some(value)) = (
+                upload_url,
+                result
+                    .structured_content
+                    .as_mut()
+                    .and_then(|value| value.get_mut("url")),
+            ) {
+                *value = Value::String(url);
+            }
+        }
+        Ok(result.into())
     }
 }
 

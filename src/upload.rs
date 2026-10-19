@@ -6,8 +6,8 @@
 //! A client that cannot share a file path with the daemon uploads a binary in two steps:
 //!
 //! 1. The `ghidra_upload prepare` operation gives a single-use **upload credential** for
-//!    a declared MD5, file name and size. It also returns a URL that is relative
-//!    to the MCP endpoint. Then the URL also works behind a reverse proxy with a prefix.
+//!    a declared MD5, file name and size. HTTP tool calls return an absolute URL
+//!    from the request headers. Other transports return a URL relative to the MCP endpoint.
 //! 2. The client sends the raw bytes with `POST /upload` and the credential as a
 //!    bearer token. The daemon writes the bytes to a temporary file and examines
 //!    the size and the MD5. Then it saves the binary, and opens its session or
@@ -19,6 +19,13 @@
 //! credential before [`GRANT_LIFETIME`] ends. This limit never stops an upload
 //! that is in progress. The daemon compares the Host and Origin headers with
 //! the addresses of its listener. This stops DNS rebinding and cross-site requests from browsers.
+
+mod url;
+
+#[cfg(test)]
+mod tests;
+
+pub use url::request_url;
 
 use crate::project::{persist_binary, validate_file_name};
 use crate::state::McpState;

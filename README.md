@@ -249,7 +249,8 @@ Use this procedure when the client is not on the daemon host.
    `fileName` is a display name. It must not contain a directory.
 3. Read the result. It contains these fields:
    - `method`: `POST`.
-   - `url`: `upload`. This URL is relative to the MCP URL. For example, `https://host/ghidra/mcp` gives `https://host/ghidra/upload`.
+   - `url`: An absolute URL for HTTP calls, for example `https://host/ghidra/upload`.
+     Other transports return `upload`, relative to the MCP URL.
    - `headers`: a single-use `Authorization: Bearer` credential and `Content-Type: application/octet-stream`.
    - `expiresAt`: the expiry time in Unix seconds.
 4. Send the file as the raw request body with the headers from the result:
@@ -275,6 +276,16 @@ You do not need a separate `ghidra_session open` call.
 > - The daemon examines the size and the MD5 before it saves the binary. A failed upload leaves no file and no session.
 > - If Ghidra does not start, the binary stays saved. Use `ghidra_session open` with the MD5 to retry.
 > - A reverse proxy must send both `/mcp` and `/upload` to the daemon, with the same prefix.
+
+The server uses `Forwarded` host and protocol values first, then `X-Forwarded-Host` and
+`X-Forwarded-Proto`.
+`X-Forwarded-Prefix` supplies a path prefix that the proxy removed.
+
+The server can also use an absolute HTTP or HTTPS `Referer` whose path ends in `/mcp`.
+It does not use a Referer that points to a client page.
+Without these headers, the server uses the HTTP request address.
+An invalid protocol or path prefix leaves the URL relative.
+The proxy must replace client-supplied address headers with the correct public values.
 
 ## Use with coding agents
 

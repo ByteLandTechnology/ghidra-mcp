@@ -674,6 +674,26 @@ fn load_sessions(paths: &McpPaths) -> Result<HashMap<String, SessionEntry>> {
     Ok(sessions)
 }
 
+/// Makes isolated daemon state without Ghidra processes or shared environment changes.
+#[cfg(test)]
+pub(crate) fn test_state(root: &std::path::Path) -> Arc<McpState> {
+    Arc::new(McpState {
+        paths: McpPaths {
+            config_toml: root.join("config.toml"),
+            projects_dir: root.join("projects"),
+            runtime_dir: root.join("run"),
+            tmp_dir: root.join("tmp"),
+        },
+        config: McpConfig::default(),
+        bridge_ws_url: String::new(),
+        lifecycle_lock: tokio::sync::Mutex::new(()),
+        notify: Notify::new(),
+        shutting_down: AtomicBool::new(false),
+        sessions: Mutex::default(),
+        jobs: Mutex::default(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -682,28 +702,8 @@ mod tests {
     use axum::{routing::get, Router};
     use serde_json::json;
     use std::net::SocketAddr;
-    use std::path::Path;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::{TcpListener, TcpStream};
-
-    /// Creates isolated daemon state without Ghidra processes or shared environment changes.
-    fn test_state(root: &Path) -> Arc<McpState> {
-        Arc::new(McpState {
-            paths: McpPaths {
-                config_toml: root.join("config.toml"),
-                projects_dir: root.join("projects"),
-                runtime_dir: root.join("run"),
-                tmp_dir: root.join("tmp"),
-            },
-            config: McpConfig::default(),
-            bridge_ws_url: String::new(),
-            lifecycle_lock: tokio::sync::Mutex::new(()),
-            notify: Notify::new(),
-            shutting_down: AtomicBool::new(false),
-            sessions: Mutex::default(),
-            jobs: Mutex::default(),
-        })
-    }
 
     /// Opens an authenticated WebSocket through the bridge endpoint.
     async fn connect_bridge(address: SocketAddr, token: &str) -> TcpStream {

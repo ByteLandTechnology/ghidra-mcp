@@ -23,32 +23,34 @@ use axum::{
 use futures::Stream;
 use rmcp::{
     handler::server::ServerHandler,
-    transport::streamable_http_server::{
-        session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+    model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
+    transport::{
+        streamable_http_server::{
+            session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+        },
+        Transport,
     },
-    ServiceExt,
+    RoleServer, ServiceExt,
 };
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     convert::Infallible,
+    future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf},
-    sync::mpsc,
-};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// The maximum size of an MCP POST body.
 const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 
-/// The capacity of each side of a legacy SSE in-process transport.
-const LEGACY_TRANSPORT_CAPACITY: usize = 64 * 1024;
+/// The number of queued messages that one legacy SSE session can keep.
+const LEGACY_MESSAGE_CAPACITY: usize = 1;
 
 /// The number of queued events that one legacy SSE session can keep.
 const LEGACY_EVENT_CAPACITY: usize = 1;
@@ -128,11 +130,10 @@ where
         let id = Uuid::new_v4().to_string();
         let endpoint = format!("?sessionId={id}");
         let session_cancel = self.cancellation.child_token();
-        let (server_io, client_io) = tokio::io::duplex(LEGACY_TRANSPORT_CAPACITY);
-        let (output, input) = tokio::io::split(client_io);
+        let (input, messages) = mpsc::channel(LEGACY_MESSAGE_CAPACITY);
         let (events, receiver) = mpsc::channel(LEGACY_EVENT_CAPACITY);
         let session = LegacySession {
-            input: Arc::new(tokio::sync::Mutex::new(input)),
+            input,
             cancellation: session_cancel.clone(),
         };
         self.sessions
@@ -140,8 +141,15 @@ where
             .expect("legacy SSE sessions lock poisoned")
             .insert(id.clone(), session);
 
-        spawn_legacy_server(self.server.clone(), server_io, session_cancel.clone());
-        tokio::spawn(forward_legacy_output(output, events, session_cancel));
+        spawn_legacy_server(
+            self.server.clone(),
+            LegacyTransport {
+                messages,
+                events,
+                cancellation: session_cancel.clone(),
+            },
+            session_cancel,
+        );
 
         let stream = LegacyEventStream {
             endpoint: Some(endpoint),
@@ -163,7 +171,7 @@ where
     }
 
     /// Sends one JSON-RPC message to a legacy SSE session.
-    async fn send_legacy(&self, id: &str, body: Body) -> Response {
+    async fn send_legacy(&self, id: &str, request: Request) -> Response {
         let Some(session) = self
             .sessions
             .lock()
@@ -173,6 +181,7 @@ where
         else {
             return legacy_rpc_error(StatusCode::NOT_FOUND, "SSE session not found or expired");
         };
+        let (parts, body) = request.into_parts();
         let bytes = match tokio::select! {
           biased;
           () = session.cancellation.cancelled() => None,
@@ -188,21 +197,16 @@ where
                     .into_response()
             }
         };
-        let write = async {
-            let mut input = session.input.lock().await;
-            input.write_all(&bytes).await?;
-            input.write_all(b"\n").await?;
-            input.flush().await
+        let Ok(mut message) = serde_json::from_slice::<ClientJsonRpcMessage>(&bytes) else {
+            return legacy_rpc_error(StatusCode::BAD_REQUEST, "MCP message is not valid");
         };
+        message.insert_extension(parts);
         let sent = tokio::select! {
           biased;
-          () = session.cancellation.cancelled() => Err(std::io::Error::new(
-            std::io::ErrorKind::BrokenPipe,
-            "MCP session is closed",
-          )),
-          result = write => result,
+          () = session.cancellation.cancelled() => false,
+          result = session.input.send(message) => result.is_ok(),
         };
-        if sent.is_err() {
+        if !sent {
             self.remove_session(id);
             return legacy_rpc_error(StatusCode::NOT_FOUND, "SSE session not found or expired");
         }
@@ -226,7 +230,7 @@ where
 #[derive(Clone)]
 struct LegacySession {
     /// Receives JSON-RPC messages from HTTP POST requests.
-    input: Arc<tokio::sync::Mutex<WriteHalf<DuplexStream>>>,
+    input: mpsc::Sender<ClientJsonRpcMessage>,
     /// Stops the in-process MCP server for this session.
     cancellation: CancellationToken,
 }
@@ -258,7 +262,7 @@ where
                 HeaderValue::from_static("application/json"),
             );
             if let Some(id) = legacy_session_id(request.uri()).map(str::to_owned) {
-                state.send_legacy(&id, request.into_body()).await
+                state.send_legacy(&id, request).await
             } else {
                 match normalize_message_request(request, &state.cancellation).await {
                     Ok(request) => next.run(request).await,
@@ -288,12 +292,12 @@ where
 }
 
 /// Starts rmcp for one legacy SSE session.
-fn spawn_legacy_server<S>(server: S, io: DuplexStream, cancellation: CancellationToken)
+fn spawn_legacy_server<S>(server: S, transport: LegacyTransport, cancellation: CancellationToken)
 where
     S: ServerHandler + Clone + Send + Sync + 'static,
 {
     tokio::spawn(async move {
-        match server.serve_with_ct(io, cancellation).await {
+        match server.serve_with_ct(transport, cancellation).await {
             Ok(service) => {
                 let _ = service.waiting().await;
             }
@@ -304,34 +308,45 @@ where
     });
 }
 
-/// Sends newline-delimited rmcp output to the SSE event queue.
-async fn forward_legacy_output(
-    output: ReadHalf<DuplexStream>,
+/// Keeps HTTP request parts in the MCP messages of a legacy SSE session.
+struct LegacyTransport {
+    /// Messages from HTTP POST requests, with their request parts.
+    messages: mpsc::Receiver<ClientJsonRpcMessage>,
+    /// JSON-RPC output for the SSE event stream.
     events: mpsc::Sender<String>,
+    /// Stops the session if the client cannot receive more events.
     cancellation: CancellationToken,
-) {
-    let mut lines = BufReader::new(output).lines();
-    loop {
-        let line = tokio::select! {
-          biased;
-          () = cancellation.cancelled() => break,
-          result = lines.next_line() => result,
-        };
-        let Ok(Some(line)) = line else {
-            break;
-        };
-        if line.is_empty() {
-            continue;
+}
+
+impl Transport<RoleServer> for LegacyTransport {
+    type Error = std::io::Error;
+
+    fn send(
+        &mut self,
+        message: ServerJsonRpcMessage,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let events = self.events.clone();
+        let cancellation = self.cancellation.clone();
+        async move {
+            let message = serde_json::to_string(&message).map_err(std::io::Error::other)?;
+            let result = tokio::time::timeout(SSE_EVENT_SEND_TIMEOUT, events.send(message))
+                .await
+                .map_err(std::io::Error::other)
+                .and_then(|result| result.map_err(std::io::Error::other));
+            if result.is_err() {
+                cancellation.cancel();
+            }
+            result
         }
-        let sent = tokio::select! {
-          biased;
-          () = cancellation.cancelled() => break,
-          result = tokio::time::timeout(SSE_EVENT_SEND_TIMEOUT, events.send(line)) => result,
-        };
-        if !matches!(sent, Ok(Ok(()))) {
-            cancellation.cancel();
-            break;
-        }
+    }
+
+    async fn receive(&mut self) -> Option<ClientJsonRpcMessage> {
+        self.messages.recv().await
+    }
+
+    fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.messages.close();
+        std::future::ready(Ok(()))
     }
 }
 

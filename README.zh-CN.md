@@ -247,7 +247,8 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
    `fileName` 是显示名称，不能包含目录。
 3. 读取结果。结果包含以下字段：
    - `method`：`POST`。
-   - `url`：`upload`。该 URL 相对于 MCP URL。例如，`https://host/ghidra/mcp` 对应 `https://host/ghidra/upload`。
+   - `url`：HTTP 调用返回绝对地址，例如 `https://host/ghidra/upload`。
+     其他传输方式返回相对于 MCP URL 的 `upload`。
    - `headers`：一次性的 `Authorization: Bearer` 凭据和 `Content-Type: application/octet-stream`。
    - `expiresAt`：以 Unix 秒表示的过期时间。
 4. 使用结果中的请求头，把文件作为原始请求体发送：
@@ -272,6 +273,13 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
 > - 守护进程在保存二进制文件之前检查大小和 MD5。失败的上传不会留下文件，也不会创建会话。
 > - 如果 Ghidra 没有启动，二进制文件仍然保存着。请使用 `ghidra_session open` 和 MD5 重试操作。
 > - 反向代理必须以相同的前缀把 `/mcp` 和 `/upload` 都转发给守护进程。
+
+服务器优先使用 `Forwarded` 中的主机和协议，其次使用 `X-Forwarded-Host` 和
+`X-Forwarded-Proto`。`X-Forwarded-Prefix` 用于恢复代理移除的路径前缀。
+服务器也可以使用路径以 `/mcp` 结尾的 HTTP 或 HTTPS 绝对 `Referer` 地址，
+但不会把指向客户端页面的 Referer 当作服务器地址。
+没有这些请求头时，使用 HTTP 请求地址。协议或路径前缀无效时，保留相对地址。
+代理必须用正确的对外地址覆盖客户端提交的地址请求头。
 
 ## 与编码代理一起使用
 
