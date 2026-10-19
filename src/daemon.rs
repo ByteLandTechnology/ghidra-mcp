@@ -434,6 +434,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 ///
 /// Fails if the address is not loopback.
 /// Also fails if the daemon cannot make a listener or initialize the state.
+/// Fails if it cannot find or execute the Ghidra launcher.
 /// Fails if a server fails.
 pub async fn run(address: SocketAddr) -> Result<()> {
     ensure!(
@@ -449,6 +450,14 @@ pub async fn run(address: SocketAddr) -> Result<()> {
         .context("binding daemon HTTP listener")?;
     let address = tcp.local_addr()?;
     let state = McpState::initialize(format!("ws://{address}{AGENT_WS_PATH}"))?;
+    let analyze_headless = crate::ghidra::analyze_headless(&state.config)
+        .context("cannot start daemon without Ghidra")?;
+    which::which(&analyze_headless).with_context(|| {
+        format!(
+            "cannot start daemon: analyzeHeadless is not executable: {}",
+            analyze_headless.display()
+        )
+    })?;
     let cancellation = CancellationToken::new();
     let authorities = [address.to_string(), format!("localhost:{}", address.port())];
     let uploads = UploadService::new(

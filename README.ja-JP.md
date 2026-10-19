@@ -126,6 +126,9 @@ MCP クライアントは stdio または HTTP でデーモンに接続します
 
 ### Ghidra の検索
 
+デーモンは MCP サービスの開始前に、実行可能な `analyzeHeadless` が見つかるか確認します。
+確認に失敗すると、エラーを stderr と `daemon.log` に書き込み、終了コード `1` で終了します。
+
 デーモンは次の順序で `analyzeHeadless` を探します：
 
 1. `config.toml` の `[ghidra].analyze_headless`。

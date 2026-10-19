@@ -16,8 +16,8 @@
 
 ### 症状
 
-- 会话状态转换为 `error`。
-- `last_error` 显示：`cannot find analyzeHeadless`。
+- 守护进程在启动阶段以状态码 `1` 退出。
+- stderr 和 `daemon.log` 报告找不到 `analyzeHeadless`，或该文件不可执行。
 
 ### 查找优先级
 

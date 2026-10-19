@@ -127,6 +127,9 @@ The build then makes only `Bridge.java` and does not compile the bridge.
 
 ### Find Ghidra
 
+Before it serves MCP, the daemon checks that it can find an executable `analyzeHeadless`.
+If this check fails, it writes the error to stderr and `daemon.log`, then exits with status `1`.
+
 The daemon finds `analyzeHeadless` in this order:
 
 1. `[ghidra].analyze_headless` in `config.toml`.

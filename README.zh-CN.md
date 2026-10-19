@@ -126,6 +126,9 @@ MCP 客户端通过 stdio 或 HTTP 连接守护进程。
 
 ### 查找 Ghidra
 
+守护进程在提供 MCP 服务前，会检查能否找到可执行的 `analyzeHeadless`。
+检查失败时，将错误写入 stderr 和 `daemon.log`，然后以状态码 `1` 退出。
+
 守护进程按以下顺序查找 `analyzeHeadless`：
 
 1. `config.toml` 中的 `[ghidra].analyze_headless`。

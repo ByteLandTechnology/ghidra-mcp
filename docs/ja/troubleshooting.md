@@ -16,8 +16,8 @@
 
 ### 症状
 
-- セッションの状態が `error` に遷移する。
-- `last_error` に `cannot find analyzeHeadless` と表示される。
+- デーモンが起動時に終了コード `1` で終了する。
+- stderr と `daemon.log` に、`analyzeHeadless` が見つからないか、実行できないと表示される。
 
 ### 検出の優先順位
 

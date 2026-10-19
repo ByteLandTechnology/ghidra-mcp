@@ -16,8 +16,8 @@ This runbook helps you diagnose and resolve common issues with `ghidra-mcp`.
 
 ### Symptoms
 
-- The session transitions to status `error`.
-- `last_error` shows: `cannot find analyzeHeadless`.
+- The daemon exits during startup with status `1`.
+- stderr and `daemon.log` report that `analyzeHeadless` is absent or is not executable.
 
 ### Discovery precedence
 
