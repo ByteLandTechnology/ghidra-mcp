@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.0.0...v1.0.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* fail daemon startup when Ghidra is unavailable ([ea12cb9](https://github.com/ByteLandTechnology/ghidra-mcp/commit/ea12cb9d7684825a97b951f2ae9d4ccb387c1a89))
+* return absolute upload URLs for HTTP tool calls ([0fdd3ed](https://github.com/ByteLandTechnology/ghidra-mcp/commit/0fdd3ed1bd33730ca1e1e8dbd2c51f318dd24622))
+
 ## [1.0.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v0.4.0...v1.0.0) (2026-10-16)
 
 
