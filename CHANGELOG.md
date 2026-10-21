@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.0.1...v1.0.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **mcp:** update upload URLs in text results ([079f6a3](https://github.com/ByteLandTechnology/ghidra-mcp/commit/079f6a3004fc203941249495c420d3f7ca9e482d))
+
 ## [1.0.1](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.0.0...v1.0.1) (2026-10-19)
 
 
