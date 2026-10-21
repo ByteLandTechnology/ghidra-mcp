@@ -165,14 +165,12 @@ impl ServerHandler for ToolServer {
             )
             .await;
         if result.is_error != Some(true) {
-            if let (Some(url), Some(value)) = (
-                upload_url,
-                result
-                    .structured_content
-                    .as_mut()
-                    .and_then(|value| value.get_mut("url")),
-            ) {
-                *value = Value::String(url);
+            if let (Some(url), Some(structured)) = (upload_url, result.structured_content.as_mut())
+            {
+                if let Some(value) = structured.get_mut("url") {
+                    *value = Value::String(url);
+                    result.content = vec![ContentBlock::text(structured.to_string())];
+                }
             }
         }
         Ok(result.into())
