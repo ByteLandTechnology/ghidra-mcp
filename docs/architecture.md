@@ -95,6 +95,9 @@ Then it does one of these:
 - It runs a **local operation** from `LOCAL_OPERATIONS` (`tools/local.rs`): sessions, jobs, uploads and the start of an analysis.
 - It sends a **bridge method** from the bridge contract `bridge/docs/asyncapi.yaml` to the bridge.
 
+When a result has `structuredContent`, its `content` text block has the same JSON data.
+This lets clients that read only `content` use the result.
+
 When the bridge returns an error, the tool call fails. The failed result still contains the structured response.
 The MCP handler maps errors to typed `DomainError` variants with JSON-RPC error codes (`-32602`, `-32001`, `-32002`, `-32000`, `-32603`).
 The bridge distinguishes database transaction failures (HTTP 500 `transaction_failed`) from client argument errors (HTTP 400 `invalid_request`).

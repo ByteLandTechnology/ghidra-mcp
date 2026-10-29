@@ -93,6 +93,9 @@
 - 运行 `LOCAL_OPERATIONS`（`tools/local.rs`）中的**本地操作**：会话、作业、上传和分析的启动。
 - 把桥接契约 `bridge/docs/asyncapi.yaml` 中的**桥接方法**发送给桥接。
 
+当结果包含 `structuredContent` 时，`content` 的文本块提供相同的 JSON 数据。
+只读取 `content` 的客户端也可以使用该结果。
+
 当桥接返回错误时，工具调用失败。失败的结果仍然包含结构化响应。
 MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误码（`-32602`、`-32001`、`-32002`、`-32000`、`-32603`）。
 桥接将数据库事务失败（HTTP 500 `transaction_failed`）与客户端参数错误（HTTP 400 `invalid_request`）严格区分。

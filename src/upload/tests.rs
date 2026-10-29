@@ -6,6 +6,7 @@
 use super::*;
 use crate::{mcp::ToolServer, mcp_http, tools::Daemon};
 use axum::{extract::Request, http::Method, Router};
+use serde_json::Map;
 use tower::ServiceExt;
 
 /// Makes a tool server with isolated upload credentials and no Ghidra processes.
@@ -57,6 +58,9 @@ fn check_result(response: &Value, expected_url: &str) {
     let result = &response["result"];
     assert_ne!(result["isError"], true, "{result}");
     let upload = &result["structuredContent"];
+    let text = result["content"][0]["text"].as_str().unwrap();
+    let text_result: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(&text_result, upload);
     assert_eq!(upload["url"], expected_url);
     assert_eq!(upload["method"], "POST");
     assert_eq!(
@@ -68,6 +72,22 @@ fn check_result(response: &Value, expected_url: &str) {
         .unwrap()
         .starts_with("Bearer "));
     assert!(upload["expiresAt"].as_u64().is_some());
+}
+
+/// Makes sure that text-only clients can read tool data and errors.
+#[tokio::test]
+async fn text_content_contains_tool_results() {
+    let (_root, server) = test_server();
+    for (name, arguments, is_error) in [
+        ("ghidra_help", Map::new(), false),
+        ("unknown_tool", Map::new(), true),
+    ] {
+        let result = server.call(name.into(), arguments).await;
+        assert_eq!(result.is_error == Some(true), is_error);
+        let text = &result.content[0].as_text().unwrap().text;
+        let content: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(Some(content), result.structured_content);
+    }
 }
 
 /// Makes sure that concurrent HTTP calls use their own public address.
@@ -116,7 +136,10 @@ async fn returns_absolute_upload_urls_over_http() {
         .unwrap()
         .clone();
     let result = server.call("ghidra_upload".into(), arguments).await;
-    assert_eq!(result.structured_content.unwrap()["url"], "upload");
+    let structured = result.structured_content.unwrap();
+    assert_eq!(structured["url"], "upload");
+    let content: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(content, structured);
 }
 
 /// Returns the data from the next SSE event.

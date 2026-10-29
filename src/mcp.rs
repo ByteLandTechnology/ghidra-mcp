@@ -69,15 +69,16 @@ impl ToolServer {
     /// Runs one tool call. The result contains the failures, as MCP specifies.
     /// Failures are not protocol errors.
     pub async fn call(&self, name: String, arguments: Map<String, Value>) -> CallToolResult {
-        match &self.backend {
+        let mut result = match &self.backend {
             Backend::Local(daemon) => {
                 if daemon.state.is_shutting_down() {
                     let err = DomainError::ShuttingDown;
                     let mut res = CallToolResult::error(vec![ContentBlock::text(err.to_string())]);
                     res.structured_content = Some(err.to_envelope());
-                    return res;
+                    res
+                } else {
+                    to_tool_result(crate::tools::call(daemon, &name, arguments).await)
                 }
-                to_tool_result(crate::tools::call(daemon, &name, arguments).await)
             }
             Backend::Proxy(manager) => match manager.call_tool(name, arguments).await {
                 Ok(result) => result,
@@ -94,7 +95,12 @@ impl ToolServer {
                     res
                 }
             },
+        };
+        // Text-only clients need the same data as structured-content clients.
+        if let Some(structured) = &result.structured_content {
+            result.content = vec![ContentBlock::text(structured.to_string())];
         }
+        result
     }
 }
 
