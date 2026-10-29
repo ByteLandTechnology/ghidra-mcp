@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.0.2...v1.0.3) (2026-10-29)
+
+
+### Bug Fixes
+
+* return structured tool results as text ([25dbee9](https://github.com/ByteLandTechnology/ghidra-mcp/commit/25dbee9ef82437fa59d0e69ef41a8714c11932a1))
+
 ## [1.0.2](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.0.1...v1.0.2) (2026-10-21)
 
 
