@@ -401,6 +401,36 @@ ipc_handshake_timeout_sec = 5
 {"operation":"upsert","md5":"0123456789abcdef0123456789abcdef","params":{"resource":{"address":"ram:00100000","type":"eol","text":"checked"}}}
 ```
 
+関数を作成するには、`ghidra_function` にエントリアドレスを指定します：
+
+```json
+{
+  "operation": "create",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "resource": { "entry": "ram:00100000", "name": "my_function" },
+    "disassemble": true
+  }
+}
+```
+
+`name` は省略できます。デフォルトでは、エントリに命令が必要です。
+`disassemble: true` を指定すると、命令がない場合に逆アセンブルします。
+エントリまたは関数本体が既存の関数と重なる場合、操作は失敗します。
+通常の関数を作成し、thunk を自動的に識別しません。
+
+関数を削除するには、`selector` にエントリアドレスを指定します：
+
+```json
+{
+  "operation": "delete",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": { "selector": { "entry": "ram:00100000" } }
+}
+```
+
+この操作は関数定義とローカル変数を削除し、命令とデータは保持します。
+
 操作を初めて呼び出す前に、ドメインと操作名を指定して `ghidra_help` を呼び出します。
 返される `inputSchema` は、ツールのトップレベル引数ではなく `params` の内容を説明します。
 呼び出す前に必須フィールドとその入れ子構造を確認します。

@@ -400,6 +400,35 @@ ipc_handshake_timeout_sec = 5
 {"operation":"upsert","md5":"0123456789abcdef0123456789abcdef","params":{"resource":{"address":"ram:00100000","type":"eol","text":"checked"}}}
 ```
 
+要创建函数，请使用 `ghidra_function` 并指定入口地址：
+
+```json
+{
+  "operation": "create",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "resource": { "entry": "ram:00100000", "name": "my_function" },
+    "disassemble": true
+  }
+}
+```
+
+`name` 是可选参数。默认情况下，入口地址必须有指令。
+设置 `disassemble: true` 后，如果入口没有指令，操作会先反汇编。
+如果入口或函数体与已有函数重叠，操作会失败。此操作创建普通函数，不会自动识别 thunk。
+
+要删除函数，请在 `selector` 中指定函数入口地址：
+
+```json
+{
+  "operation": "delete",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": { "selector": { "entry": "ram:00100000" } }
+}
+```
+
+该操作删除函数定义和局部变量，但保留指令和数据。
+
 首次调用某个操作前，使用领域和操作名调用 `ghidra_help`。
 返回的 `inputSchema` 描述 `params` 的内容，而不是工具的顶层参数。
 调用前请检查必填字段及其嵌套结构。

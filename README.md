@@ -406,6 +406,37 @@ Examples for `ghidra_function get` and `ghidra_comment upsert`:
 {"operation":"upsert","md5":"0123456789abcdef0123456789abcdef","params":{"resource":{"address":"ram:00100000","type":"eol","text":"checked"}}}
 ```
 
+To create a function, use `ghidra_function` with its entry address:
+
+```json
+{
+  "operation": "create",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "resource": { "entry": "ram:00100000", "name": "my_function" },
+    "disassemble": true
+  }
+}
+```
+
+The `name` is optional. By default, the entry must have an instruction.
+Set `disassemble` to `true` to decode instructions when the entry has none.
+The operation fails if the entry or the function body overlaps a function.
+It creates a regular function. It does not identify a thunk.
+
+To delete a function, use its entry address in `selector`:
+
+```json
+{
+  "operation": "delete",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": { "selector": { "entry": "ram:00100000" } }
+}
+```
+
+The operation removes the function definition and its local variables.
+It keeps the instructions and data.
+
 Before the first call to an operation, call `ghidra_help` with the domain and operation.
 Its `inputSchema` describes the contents of `params`, not the top-level tool arguments.
 Check the required fields and their nested structure before the call.
