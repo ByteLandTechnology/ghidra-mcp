@@ -211,6 +211,18 @@ Each domain tool takes an `operation` and its `params`.
 An operation that names one session also takes the `md5` of that session.
 This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
 
+Before the first call to an operation, call `ghidra_help` with its domain and operation.
+For example, call `ghidra_help` with:
+
+```json
+{ "domain": "ghidra_memory", "operation": "read" }
+```
+
+The result has an `inputSchema` for the contents of `params` and an `md5` rule for the top-level argument.
+For `read`, put `address` in `params.selector`. The optional `length` is in `params` and defaults to 256 bytes.
+When an operation needs `md5`, use the file digest or the MD5 of a session that is available.
+The MD5 has exactly 32 hexadecimal characters.
+
 ### 1. Open a binary session
 
 Open a local binary file with `ghidra_session`:
@@ -301,7 +313,6 @@ Decompile a function at an entry point with `ghidra_decompilation`:
 ```
 
 The bridge returns structured C pseudocode, signatures, and local variables.
-To see the parameters of an operation, call `ghidra_help` with `domain` and `operation`.
 
 ### 5. Save changes and close
 

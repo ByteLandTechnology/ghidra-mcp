@@ -317,7 +317,7 @@ claude mcp add --transport stdio --scope local ghidra-mcp -- /absolute/path/to/g
 8. プログラムを変更する操作を使用する前に、ユーザーの承認を得ます。
 
 セッションの要約には、`md5`、`fileName`、`status`、`connected` だけが含まれます。
-すべてのセッション操作は `md5` を使用します。別のセッション ID はありません。
+1 つのセッションを指定する操作は `md5` を使用します。別のセッション ID はありません。
 `ghidra_session list` は任意です。
 デーモンが知らない MD5 に対しては、デーモンはバイナリをアップロードするように伝えます。
 
@@ -371,13 +371,14 @@ ipc_handshake_timeout_sec = 5
 ## MCP ツール
 
 `tools/list` は 18 個の MCP ツールを表示します：`ghidra_help` と、ドメインごとに 1 つのツールです。
-ドメインと操作は、ブリッジの MCP サーバーと同じです。
+ブリッジのドメインツールは、ブリッジ MCP サーバーのドメイン名と操作名を使用します。
+デーモンにはローカル操作もありますが、ブリッジの shutdown 操作は公開しません。
 このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。
 
 ドメインツールには次の引数があります：
 
 - `operation`：必須。ドメイン内の操作です（例：`list`）。
-- `md5`：操作が指定するセッションの MD5 です。`params` には入れません。各操作には md5 ルール（`required`、`optional`、`absent`）があります。
+- `md5`：セッションを識別するバイナリの MD5 です。32 桁の 16 進文字で、`params` には入れません。名前ではなく、ファイルの実際のダイジェストか既存セッションの MD5 を使用します。各操作には md5 ルール（`required`、`optional`、`absent`）があります。
 - `params`：操作のパラメータです。デフォルトは `{}` です。
 
 | ツール | 操作 | 実行場所 |
@@ -399,6 +400,10 @@ ipc_handshake_timeout_sec = 5
 {"operation":"get","md5":"0123456789abcdef0123456789abcdef","params":{"selector":{"entry":"ram:00100000"}}}
 {"operation":"upsert","md5":"0123456789abcdef0123456789abcdef","params":{"resource":{"address":"ram:00100000","type":"eol","text":"checked"}}}
 ```
+
+操作を初めて呼び出す前に、ドメインと操作名を指定して `ghidra_help` を呼び出します。
+返される `inputSchema` は、ツールのトップレベル引数ではなく `params` の内容を説明します。
+呼び出す前に必須フィールドとその入れ子構造を確認します。
 
 `ghidra_help` ツールは、すべてのツールを説明します：
 

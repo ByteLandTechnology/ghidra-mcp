@@ -210,6 +210,17 @@ claude mcp get ghidra-mcp
 1 つのセッションを指定する操作は、そのセッションの `md5` も受け取ります。
 このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。
 
+操作を初めて呼び出す前に、そのドメインと操作名を指定して `ghidra_help` を呼び出します。
+例えば、次の引数で `ghidra_help` を呼び出します：
+
+```json
+{ "domain": "ghidra_memory", "operation": "read" }
+```
+
+結果の `inputSchema` は `params` の内容を説明し、`md5` ルールはトップレベル引数を説明します。
+`read` では、`address` を `params.selector` に入れます。任意の `length` は `params` に入れ、デフォルトは 256 バイトです。
+操作に `md5` が必要な場合は、ファイルのダイジェストか既存セッションの MD5 を使用します。形式は 32 桁の 16 進文字です。
+
 ### 1. バイナリセッションを開く
 
 `ghidra_session` でローカルのバイナリファイルを開きます：
@@ -300,7 +311,6 @@ claude mcp get ghidra-mcp
 ```
 
 ブリッジは構造化された C 疑似コード、シグネチャ、ローカル変数を返します。
-操作のパラメータを確認するには、`domain` と `operation` を指定して `ghidra_help` を呼び出します。
 
 ### 5. 変更の保存と終了
 

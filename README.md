@@ -322,7 +322,7 @@ Use this procedure in an agent:
 8. Get approval from the user before you use an operation that changes the program.
 
 A session summary contains only `md5`, `fileName`, `status` and `connected`.
-All session operations use `md5`. There is no separate session ID.
+Operations that name one session use `md5`. There is no separate session ID.
 `ghidra_session list` is optional.
 For an MD5 that the daemon does not know, the daemon tells you to upload the binary.
 
@@ -376,13 +376,14 @@ ipc_handshake_timeout_sec = 5
 ## The MCP tools
 
 `tools/list` shows 18 MCP tools: `ghidra_help` and one tool for each domain.
-The domains and the operations are the same as in the MCP server of the bridge.
+The bridge domain tools use the domain and operation names of the bridge MCP server.
+The daemon also has local operations and does not expose the bridge shutdown operation.
 This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
 
 A domain tool has these arguments:
 
 - `operation`: necessary. The operation in the domain, for example `list`.
-- `md5`: the MD5 of the session that the operation names. It is never in `params`. Each operation has an md5 rule: `required`, `optional` or `absent`.
+- `md5`: the MD5 of the binary that identifies a session. It has exactly 32 hexadecimal characters and is never in `params`. Use the digest of the file or the MD5 of a session that is available, not a name. Each operation has an md5 rule: `required`, `optional` or `absent`.
 - `params`: the parameters of the operation. The default is `{}`.
 
 | Tool | Operations | Runs in |
@@ -404,6 +405,10 @@ Examples for `ghidra_function get` and `ghidra_comment upsert`:
 {"operation":"get","md5":"0123456789abcdef0123456789abcdef","params":{"selector":{"entry":"ram:00100000"}}}
 {"operation":"upsert","md5":"0123456789abcdef0123456789abcdef","params":{"resource":{"address":"ram:00100000","type":"eol","text":"checked"}}}
 ```
+
+Before the first call to an operation, call `ghidra_help` with the domain and operation.
+Its `inputSchema` describes the contents of `params`, not the top-level tool arguments.
+Check the required fields and their nested structure before the call.
 
 The `ghidra_help` tool describes all tools:
 

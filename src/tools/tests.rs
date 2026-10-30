@@ -121,6 +121,42 @@ fn tool_definitions_have_routes_and_annotations() {
     assert!(job.get("md5").is_none());
 }
 
+/// Makes sure that each domain tool tells the client how to get its parameters.
+#[test]
+fn tool_definitions_explain_how_to_call_operations() {
+    let tools = tool_definitions();
+    for tool in &tools[1..] {
+        let name = tool["name"].as_str().expect("tool name");
+        let description = tool["description"].as_str().expect("description");
+        assert!(description.contains(&format!("domain=\"{name}\"")));
+        assert!(description.contains("ghidra_help"));
+        assert!(description.contains("inputSchema"));
+        if let Some(md5) = tool["inputSchema"]["properties"].get("md5") {
+            let description = md5["description"].as_str().expect("md5 description");
+            assert!(description.contains("32 hexadecimal characters"));
+            assert!(description.contains("not a name or label"));
+        }
+    }
+}
+
+/// Makes sure that one error gives all absent parameters and the help tool.
+#[test]
+fn missing_parameters_are_reported_together() {
+    let error = prepare(
+        "ghidra_upload",
+        object(json!({
+            "operation": "prepare",
+            "md5": "0123456789abcdef0123456789abcdef",
+            "params": {}
+        })),
+    )
+    .err()
+    .expect("missing parameters");
+    let reason = reason(&error);
+    assert!(reason.contains("`fileName`, `size`"), "{reason}");
+    assert!(reason.contains("ghidra_help"), "{reason}");
+}
+
 /// Makes sure that each operation that names one session takes `md5` at the
 /// top level and never in `params`.
 #[test]
@@ -365,6 +401,21 @@ fn help_has_three_levels() {
     assert!(properties.get("md5").is_none());
     assert_eq!(start["md5"], "required");
     assert_eq!(start["effects"]["mutates_program"], true);
+
+    let (_, upload) = help::run(object(
+        json!({ "domain": "ghidra_upload", "operation": "prepare" }),
+    ))
+    .expect("upload operation");
+    let upload_params = &upload["inputSchema"];
+    assert_eq!(upload_params["required"], json!(["fileName", "size"]));
+    assert!(upload_params["properties"]["fileName"]["description"]
+        .as_str()
+        .expect("file name description")
+        .contains("without a directory"));
+    assert!(upload_params["properties"]["size"]["description"]
+        .as_str()
+        .expect("size description")
+        .contains("exact file size in bytes"));
 
     for (arguments, expected) in [
         (json!({ "operation": "get" }), "requires domain"),

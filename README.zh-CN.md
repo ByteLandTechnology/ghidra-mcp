@@ -316,7 +316,7 @@ claude mcp add --transport stdio --scope local ghidra-mcp -- /absolute/path/to/g
 8. 在使用会修改程序的操作之前，请获得用户的批准。
 
 会话摘要只包含 `md5`、`fileName`、`status` 和 `connected`。
-所有会话操作都使用 `md5`，没有单独的会话 ID。
+指定一个会话的操作使用 `md5`，没有单独的会话 ID。
 `ghidra_session list` 是可选的。
 对于守护进程不认识的 MD5，守护进程会提示您上传二进制文件。
 
@@ -370,13 +370,14 @@ ipc_handshake_timeout_sec = 5
 ## MCP 工具
 
 `tools/list` 显示 18 个 MCP 工具：`ghidra_help`，以及每个领域一个工具。
-领域和操作与桥接的 MCP 服务器相同。
+桥接领域工具使用桥接 MCP 服务器的领域名和操作名。
+守护进程还提供本地操作，但不提供桥接的 shutdown 操作。
 本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
 
 领域工具有以下参数：
 
 - `operation`：必需。领域中的操作，例如 `list`。
-- `md5`：操作所指定会话的 MD5。它从不放在 `params` 中。每个操作都有一个 md5 规则：`required`、`optional` 或 `absent`。
+- `md5`：标识会话的二进制文件 MD5。它由 32 位十六进制字符组成，从不放在 `params` 中。使用文件的实际摘要或已有会话的 MD5，不要使用名称。每个操作都有一个 md5 规则：`required`、`optional` 或 `absent`。
 - `params`：操作的参数。默认值为 `{}`。
 
 | 工具 | 操作 | 运行位置 |
@@ -398,6 +399,10 @@ ipc_handshake_timeout_sec = 5
 {"operation":"get","md5":"0123456789abcdef0123456789abcdef","params":{"selector":{"entry":"ram:00100000"}}}
 {"operation":"upsert","md5":"0123456789abcdef0123456789abcdef","params":{"resource":{"address":"ram:00100000","type":"eol","text":"checked"}}}
 ```
+
+首次调用某个操作前，使用领域和操作名调用 `ghidra_help`。
+返回的 `inputSchema` 描述 `params` 的内容，而不是工具的顶层参数。
+调用前请检查必填字段及其嵌套结构。
 
 `ghidra_help` 工具描述所有工具：
 

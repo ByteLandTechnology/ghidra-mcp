@@ -150,10 +150,13 @@ impl Domain {
             .map(|operation| operation.name.as_str())
             .collect();
         let mut description = format!(
-            "Use this tool {}. Select an operation: {}. Get the params schema of an operation \
-             from {HELP_TOOL}.",
+            "Use this tool {}. Select an operation: {}. Before your first call to an operation, \
+             call \
+             {HELP_TOOL} with domain=\"{}\" and the operation name. Read its inputSchema for \
+             the required fields, types, and nested objects in params. Do not guess fields.",
             self.purpose,
-            names.join(", ")
+            names.join(", "),
+            self.tool()
         );
         let mut properties = Map::new();
         properties.insert(
@@ -164,7 +167,13 @@ impl Domain {
         if self.any(|operation| operation.md5 != Md5Rule::Absent) {
             properties.insert(
                 "md5".into(),
-                json!({ "type": "string", "description": "The MD5 of the session" }),
+                json!({
+                    "type": "string",
+                    "description": concat!(
+                        "The binary MD5: exactly 32 hexadecimal characters. Use the actual ",
+                        "file digest or the MD5 of an existing session, not a name or label."
+                    )
+                }),
             );
             if self.all(|operation| operation.md5 == Md5Rule::Required) {
                 description.push_str(" Set md5 to the MD5 of the session.");
@@ -177,7 +186,13 @@ impl Domain {
         }
         properties.insert(
             "params".into(),
-            json!({ "type": "object", "description": "Parameters for the operation" }),
+            json!({
+                "type": "object",
+                "description": concat!(
+                    "The parameters for the selected operation. If you do not have its schema, ",
+                    "call ghidra_help with the domain and operation before you set parameters."
+                )
+            }),
         );
         json!({
             "name": self.tool(),
@@ -426,8 +441,10 @@ pub fn tool_definitions() -> Vec<Value> {
         "name": HELP_TOOL,
         "description": concat!(
             "Get the domain tools, the operations of one domain, or the parameter schema, ",
-            "the md5 rule and the effects of one operation. Pass no arguments to list the ",
-            "domain tools."
+            "the md5 rule and the effects of one operation. Before the first call to an ",
+            "operation, set domain to its tool name and operation to its name. The returned ",
+            "inputSchema describes params, not the top-level tool arguments. Pass no ",
+            "arguments to list the domain tools."
         ),
         "inputSchema": {
             "type": "object",
@@ -488,14 +505,24 @@ impl Operation {
             return Ok(());
         };
         let required = self.schema["required"].as_array().into_iter().flatten();
-        for field in required.filter_map(Value::as_str) {
-            if !params.contains_key(field) {
-                return Err(DomainError::invalid_argument(
-                    field,
-                    format!("`{label}` requires parameter `{field}`"),
-                )
-                .into());
-            }
+        let missing: Vec<&str> = required
+            .filter_map(Value::as_str)
+            .filter(|field| !params.contains_key(*field))
+            .collect();
+        if let Some(field) = missing.first() {
+            let fields = missing
+                .iter()
+                .map(|field| format!("`{field}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(DomainError::invalid_argument(
+                *field,
+                format!(
+                    "`{label}` requires parameter `{field}`. Missing parameters: {fields}. \
+                     Call {HELP_TOOL} with the domain and operation to get the params schema"
+                ),
+            )
+            .into());
         }
         if self.schema.get("additionalProperties") == Some(&json!(false)) {
             if let Some(key) = params.keys().find(|key| !properties.contains_key(*key)) {

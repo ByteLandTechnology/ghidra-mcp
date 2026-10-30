@@ -188,14 +188,26 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
             "Prepare a single-use HTTP upload for a remote binary. Returns a POST URL, headers, ",
             "and an expiration time. HTTP calls return an absolute URL from request headers. ",
             "Other transports return a URL relative to the MCP URL. Stream raw bytes there. A ",
-            "valid upload opens or reuses the MD5 session."
+            "valid upload opens or reuses the MD5 session. Set md5 to the digest of the file. ",
+            "Set fileName to a name without a directory. Set size to the exact file size in bytes."
         ),
         schema: || {
             json!({
                 "type": "object",
                 "properties": {
-                    "fileName": { "type": "string", "minLength": 1 },
-                    "size": { "type": "integer", "minimum": 1 }
+                    "fileName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": concat!(
+                            "The file name, without a directory or control characters. ",
+                            "The name must not be . or .."
+                        )
+                    },
+                    "size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "The exact file size in bytes"
+                    }
                 },
                 "required": ["fileName", "size"],
                 "additionalProperties": false

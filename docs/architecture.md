@@ -83,13 +83,17 @@ To read the API documentation of each module and item, use `cargo doc --document
 ![Tool Call Sequence](img/tool_call.svg)
 
 The daemon shows `ghidra_help` and one MCP tool for each domain, for example `ghidra_function`.
-The domains and the operations are the same as in the MCP server of the bridge.
+The bridge domain tools use the domain and operation names of the bridge MCP server.
+The daemon also has local operations and does not expose the bridge shutdown operation.
+
 A call has an `operation` and its `params`. An operation that names one session also has the `md5` of that session, never in `params`.
-`ghidra_help` shows the md5 rule (`required`, `optional` or `absent`) and the effects of each operation.
+`ghidra_help` shows the `params` schema, md5 rule (`required`, `optional` or `absent`) and effects of each operation.
+The domain tool descriptions tell clients to get this schema before the first call to an operation.
 This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
 
 `tools::call` finds the domain and the operation in the catalog (`tools/catalog.rs`).
-It validates `params` against the schema of the operation.
+It checks the required top-level `params` fields and rejects unexpected top-level fields when the schema does not permit them.
+Local handlers and the bridge check the other parameters.
 Then it does one of these:
 
 - It runs a **local operation** from `LOCAL_OPERATIONS` (`tools/local.rs`): sessions, jobs, uploads and the start of an analysis.

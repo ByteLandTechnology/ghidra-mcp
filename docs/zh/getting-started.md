@@ -209,6 +209,17 @@ claude mcp get ghidra-mcp
 指定一个会话的操作还接受该会话的 `md5`。
 本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
 
+首次调用某个操作前，使用其领域和操作名调用 `ghidra_help`。
+例如，使用以下参数调用 `ghidra_help`：
+
+```json
+{ "domain": "ghidra_memory", "operation": "read" }
+```
+
+结果中的 `inputSchema` 描述 `params` 的内容，`md5` 规则描述顶层参数。
+对于 `read`，将 `address` 放在 `params.selector` 中。可选的 `length` 放在 `params` 中，默认为 256 字节。
+操作需要 `md5` 时，请使用文件摘要或已有会话的 MD5，格式为 32 位十六进制字符。
+
 ### 1. 打开二进制会话
 
 使用 `ghidra_session` 打开本地二进制文件：
@@ -299,7 +310,6 @@ claude mcp get ghidra-mcp
 ```
 
 桥接返回结构化 C 伪代码、函数签名和局部变量。
-要查看一个操作的参数，请使用 `domain` 和 `operation` 调用 `ghidra_help`。
 
 ### 5. 保存更改与关闭
 

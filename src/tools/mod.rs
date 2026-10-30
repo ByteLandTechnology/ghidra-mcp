@@ -3,9 +3,9 @@
 
 //! The public MCP tools: `ghidra_help` and one tool for each domain.
 //!
-//! The domains and the operations are the same as in the MCP server of the
-//! bridge. A domain tool takes `operation` and `params`. An operation that
-//! names one session also takes `md5`, the MD5 of that session.
+//! The bridge domains and operations use the names of the bridge MCP server.
+//! A domain tool takes `operation` and `params`. An operation that names one
+//! session also takes `md5`, the MD5 of that session.
 //!
 //! There are two types of operations:
 //!
@@ -13,8 +13,9 @@
 //! - The bridge methods of the bridge contract. The daemon sends them to the
 //!   bridge of the session.
 //!
-//! [`call`] validates `params` against the schema of the operation (see
-//! [`catalog`]) before it runs the operation.
+//! [`call`] checks the required and unexpected top-level `params` fields
+//! against the schema of the operation (see [`catalog`]). Local handlers and
+//! the bridge check the other parameters.
 //!
 //! Each operation returns a short summary text and a structured JSON result.
 //! Bridge methods return `{"response": …}`.
@@ -119,8 +120,8 @@ pub async fn call(daemon: &Daemon, tool: &str, arguments: Map<String, Value>) ->
 ///
 /// # Errors
 ///
-/// Fails if the tool or the operation is unknown, or if the arguments do not
-/// obey the md5 rule or the schema of the operation.
+/// Fails if the tool or the operation is unknown. Also fails if the arguments
+/// do not obey the md5 rule or the top-level field rules of the operation.
 fn prepare(tool: &str, arguments: Map<String, Value>) -> Result<(&'static Operation, Request)> {
     let domain = catalog::domain_of_tool(tool)
         .ok_or_else(|| DomainError::invalid_argument("tool", format!("unknown tool: {tool}")))?;

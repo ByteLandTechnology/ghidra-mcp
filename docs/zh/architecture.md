@@ -81,13 +81,16 @@
 ![工具调用流程](../img/tool_call.svg)
 
 守护进程提供 `ghidra_help`，并为每个领域提供一个 MCP 工具，例如 `ghidra_function`。
-领域和操作与桥接的 MCP 服务器相同。
+桥接领域工具使用桥接 MCP 服务器的领域名和操作名。
+守护进程还提供本地操作，但不提供桥接的 shutdown 操作。
 一次调用包含 `operation` 和它的 `params`。指定一个会话的操作还包含该会话的 `md5`，它从不放在 `params` 中。
-`ghidra_help` 显示每个操作的 md5 规则（`required`、`optional` 或 `absent`）和效果。
+`ghidra_help` 显示每个操作的 `params` 模式、md5 规则（`required`、`optional` 或 `absent`）和效果。
+领域工具的描述提示客户端在首次调用操作前获取其模式。
 本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
 
 `tools::call` 在目录（`tools/catalog.rs`）中查找领域和操作。
-它根据操作的模式验证 `params`。
+它检查 `params` 中的顶层必填字段，并在模式不允许额外字段时拒绝意外的顶层字段。
+本地处理程序和桥接负责检查其他参数。
 然后它执行以下操作之一：
 
 - 运行 `LOCAL_OPERATIONS`（`tools/local.rs`）中的**本地操作**：会话、作业、上传和分析的启动。
