@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 
 use crate::workspace;
 
+#[cfg(test)]
+#[path = "ste_tests.rs"]
+mod tests;
+
 /// Maximum number of words in an instruction.
 const INSTRUCTION_WORD_LIMIT: usize = 20;
 
@@ -167,8 +171,10 @@ struct Violation {
 /// Checks all English documents and source comments with the automated rules.
 pub(crate) fn check() -> Result<(), String> {
     let mut files = Vec::new();
-    collect_files(&workspace::root()?, &mut files)?;
+    let root = workspace::root()?;
+    collect_files(&root, &mut files)?;
     files.sort();
+    let bridge_contract = root.join("bridge").join("docs").join("asyncapi.yaml");
 
     let mut violations = Vec::new();
     for path in files {
@@ -181,6 +187,9 @@ pub(crate) fn check() -> Result<(), String> {
             Some("sh") => check_hash_comments(&path, &source, &mut violations),
             Some("toml") => check_toml(&path, &source, &mut violations),
             Some("json") => check_json(&path, &source, &mut violations),
+            Some("yaml") if path == bridge_contract => {
+                check_yaml_contract(&path, &source, &mut violations)?;
+            }
             Some("yml" | "yaml") if source.trim_start().starts_with('{') => {
                 check_json(&path, &source, &mut violations);
             }
@@ -211,6 +220,18 @@ pub(crate) fn check() -> Result<(), String> {
         "Simplified English: found {} violation(s):\n{details}",
         violations.len()
     ))
+}
+
+/// Checks the complete description strings in the bridge YAML contract.
+fn check_yaml_contract(
+    path: &Path,
+    source: &str,
+    violations: &mut Vec<Violation>,
+) -> Result<(), String> {
+    let value = serde_saphyr::from_str(source)
+        .map_err(|error| format!("{}: invalid YAML: {error}", workspace::display(path)))?;
+    check_json_value(path, &value, violations);
+    Ok(())
 }
 
 /// Collects files that can contain English documents or source comments.

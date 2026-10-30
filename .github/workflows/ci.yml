@@ -119,6 +119,10 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo xtask check
 
+      - name: Test repository checks
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked -p xtask
+
       - name: Install Java
         uses: actions/setup-java@v6
         with:

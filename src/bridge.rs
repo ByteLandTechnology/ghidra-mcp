@@ -52,8 +52,7 @@ const EMBEDDED_SAVED_PROJECT_SCRIPT: &str = include_str!("../java/OpenSavedProje
 
 /// The bridge methods with their descriptions, input schemas and effects.
 static METHODS: LazyLock<Map<String, Value>> = LazyLock::new(|| {
-    // The bridge build makes the AsyncAPI document in JSON syntax, which is also valid YAML.
-    let contract: Value = serde_json::from_str(include_str!("../bridge/docs/asyncapi.yaml"))
+    let contract: Value = serde_saphyr::from_str(include_str!("../bridge/docs/asyncapi.yaml"))
         .expect("parse the bridge AsyncAPI contract");
     let methods = contract["x-ghidra-bridge-methods"]
         .as_object()

@@ -26,6 +26,7 @@ md5 = "0.7"
 rmcp = { version = "=3.1.2", default-features = false, features = ["client", "server", "transport-io", "transport-async-rw", "transport-streamable-http-server"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde-saphyr = { version = "2.0", default-features = false, features = ["deserialize"] }
 serde_with = { version = "3.24.0", default-features = false, features = ["macros"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
