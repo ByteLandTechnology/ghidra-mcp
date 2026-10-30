@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.0.3...v1.1.0) (2026-10-30)
+
+
+### Features
+
+* add function creation and deletion ([ca737e2](https://github.com/ByteLandTechnology/ghidra-mcp/commit/ca737e232ec6ac794f35e3fe4f2a75d690f5a3a5))
+
+
+### Bug Fixes
+
+* generate and parse the asyncapi yaml contract ([83f8855](https://github.com/ByteLandTechnology/ghidra-mcp/commit/83f88554f7daef5e93ce61d2e8b856cef8f32985))
+* guide clients to check operation parameters ([379bf5d](https://github.com/ByteLandTechnology/ghidra-mcp/commit/379bf5db950ebb27df0024742650cc0eafc6c800))
+
 ## [1.0.3](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.0.2...v1.0.3) (2026-10-29)
 
 
