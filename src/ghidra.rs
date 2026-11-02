@@ -151,5 +151,5 @@ pub fn file_md5(path: &Path) -> Result<String> {
     let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut context = md5::Context::new();
     io::copy(&mut file, &mut context).with_context(|| format!("reading {}", path.display()))?;
-    Ok(format!("{:x}", context.compute()))
+    Ok(format!("{:x}", context.finalize()))
 }

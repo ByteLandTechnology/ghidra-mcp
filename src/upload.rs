@@ -306,7 +306,7 @@ impl UploadService {
             "upload byte count does not match the prepared size",
         )?;
         require(
-            format!("{:x}", digest.compute()) == grant.md5,
+            format!("{:x}", digest.finalize()) == grant.md5,
             StatusCode::UNPROCESSABLE_ENTITY,
             "upload MD5 does not match the prepared digest",
         )?;
