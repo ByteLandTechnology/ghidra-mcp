@@ -244,7 +244,7 @@ fn copy_verified(source: &Path, output: &mut File, md5: &str) -> Result<()> {
             })?;
         hasher.consume(&buffer[..bytes_read]);
     }
-    let computed = format!("{:x}", hasher.compute());
+    let computed = format!("{:x}", hasher.finalize());
     if computed != md5 {
         return Err(DomainError::invalid_argument(
             "md5",
