@@ -431,6 +431,33 @@ ipc_handshake_timeout_sec = 5
 
 この操作は関数定義とローカル変数を削除し、命令とデータは保持します。
 
+逆コンパイルビューをエディターの行として取得するには、format を `document` にして `ghidra_decompilation` を使います。
+
+```json
+{
+  "operation": "get",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "selector": { "entry": "ram:00100000" },
+    "format": "document",
+    "include_comments": true
+  }
+}
+```
+
+各トークンには 0 から始まる UTF-16 の列と、Ghidra GUI が選択するアドレスがあります。
+`include_comments` を設定すると、すべてのコメント種別を表示し、リピータブルコメントを返します。
+`comments_complete` が `false` の場合、コメント一覧は不完全です。
+
+マングルされたすべてのプライマリシンボルに C++ 名を適用するには、`ghidra_symbol` を使います。
+
+```json
+{ "operation": "demangle", "md5": "0123456789abcdef0123456789abcdef", "params": {} }
+```
+
+この操作は名前と名前空間だけを変更し、関数シグネチャとデータ型は保持します。
+関数、シンボル、呼び出しの結果は、プログラムを変更せずに `demangled_name` も返します。
+
 操作を初めて呼び出す前に、ドメインと操作名を指定して `ghidra_help` を呼び出します。
 返される `inputSchema` は、ツールのトップレベル引数ではなく `params` の内容を説明します。
 呼び出す前に必須フィールドとその入れ子構造を確認します。

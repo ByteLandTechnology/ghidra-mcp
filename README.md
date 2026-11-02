@@ -437,6 +437,33 @@ To delete a function, use its entry address in `selector`:
 The operation removes the function definition and its local variables.
 It keeps the instructions and data.
 
+To get the decompiler view as editor lines, use `ghidra_decompilation` with format `document`:
+
+```json
+{
+  "operation": "get",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "selector": { "entry": "ram:00100000" },
+    "format": "document",
+    "include_comments": true
+  }
+}
+```
+
+Each token has zero-based UTF-16 columns and the address that the Ghidra GUI selects.
+Set `include_comments` to show all comment types and to return the repeatable comments.
+If `comments_complete` is `false`, the comment list is not complete.
+
+To apply C++ names to all mangled primary symbols, use `ghidra_symbol`:
+
+```json
+{ "operation": "demangle", "md5": "0123456789abcdef0123456789abcdef", "params": {} }
+```
+
+The operation changes names and namespaces only. It keeps function signatures and data types.
+Function, symbol, and call results also give `demangled_name` without a change to the program.
+
 Before the first call to an operation, call `ghidra_help` with the domain and operation.
 Its `inputSchema` describes the contents of `params`, not the top-level tool arguments.
 Check the required fields and their nested structure before the call.
