@@ -429,6 +429,33 @@ ipc_handshake_timeout_sec = 5
 
 该操作删除函数定义和局部变量，但保留指令和数据。
 
+要以编辑器行的形式获取反编译视图，使用 `ghidra_decompilation` 并将 format 设为 `document`：
+
+```json
+{
+  "operation": "get",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "selector": { "entry": "ram:00100000" },
+    "format": "document",
+    "include_comments": true
+  }
+}
+```
+
+每个 token 带有从 0 开始的 UTF-16 列，以及 Ghidra GUI 为其选择的地址。
+设置 `include_comments` 会显示所有注释类型，并返回可重复注释。
+如果 `comments_complete` 为 `false`，注释列表不完整。
+
+要为所有经过修饰的主符号应用 C++ 名称，使用 `ghidra_symbol`：
+
+```json
+{ "operation": "demangle", "md5": "0123456789abcdef0123456789abcdef", "params": {} }
+```
+
+该操作只修改名称和命名空间，保留函数签名和数据类型。
+函数、符号与调用结果还会提供 `demangled_name`，且不修改程序。
+
 首次调用某个操作前，使用领域和操作名调用 `ghidra_help`。
 返回的 `inputSchema` 描述 `params` 的内容，而不是工具的顶层参数。
 调用前请检查必填字段及其嵌套结构。
