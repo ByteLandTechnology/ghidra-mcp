@@ -13,7 +13,7 @@ use rmcp::{
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
         ErrorData, Implementation, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
-        ServerCapabilities, ServerInfo, Tool,
+        ServerCapabilities, ServerConfig, Tool,
     },
     service::RequestContext,
     RoleServer, ServiceExt,
@@ -137,8 +137,8 @@ fn to_tool_result(outcome: Result<(String, Value)>) -> CallToolResult {
 }
 
 impl ServerHandler for ToolServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("ghidra-mcp", env!("CARGO_PKG_VERSION")))
     }
 

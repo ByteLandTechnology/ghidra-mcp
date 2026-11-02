@@ -599,7 +599,7 @@ mod tests {
     use rmcp::{
         model::{
             ErrorData, Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
-            ServerInfo,
+            ServerConfig,
         },
         service::RequestContext,
         RoleServer,
@@ -612,8 +612,8 @@ mod tests {
     struct TestServer;
 
     impl ServerHandler for TestServer {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
                 .with_server_info(Implementation::new("test-server", "1"))
         }
 
