@@ -13,6 +13,11 @@
           "type": "json",
           "path": "npm/cli/package.json",
           "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "npm/cli/package.json",
+          "jsonpath": "$.optionalDependencies.*"
         }
       ]
     }
