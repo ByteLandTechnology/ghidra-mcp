@@ -12,9 +12,11 @@ mod headers;
 mod lexer;
 mod licenses;
 mod lines;
+mod npm;
 mod ste;
 mod workspace;
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -57,6 +59,15 @@ enum Commands {
     SimplifiedEnglish,
     /// Collect license texts of locked dependencies and bridge.
     CollectLicenses,
+    /// Make the npm packages from the release executables.
+    NpmPack {
+        /// The directory that holds the release executables.
+        #[arg(long)]
+        dist: PathBuf,
+        /// The directory for the packages. It must be absent or empty.
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -74,6 +85,7 @@ fn main() -> ExitCode {
         Commands::LineWidth => lines::check_line_widths(),
         Commands::SimplifiedEnglish => ste::check(),
         Commands::CollectLicenses => licenses::collect(),
+        Commands::NpmPack { dist, out } => npm::pack(&dist, &out),
     };
 
     match result {
