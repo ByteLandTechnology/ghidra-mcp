@@ -27,9 +27,9 @@
 
 | 角色 | 启动者 | 状态 | 说明 |
 |---|---|---|---|
-| **守护进程**（`--daemon`） | 第一次代理调用或 CLI 调用，或者用户。 | 全部状态。 | 每个运行时目录运行一个守护进程，由文件锁保证。守护进程一直运行，直到您停止它。 |
+| **守护进程**（`daemon run`） | 第一次代理调用或 CLI 调用，或者用户。 | 全部状态。 | 每个运行时目录运行一个守护进程，由文件锁保证。守护进程一直运行，直到您停止它。 |
 | **Stdio 代理**（无参数） | MCP 客户端。 | 无状态。 | 代理把每个工具调用发送给守护进程。必要时，它会启动守护进程。 |
-| **CLI**（`tools`、`call`） | 用户。 | 无状态。 | `tools` 不连接守护进程。`call` 通过守护进程执行一次调用。 |
+| **CLI**（其他命令） | 用户。 | 无状态。 | `tools`、`paths` 和 `config` 不连接守护进程。`daemon status` 和 `daemon stop` 不会启动守护进程。其他命令通过守护进程调用工具，必要时启动它。 |
 | **Ghidra**（`analyzeHeadless`） | 守护进程，每个打开的会话一个。 | 分析结果。 | Ghidra 把桥接作为后置脚本运行。 |
 
 客户端通过**本地套接字**连接守护进程。
@@ -54,7 +54,7 @@
 
 | 模块 | 职责 |
 |---|---|
-| `cli` | 命令行参数和三种运行模式。 |
+| `cli` | 命令行参数、运行模式和管理命令。 |
 | `daemon` | 监听器、文件锁、`server.json`、分离启动、代理连接复用和关闭。 |
 | `mcp` | MCP 处理程序。它在守护进程中运行调用，或从代理把调用发送给守护进程。 |
 | `mcp_http` | Streamable HTTP、旧式 SSE 会话、CORS 和 HTTP 兼容层。 |
@@ -93,7 +93,7 @@
 本地处理程序和桥接负责检查其他参数。
 然后它执行以下操作之一：
 
-- 运行 `LOCAL_OPERATIONS`（`tools/local.rs`）中的**本地操作**：会话、作业、上传和分析的启动。
+- 运行 `LOCAL_OPERATIONS`（`tools/local.rs`）中的**本地操作**：会话、作业、上传、分析的启动，以及守护进程的状态查询和停止。
 - 把桥接契约 `bridge/docs/asyncapi.yaml` 中的**桥接方法**发送给桥接。
 
 当结果包含 `structuredContent` 时，`content` 的文本块提供相同的 JSON 数据。
@@ -123,7 +123,8 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 
 ### 关闭
 
-以下事件会停止守护进程：Ctrl-C、`SIGTERM`、`SIGHUP`，以及对应的 Windows 控制台事件。
+以下事件会停止守护进程：Ctrl-C、`SIGTERM`、`SIGHUP`、对应的 Windows 控制台事件，以及 `ghidra_daemon shutdown`。
+`ghidra-mcp daemon stop` 使用 `ghidra_daemon shutdown`。
 随后守护进程执行以下步骤：
 
 1. 拒绝新的工作。

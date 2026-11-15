@@ -41,13 +41,13 @@ MCP クライアントは stdio または HTTP でデーモンに接続します
 ## 機能
 
 - **stdio、Streamable HTTP、または旧式 SSE による MCP。** 1 つのデーモンが共有状態を保持します。
-- **コマンドラインクライアント。** ツールをローカルで一覧表示し、デーモン経由でツールを呼び出します。
+- **コマンドラインクライアント。** ツールをローカルで一覧表示し、デーモン経由でツールを呼び出します。デーモンとそのセッションやジョブの起動、停止、確認もできます。
 - **MD5 によるセッション識別。** デーモンはセッションを再利用するか、保存済みの解析を再度開きます。
 - **永続的なセッションとジョブ。** クライアントが切断した後も、セッションと解析ジョブは継続します。
 - **リモートアップロード。** デーモンホスト上にないクライアントは、別の HTTP エンドポイントでバイナリを送信します。
 - **Ghidra への完全なアクセス。** Java ブリッジが、プログラムデータ、関数、逆コンパイル、シンボル、参照、メモリ、コメントを提供します。
 - **単一の実行ファイル。** 実行ファイルには、ブリッジ JAR とその起動スクリプトが含まれます。
-- **バックグラウンドジョブ。** `ghidra_job get` と `ghidra_job wait` で長時間の解析を監視します。
+- **バックグラウンドジョブ。** `ghidra_job list`、`ghidra_job get`、`ghidra_job wait` で長時間の解析を監視します。
 
 デフォルトでは、セッションはプログラムを変更できます。
 コーディングエージェントは、プログラムを変更する操作を使用する前に、ユーザーの承認を得る必要があります。
@@ -209,7 +209,7 @@ Windows では、ソケットは名前付きパイプです。
 デーモンをフォアグラウンドで実行するには、次のコマンドを使用します：
 
 ```sh
-ghidra-mcp --daemon
+ghidra-mcp daemon run
 ```
 
 デーモンは、1 つのリスナー上で次のエンドポイントを提供します：
@@ -224,7 +224,7 @@ ghidra-mcp --daemon
 別のアドレスを使用するには、`--listen` を使用します：
 
 ```sh
-ghidra-mcp --daemon --listen 127.0.0.1:18490
+ghidra-mcp daemon run --listen 127.0.0.1:18490
 ```
 
 `--listen 127.0.0.1:0` を使用すると、システムが空いているポートを選択します。
@@ -232,9 +232,31 @@ ghidra-mcp --daemon --listen 127.0.0.1:18490
 
 すべてのクライアントが切断した後も、デーモンは実行を続けます。
 フォアグラウンドのデーモンを停止するには、Ctrl-C を押します。
+バックグラウンドのデーモンを停止するには、`ghidra-mcp daemon stop` を使用します。
 Unix では、`SIGINT`、`SIGTERM`、`SIGHUP` でも停止します。
 デーモンは停止するときに、その Ghidra セッションを閉じます。
 保存済みのプロジェクトは、後で再度開くことができます。
+
+### デーモンの管理
+
+共有デーモンは次のコマンドで管理します。
+
+| コマンド | 用途 |
+| --- | --- |
+| `ghidra-mcp daemon start [--listen ADDR]` | デーモンをバックグラウンドで起動し、準備ができるまで待ちます。 |
+| `ghidra-mcp daemon stop [--force]` | デーモンを停止します。先にすべてのセッションを閉じます。 |
+| `ghidra-mcp daemon restart [--force] [--listen ADDR]` | デーモンを停止してから、再び起動します。 |
+| `ghidra-mcp daemon status [--json]` | プロセス ID、バージョン、MCP URL、セッション、ジョブを表示します。 |
+| `ghidra-mcp daemon logs [-n N] [-f]` | `daemon.log` の最後の行を表示します。`-f` を付けると、Ctrl-C を押すまで新しい行を表示し続けます。 |
+| `ghidra-mcp paths [--json]` | 永続ホーム、ランタイムディレクトリ、およびその中のファイルを表示します。 |
+| `ghidra-mcp config path\|show\|edit\|check` | `config.toml` の場所の確認、表示、編集、検査を行います。 |
+| `ghidra-mcp session list\|get\|open\|close` | デーモンのセッションを管理します。 |
+| `ghidra-mcp job list\|get\|wait` | デーモンのバックグラウンドジョブを確認します。 |
+
+稼働中のセッションや実行中のジョブがある場合、`daemon stop` はデーモンを停止しません。停止するには `--force` を付けます。
+デーモンが実行されていない場合、`daemon status` はステータス 3 で終了し、`daemon stop` は成功します。
+これらのコマンドは既定でテキストを出力します。スクリプトでは `--json` を付けてください。
+MCP クライアントも `ghidra_daemon shutdown` を使用できます。その場合、デーモンはすべてのクライアントに対して停止します。
 
 ### コマンドラインツール
 
@@ -399,7 +421,7 @@ ipc_handshake_timeout_sec = 5
 
 ## MCP ツール
 
-`tools/list` は 18 個の MCP ツールを表示します：`ghidra_help` と、ドメインごとに 1 つのツールです。
+`tools/list` は 19 個の MCP ツールを表示します：`ghidra_help` と、ドメインごとに 1 つのツールです。
 ブリッジのドメインツールは、ブリッジ MCP サーバーのドメイン名と操作名を使用します。
 デーモンにはローカル操作もありますが、ブリッジの shutdown 操作は公開しません。
 このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。
@@ -414,7 +436,8 @@ ipc_handshake_timeout_sec = 5
 | --- | --- | --- |
 | `ghidra_session` | `open`、`list`、`get`、`close` | デーモン。 |
 | `ghidra_upload` | `prepare` | デーモン。 |
-| `ghidra_job` | `get`、`wait` | デーモン。 |
+| `ghidra_job` | `list`、`get`、`wait` | デーモン。 |
+| `ghidra_daemon` | `status`、`shutdown` | デーモン。 |
 | `ghidra_analysis` | `start`、`get` | `start`：デーモン、次にブリッジ。`get`：ブリッジ。 |
 | `ghidra_bridge`、`ghidra_program`、`ghidra_address`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_decompilation`、`ghidra_symbol`、`ghidra_reference`、`ghidra_comment`、`ghidra_data_type`、`ghidra_batch` | そのドメインのブリッジメソッド。 | セッションのブリッジ。 |
 

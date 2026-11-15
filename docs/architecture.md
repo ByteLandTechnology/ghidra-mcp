@@ -28,9 +28,9 @@ One executable has all the roles:
 
 | Role | Started by | State | Notes |
 |---|---|---|---|
-| **Daemon** (`--daemon`) | The first proxy or CLI call, or the user. | All the state. | One daemon runs for each runtime directory. A file lock enforces this rule. The daemon runs until you stop it. |
+| **Daemon** (`daemon run`) | The first proxy or CLI call, or the user. | All the state. | One daemon runs for each runtime directory. A file lock enforces this rule. The daemon runs until you stop it. |
 | **Stdio proxy** (no arguments) | An MCP client. | No state. | The proxy sends each tool call to the daemon. If necessary, it starts the daemon. |
-| **CLI** (`tools`, `call`) | The user. | No state. | `tools` does not connect to the daemon. `call` makes one call through the daemon. |
+| **CLI** (the other commands) | The user. | No state. | `tools`, `paths` and `config` do not connect to the daemon. `daemon status` and `daemon stop` do not start a daemon. The other commands call the tools through the daemon. If necessary, they start it. |
 | **Ghidra** (`analyzeHeadless`) | The daemon, one for each open session. | The analysis. | Ghidra runs the bridge as a post-script. |
 
 Clients connect to the daemon through a **local socket**.
@@ -56,7 +56,7 @@ A module uses only the modules in the layers below it:
 
 | Module | Responsibility |
 |---|---|
-| `cli` | The command-line arguments and the three run modes. |
+| `cli` | The command-line arguments, the run modes and the management commands. |
 | `daemon` | The listeners, the file lock, `server.json`, the detached start, proxy connection reuse and shutdown. |
 | `mcp` | The MCP handler. It runs calls in the daemon, or sends them from the proxy to the daemon. |
 | `mcp_http` | Streamable HTTP, legacy SSE sessions, CORS and HTTP compatibility. |
@@ -96,7 +96,7 @@ It checks the required top-level `params` fields and rejects unexpected top-leve
 Local handlers and the bridge check the other parameters.
 Then it does one of these:
 
-- It runs a **local operation** from `LOCAL_OPERATIONS` (`tools/local.rs`): sessions, jobs, uploads and the start of an analysis.
+- It runs a **local operation** from `LOCAL_OPERATIONS` (`tools/local.rs`): sessions, jobs, uploads, the start of an analysis, and the status and shutdown of the daemon.
 - It sends a **bridge method** from the bridge contract `bridge/docs/asyncapi.yaml` to the bridge.
 
 When a result has `structuredContent`, its `content` text block has the same JSON data.
@@ -127,7 +127,8 @@ The daemon does not stop an active upload.
 
 ### Shutdown
 
-These events stop the daemon: Ctrl-C, `SIGTERM`, `SIGHUP`, and the equivalent Windows console events.
+These events stop the daemon: Ctrl-C, `SIGTERM`, `SIGHUP`, the equivalent Windows console events, and `ghidra_daemon shutdown`.
+`ghidra-mcp daemon stop` uses `ghidra_daemon shutdown`.
 The daemon then does these steps:
 
 1. It refuses new work.

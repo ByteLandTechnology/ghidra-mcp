@@ -79,7 +79,7 @@ Older Java versions cannot run the class files.
    export JAVA_HOME="/usr/lib/jvm/java-21-openjdk"
    ```
 
-4. Restart your MCP client or daemon.
+4. Restart your MCP client, or restart the daemon with `ghidra-mcp daemon restart`.
 
 ## 3. Socket and pipe permissions
 
@@ -162,6 +162,8 @@ Examine these log files to diagnose issues:
 - Daemon log: `<runtime_dir>/daemon.log`
 - Child process stdout: `<runtime_dir>/logs/<md5>/stdout.log`
 - Child process stderr: `<runtime_dir>/logs/<md5>/stderr.log`
+
+`ghidra-mcp paths` shows the runtime directory. `ghidra-mcp daemon logs` shows the end of `daemon.log`.
 
 The daemon replaces sensitive bearer tokens in logs with `[REDACTED_TOKEN]`.
 

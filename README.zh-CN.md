@@ -41,13 +41,13 @@ MCP 客户端通过 stdio 或 HTTP 连接守护进程。
 ## 功能
 
 - **通过 stdio、Streamable HTTP 或旧式 SSE 提供 MCP。** 一个守护进程保存共享状态。
-- **命令行客户端。** 在本地列出工具，并通过守护进程调用这些工具。
+- **命令行客户端。** 在本地列出工具，并通过守护进程调用这些工具。还可以启动、停止和查看守护进程及其会话和作业。
 - **用 MD5 标识会话。** 守护进程重用会话，或重新打开已保存的分析。
 - **持久的会话和作业。** 客户端断开连接后，会话和分析作业继续运行。
 - **远程上传。** 不在守护进程主机上的客户端通过单独的 HTTP 端点发送二进制文件。
 - **完整的 Ghidra 访问。** Java 桥接提供程序数据、函数、反编译、符号、引用、内存和注释。
 - **单个可执行文件。** 可执行文件包含桥接 JAR 及其启动脚本。
-- **后台作业。** `ghidra_job get` 和 `ghidra_job wait` 监视长时间运行的分析。
+- **后台作业。** `ghidra_job list`、`ghidra_job get` 和 `ghidra_job wait` 监视长时间运行的分析。
 
 默认情况下，会话可以修改程序。
 编码代理在使用会修改程序的操作之前，必须获得用户的批准。
@@ -209,7 +209,7 @@ MCP 客户端不带参数启动 `ghidra-mcp`，并通过 stdio 与它通信：
 要在前台运行守护进程，请使用以下命令：
 
 ```sh
-ghidra-mcp --daemon
+ghidra-mcp daemon run
 ```
 
 守护进程在一个监听器上提供以下端点：
@@ -224,7 +224,7 @@ ghidra-mcp --daemon
 要使用其他地址，请使用 `--listen`：
 
 ```sh
-ghidra-mcp --daemon --listen 127.0.0.1:18490
+ghidra-mcp daemon run --listen 127.0.0.1:18490
 ```
 
 使用 `--listen 127.0.0.1:0` 时，系统会选择一个空闲端口。
@@ -232,9 +232,31 @@ ghidra-mcp --daemon --listen 127.0.0.1:18490
 
 所有客户端断开连接后，守护进程继续运行。
 要停止前台守护进程，请按 Ctrl-C。
+要停止后台守护进程，请使用 `ghidra-mcp daemon stop`。
 在 Unix 上，`SIGINT`、`SIGTERM` 和 `SIGHUP` 也会停止它。
 守护进程停止时，会关闭它的 Ghidra 会话。
 您以后可以再次打开已保存的项目。
+
+### 管理守护进程
+
+使用以下命令管理共享的守护进程：
+
+| 命令 | 用途 |
+| --- | --- |
+| `ghidra-mcp daemon start [--listen ADDR]` | 在后台启动守护进程，并等待它就绪。 |
+| `ghidra-mcp daemon stop [--force]` | 停止守护进程。它会先关闭所有会话。 |
+| `ghidra-mcp daemon restart [--force] [--listen ADDR]` | 停止守护进程，然后重新启动。 |
+| `ghidra-mcp daemon status [--json]` | 显示进程 ID、版本、MCP URL、会话和作业。 |
+| `ghidra-mcp daemon logs [-n N] [-f]` | 显示 `daemon.log` 的最后几行。使用 `-f` 时持续显示新行，直到按 Ctrl-C。 |
+| `ghidra-mcp paths [--json]` | 显示持久主目录、运行时目录及其中的文件。 |
+| `ghidra-mcp config path\|show\|edit\|check` | 查找、显示、修改或检查 `config.toml`。 |
+| `ghidra-mcp session list\|get\|open\|close` | 管理守护进程的会话。 |
+| `ghidra-mcp job list\|get\|wait` | 查看守护进程的后台作业。 |
+
+如果有活动会话或正在运行的作业，`daemon stop` 不会停止守护进程。加上 `--force` 才会停止。
+没有守护进程运行时，`daemon status` 以状态 3 退出，`daemon stop` 视为成功。
+这些命令默认输出文本。供脚本使用时请加 `--json`。
+MCP 客户端也可以调用 `ghidra_daemon shutdown`，守护进程会对所有客户端停止。
 
 ### 命令行工具
 
@@ -398,7 +420,7 @@ ipc_handshake_timeout_sec = 5
 
 ## MCP 工具
 
-`tools/list` 显示 18 个 MCP 工具：`ghidra_help`，以及每个领域一个工具。
+`tools/list` 显示 19 个 MCP 工具：`ghidra_help`，以及每个领域一个工具。
 桥接领域工具使用桥接 MCP 服务器的领域名和操作名。
 守护进程还提供本地操作，但不提供桥接的 shutdown 操作。
 本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
@@ -413,7 +435,8 @@ ipc_handshake_timeout_sec = 5
 | --- | --- | --- |
 | `ghidra_session` | `open`、`list`、`get`、`close` | 守护进程。 |
 | `ghidra_upload` | `prepare` | 守护进程。 |
-| `ghidra_job` | `get`、`wait` | 守护进程。 |
+| `ghidra_job` | `list`、`get`、`wait` | 守护进程。 |
+| `ghidra_daemon` | `status`、`shutdown` | 守护进程。 |
 | `ghidra_analysis` | `start`、`get` | `start`：守护进程，然后是桥接。`get`：桥接。 |
 | `ghidra_bridge`、`ghidra_program`、`ghidra_address`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_decompilation`、`ghidra_symbol`、`ghidra_reference`、`ghidra_comment`、`ghidra_data_type`、`ghidra_batch` | 该领域的桥接方法。 | 会话的桥接。 |
 

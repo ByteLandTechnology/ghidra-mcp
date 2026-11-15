@@ -41,13 +41,13 @@ The MD5 of a binary identifies its session for all clients.
 ## Features
 
 - **MCP through stdio, Streamable HTTP, or legacy SSE.** One daemon keeps the shared state.
-- **Command-line client.** It lists the tools locally. It calls the tools through the daemon.
+- **Command-line client.** It lists the tools locally. It calls the tools through the daemon. It also starts, stops and examines the daemon, its sessions and its jobs.
 - **Sessions identified by MD5.** The daemon uses a session again or opens the saved analysis again.
 - **Persistent sessions and jobs.** Sessions and analysis jobs continue after a client disconnects.
 - **Remote upload.** A client that is not on the daemon host sends a binary through a separate HTTP endpoint.
 - **Full Ghidra access.** The Java bridge gives program data, functions, decompilation, symbols, references, memory and comments.
 - **One executable.** The executable contains the bridge JAR and its launcher script.
-- **Background jobs.** `ghidra_job get` and `ghidra_job wait` monitor a long analysis.
+- **Background jobs.** `ghidra_job list`, `ghidra_job get` and `ghidra_job wait` monitor a long analysis.
 
 Sessions can change the program by default.
 Coding agents must get approval from the user before they use an operation that changes the program.
@@ -211,7 +211,7 @@ To run from a source checkout, use `cargo run --` as the command.
 To run the daemon in the foreground, use this command:
 
 ```sh
-ghidra-mcp --daemon
+ghidra-mcp daemon run
 ```
 
 The daemon serves these endpoints on one listener:
@@ -226,7 +226,7 @@ The daemon accepts only loopback addresses.
 To use a different address, use `--listen`:
 
 ```sh
-ghidra-mcp --daemon --listen 127.0.0.1:18490
+ghidra-mcp daemon run --listen 127.0.0.1:18490
 ```
 
 With `--listen 127.0.0.1:0`, the system selects a free port.
@@ -234,9 +234,33 @@ The daemon writes the address in `server.json` and `daemon.log` in the runtime d
 
 The daemon continues to run after all clients disconnect.
 To stop a foreground daemon, press Ctrl-C.
+To stop a daemon in the background, use `ghidra-mcp daemon stop`.
 On Unix, `SIGINT`, `SIGTERM` and `SIGHUP` also stop it.
 When the daemon stops, it closes its Ghidra sessions.
 You can open the saved projects again later.
+
+### Manage the daemon
+
+Use these commands to manage the shared daemon:
+
+| Command | Purpose |
+| --- | --- |
+| `ghidra-mcp daemon start [--listen ADDR]` | Start the daemon in the background. Wait until it is ready. |
+| `ghidra-mcp daemon stop [--force]` | Stop the daemon. It closes its sessions first. |
+| `ghidra-mcp daemon restart [--force] [--listen ADDR]` | Stop the daemon, then start it again. |
+| `ghidra-mcp daemon status [--json]` | Show the process ID, version, MCP URL, sessions and jobs. |
+| `ghidra-mcp daemon logs [-n N] [-f]` | Show the last lines of `daemon.log`. With `-f`, show new lines until Ctrl-C. |
+| `ghidra-mcp paths [--json]` | Show the persistent home, the runtime directory and their files. |
+| `ghidra-mcp config path\|show\|edit\|check` | Find, show, change or check `config.toml`. |
+| `ghidra-mcp session list\|get\|open\|close` | Manage the sessions of the daemon. |
+| `ghidra-mcp job list\|get\|wait` | Examine the background jobs of the daemon. |
+
+If a session is live or a job runs, `daemon stop` does not stop the daemon.
+To stop it, add `--force`.
+If no daemon runs, `daemon status` exits with status 3, and `daemon stop` is successful.
+
+These commands write text. For scripts, add `--json`.
+MCP clients can also use `ghidra_daemon shutdown`. Then the daemon stops for all clients.
 
 ### Command-line tool
 
@@ -404,7 +428,7 @@ ipc_handshake_timeout_sec = 5
 
 ## The MCP tools
 
-`tools/list` shows 18 MCP tools: `ghidra_help` and one tool for each domain.
+`tools/list` shows 19 MCP tools: `ghidra_help` and one tool for each domain.
 The bridge domain tools use the domain and operation names of the bridge MCP server.
 The daemon also has local operations and does not expose the bridge shutdown operation.
 This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
@@ -419,7 +443,8 @@ A domain tool has these arguments:
 | --- | --- | --- |
 | `ghidra_session` | `open`, `list`, `get`, `close` | The daemon. |
 | `ghidra_upload` | `prepare` | The daemon. |
-| `ghidra_job` | `get`, `wait` | The daemon. |
+| `ghidra_job` | `list`, `get`, `wait` | The daemon. |
+| `ghidra_daemon` | `status`, `shutdown` | The daemon. |
 | `ghidra_analysis` | `start`, `get` | `start`: the daemon, then the bridge. `get`: the bridge. |
 | `ghidra_bridge`, `ghidra_program`, `ghidra_address`, `ghidra_memory`, `ghidra_listing`, `ghidra_global_variable`, `ghidra_function`, `ghidra_decompilation`, `ghidra_symbol`, `ghidra_reference`, `ghidra_comment`, `ghidra_data_type`, `ghidra_batch` | The bridge methods of the domain. | The bridge of the session. |
 

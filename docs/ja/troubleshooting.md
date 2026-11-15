@@ -77,7 +77,7 @@ Ghidra 11 以降および組み込みブリッジランタイムには Java 21 J
    export JAVA_HOME="/usr/lib/jvm/java-21-openjdk"
    ```
 
-4. MCP クライアントまたはデーモンを再起動します。
+4. MCP クライアントを再起動するか、`ghidra-mcp daemon restart` でデーモンを再起動します。
 
 ## 3. ソケットおよびパイプの権限
 
@@ -160,6 +160,8 @@ max_cpu = 2
 - デーモンログ：`<runtime_dir>/daemon.log`
 - 子プロセス標準出力：`<runtime_dir>/logs/<md5>/stdout.log`
 - 子プロセス標準エラー：`<runtime_dir>/logs/<md5>/stderr.log`
+
+`ghidra-mcp paths` はランタイムディレクトリを表示します。`ghidra-mcp daemon logs` は `daemon.log` の末尾を表示します。
 
 デーモンはログ内の機密 bearer トークンを `[REDACTED_TOKEN]` に置き換えます。
 

@@ -77,7 +77,7 @@ Ghidra 11 或更高版本和嵌入式桥接运行时需要 Java 21 JDK。
    export JAVA_HOME="/usr/lib/jvm/java-21-openjdk"
    ```
 
-4. 重启您的 MCP 客户端或守护进程。
+4. 重启您的 MCP 客户端，或用 `ghidra-mcp daemon restart` 重启守护进程。
 
 ## 3. 套接字与管道权限
 
@@ -160,6 +160,8 @@ max_cpu = 2
 - 守护进程日志：`<runtime_dir>/daemon.log`
 - 子进程标准输出：`<runtime_dir>/logs/<md5>/stdout.log`
 - 子进程标准错误：`<runtime_dir>/logs/<md5>/stderr.log`
+
+`ghidra-mcp paths` 显示运行时目录。`ghidra-mcp daemon logs` 显示 `daemon.log` 的末尾。
 
 守护进程将日志中的敏感 bearer 令牌替换为 `[REDACTED_TOKEN]`。
 
