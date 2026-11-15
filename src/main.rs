@@ -5,13 +5,14 @@
 //!
 //! One executable has three roles. The command line selects the role (see [`cli`]):
 //!
-//! - **Daemon** (`--daemon`): owns all Ghidra sessions. It launches
+//! - **Daemon** (`daemon run`): owns all Ghidra sessions. It launches
 //!   `analyzeHeadless` with the embedded bridge. The bridge connects to the
 //!   daemon through a WebSocket. The daemon serves MCP through HTTP and through
 //!   a local socket.
 //! - **Stdio proxy** (no arguments): the process that an MCP client starts. It
 //!   sends each tool call to the daemon. If necessary, it starts the daemon.
-//! - **CLI** (`tools`, `call`): writes the tool definitions, or makes one call
+//! - **CLI** (the other subcommands): manages the daemon, its files, its
+//!   sessions and its jobs, writes the tool definitions, or makes one call
 //!   through the daemon.
 //!
 //! # Modules

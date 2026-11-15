@@ -1,48 +1,80 @@
 // Copyright 2026 ByteLand Technology Limited
 // SPDX-License-Identifier: MIT
 
-//! The command-line arguments, and the three run modes: daemon, stdio proxy and CLI.
+//! The command-line arguments and the run modes.
+//!
+//! Without a subcommand, the process serves MCP through stdio as a proxy to the
+//! daemon. The subcommands manage the daemon, its files, its sessions and its
+//! jobs, or make one tool call.
+
+/// Writes one line to stdout, as `println!` does. If the reader closed the
+/// pipe, for example `head`, the process stops with status 0 instead of a panic.
+macro_rules! out {
+    () => {
+        $crate::cli::output::line(format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::cli::output::line(format_args!($($arg)*))
+    };
+}
+
+mod admin;
+mod daemon;
+mod output;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rmcp::model::CallToolResult;
 use serde_json::{Map, Value};
-use std::io::{self, Write};
+use std::io;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 
 use crate::mcp::ToolServer;
 
-/// The HTTP listener of the daemon if `--listen` has no value.
-const DEFAULT_LISTEN_ADDRESS: SocketAddr =
-    SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 18489);
-
-/// The command-line arguments. Without a subcommand or `--daemon`, the process
-/// serves MCP through stdio as a proxy to the daemon.
+/// The command-line arguments.
 #[derive(Parser)]
 #[command(
     name = "ghidra-mcp",
     version,
     about = "Ghidra analysis tools through MCP and a command-line interface",
-    args_conflicts_with_subcommands = true
+    long_about = concat!(
+        "Ghidra analysis tools through MCP and a command-line interface.\n\n",
+        "Without a command, ghidra-mcp serves MCP through stdio. MCP clients use this mode. ",
+        "If the shared daemon does not run, ghidra-mcp starts it."
+    )
 )]
 struct Cli {
-    /// Run the shared daemon in the foreground.
-    #[arg(long)]
-    daemon: bool,
-
-    /// Set the loopback address of the HTTP MCP and bridge listener in daemon mode.
-    #[arg(long, requires = "daemon", value_parser = parse_listen_address)]
-    listen: Option<SocketAddr>,
-
-    /// A one-time CLI action instead of an MCP server.
+    /// A one-time action instead of the stdio MCP server.
     #[command(subcommand)]
     command: Option<Command>,
 }
 
-/// CLI actions that run one time.
+/// The one-time actions.
 #[derive(Subcommand)]
 enum Command {
+    /// Run, start, stop or examine the shared daemon.
+    #[command(subcommand)]
+    Daemon(daemon::DaemonCommand),
+
+    /// Write the locations of the files and directories of ghidra-mcp.
+    Paths {
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Examine, change or check config.toml.
+    #[command(subcommand)]
+    Config(admin::ConfigCommand),
+
+    /// Open, list, examine or close the sessions of the daemon.
+    #[command(subcommand)]
+    Session(admin::SessionCommand),
+
+    /// List, examine or wait for the background jobs of the daemon.
+    #[command(subcommand)]
+    Job(admin::JobCommand),
+
     /// Write the tool definitions, but do not start the daemon.
     Tools,
 
@@ -78,55 +110,27 @@ pub async fn run() -> ExitCode {
     }
 }
 
-/// Runs one mode. Only `call` can return a nonzero status without an error.
+/// Runs one mode.
 async fn execute(cli: Cli) -> Result<ExitCode> {
     match cli.command {
+        None => {
+            crate::mcp::serve_stdio().await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Daemon(command)) => daemon::run(command).await,
+        Some(Command::Paths { json }) => admin::paths(json),
+        Some(Command::Config(command)) => admin::config(command),
+        Some(Command::Session(command)) => admin::session(command).await,
+        Some(Command::Job(command)) => admin::job(command).await,
         Some(Command::Tools) => {
-            write_json(io::stdout().lock(), &ToolServer::tools())?;
+            output::write_json(io::stdout().lock(), &ToolServer::tools())?;
+            Ok(ExitCode::SUCCESS)
         }
         Some(Command::Call { tool, arguments }) => {
             let result = ToolServer::proxy()?.call(tool, arguments).await;
-            return display_call(result);
+            output::display_call(result)
         }
-        None if cli.daemon => {
-            crate::daemon::run(cli.listen.unwrap_or(DEFAULT_LISTEN_ADDRESS)).await?;
-        }
-        None => crate::mcp::serve_stdio().await?,
     }
-    Ok(ExitCode::SUCCESS)
-}
-
-/// Writes a tool result. For a success, it writes the structured result to
-/// stdout. For a failure, it writes the structured result or the error text to stderr.
-fn display_call(result: CallToolResult) -> Result<ExitCode> {
-    if result.is_error == Some(true) {
-        if let Some(value) = &result.structured_content {
-            write_json(io::stderr().lock(), value)?;
-        } else {
-            let mut stderr = io::stderr().lock();
-            for content in &result.content {
-                if let Some(text) = content.as_text() {
-                    writeln!(stderr, "{}", text.text)?;
-                }
-            }
-            stderr.flush()?;
-        }
-        Ok(ExitCode::FAILURE)
-    } else {
-        write_json(
-            io::stdout().lock(),
-            &result.structured_content.unwrap_or(Value::Null),
-        )?;
-        Ok(ExitCode::SUCCESS)
-    }
-}
-
-/// Writes `value` as formatted JSON, with a newline at the end.
-fn write_json(mut writer: impl Write, value: &impl serde::Serialize) -> Result<()> {
-    serde_json::to_writer_pretty(&mut writer, value)?;
-    writer.write_all(b"\n")?;
-    writer.flush()?;
-    Ok(())
 }
 
 /// Reads the `call` arguments. They must be a JSON object.
@@ -145,3 +149,6 @@ fn parse_listen_address(raw: &str) -> Result<SocketAddr, String> {
     }
     Ok(address)
 }
+
+#[cfg(test)]
+mod tests;

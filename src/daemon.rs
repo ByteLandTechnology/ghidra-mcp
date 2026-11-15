@@ -262,21 +262,8 @@ mod ipc {
             let service = if let Some(service) = self.connect_socket().await? {
                 service
             } else {
-                spawn_daemon()?;
-                let deadline = tokio::time::Instant::now() + self.timeouts.daemon_start;
-                loop {
-                    if let Some(service) = self.connect_socket().await? {
-                        break service;
-                    }
-                    if tokio::time::Instant::now() >= deadline {
-                        bail!(
-                            "daemon did not start within {} seconds; inspect {}",
-                            self.timeouts.daemon_start.as_secs(),
-                            self.runtime_dir.join("daemon.log").display()
-                        );
-                    }
-                    tokio::time::sleep(self.timeouts.poll_interval).await;
-                }
+                spawn_daemon(None)?;
+                self.wait_until_ready().await?
             };
 
             let service = Arc::new(service);
@@ -284,8 +271,108 @@ mod ipc {
             Ok(service)
         }
 
-        /// Connects to the local socket and performs the MCP handshake.
-        async fn connect_socket(&self) -> Result<Option<RunningService<RoleClient, ()>>> {
+        /// Waits until a daemon that starts serves requests.
+        async fn wait_until_ready(&self) -> Result<RunningService<RoleClient, ()>> {
+            let deadline = tokio::time::Instant::now() + self.timeouts.daemon_start;
+            loop {
+                if let Some(service) = self.connect_socket().await? {
+                    return Ok(service);
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    bail!(
+                        "daemon did not start within {} seconds; inspect {}",
+                        self.timeouts.daemon_start.as_secs(),
+                        self.runtime_dir.join("daemon.log").display()
+                    );
+                }
+                tokio::time::sleep(self.timeouts.poll_interval).await;
+            }
+        }
+
+        /// Connects to a daemon that runs. This function never starts a daemon.
+        ///
+        /// # Errors
+        ///
+        /// Fails if the daemon metadata cannot be read or the handshake fails.
+        pub async fn connect_existing(&self) -> Result<bool> {
+            let mut guard = self.client.lock().await;
+            if guard.as_ref().is_some_and(|service| !service.is_closed()) {
+                return Ok(true);
+            }
+            *guard = self.connect_socket().await?.map(Arc::new);
+            Ok(guard.is_some())
+        }
+
+        /// Starts a daemon in the background if no daemon runs, and waits until it is ready.
+        /// Returns `false` if a daemon ran already. Then `listen` has no effect.
+        ///
+        /// # Errors
+        ///
+        /// Fails if the daemon cannot start, or does not get ready in time.
+        pub async fn start(&self, listen: Option<SocketAddr>) -> Result<bool> {
+            if self.connect_existing().await? {
+                return Ok(false);
+            }
+            spawn_daemon(listen)?;
+            let service = self.wait_until_ready().await?;
+            *self.client.lock().await = Some(Arc::new(service));
+            Ok(true)
+        }
+
+        /// Closes the connection, then waits until the daemon has stopped. The
+        /// daemon removes `server.json` at the end of its shutdown. If the daemon
+        /// stops without the removal, the process check finds that.
+        ///
+        /// # Errors
+        ///
+        /// Fails if `server.json` cannot be read, or if the daemon still runs
+        /// after [`STOP_TIMEOUT`].
+        pub async fn wait_until_stopped(&self) -> Result<()> {
+            let original = self.daemon_pid()?;
+            if let Some(service) = self.client.lock().await.take() {
+                service.cancellation_token().cancel();
+            }
+            let deadline = tokio::time::Instant::now() + STOP_TIMEOUT;
+            loop {
+                match self.daemon_pid()? {
+                    None => return Ok(()),
+                    // A different process ID means that a new daemon started. Then
+                    // the original daemon stopped.
+                    Some(pid) if Some(pid) != original || !process_alive(pid) => return Ok(()),
+                    Some(_) => {}
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    bail!(
+                        "daemon did not stop within {} seconds; inspect {}",
+                        STOP_TIMEOUT.as_secs(),
+                        self.runtime_dir.join("daemon.log").display()
+                    );
+                }
+                tokio::time::sleep(self.timeouts.poll_interval).await;
+            }
+        }
+
+        /// Returns the process ID from `server.json`, if a daemon wrote one.
+        ///
+        /// # Errors
+        ///
+        /// Fails if the file exists but cannot be read.
+        pub fn daemon_pid(&self) -> Result<Option<u32>> {
+            let server = match fs::read(self.runtime_dir.join("server.json")) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error).context("reading daemon metadata"),
+            };
+            let server: Value =
+                serde_json::from_slice(&server).context("reading daemon metadata")?;
+            Ok(server
+                .get("pid")
+                .and_then(Value::as_u64)
+                .and_then(|pid| u32::try_from(pid).ok()))
+        }
+
+        /// Returns the local socket name from `server.json`, if a daemon wrote one.
+        fn endpoint(&self) -> Result<Option<String>> {
             let server_path = self.runtime_dir.join("server.json");
             let server = match fs::read(&server_path) {
                 Ok(bytes) => bytes,
@@ -295,11 +382,19 @@ mod ipc {
             let server: Value =
                 serde_json::from_slice(&server).context("reading daemon metadata")?;
             // The metadata of an older daemon has no local socket. Start a new daemon.
-            let Some(endpoint) = server.get("localSocket").and_then(Value::as_str) else {
+            Ok(server
+                .get("localSocket")
+                .and_then(Value::as_str)
+                .map(str::to_owned))
+        }
+
+        /// Opens a stream to the local socket. Returns `None` if no daemon listens.
+        async fn open_stream(&self) -> Result<Option<Stream>> {
+            let Some(endpoint) = self.endpoint()? else {
                 return Ok(None);
             };
-            let stream = match Stream::connect(socket_name(endpoint)?).await {
-                Ok(stream) => stream,
+            match Stream::connect(socket_name(&endpoint)?).await {
+                Ok(stream) => Ok(Some(stream)),
                 // The daemon that wrote the metadata stopped.
                 Err(error)
                     if matches!(
@@ -307,15 +402,56 @@ mod ipc {
                         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
                     ) =>
                 {
-                    return Ok(None)
+                    Ok(None)
                 }
-                Err(error) => return Err(error).context("connecting to daemon socket"),
+                Err(error) => Err(error).context("connecting to daemon socket"),
+            }
+        }
+
+        /// Connects to the local socket and performs the MCP handshake.
+        async fn connect_socket(&self) -> Result<Option<RunningService<RoleClient, ()>>> {
+            let Some(stream) = self.open_stream().await? else {
+                return Ok(None);
             };
             let client = tokio::time::timeout(self.timeouts.handshake, ().serve(stream))
                 .await
                 .context("daemon MCP handshake timed out")?
                 .context("initializing daemon MCP connection")?;
             Ok(Some(client))
+        }
+    }
+
+    /// The maximum time for a daemon to close its sessions and stop.
+    const STOP_TIMEOUT: Duration = Duration::from_secs(120);
+
+    /// Returns `true` if a process with this ID runs.
+    fn process_alive(pid: u32) -> bool {
+        #[cfg(unix)]
+        {
+            let Ok(pid) = libc::pid_t::try_from(pid) else {
+                return false;
+            };
+            // SAFETY: Signal 0 sends nothing. `kill` only checks the process.
+            let found = unsafe { libc::kill(pid, 0) } == 0;
+            found || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+            use windows_sys::Win32::System::Threading::{
+                GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            };
+            // SAFETY: The handle is checked before use and closed after use.
+            unsafe {
+                let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                if handle.is_null() {
+                    return false;
+                }
+                let mut code = 0u32;
+                let read = GetExitCodeProcess(handle, &raw mut code) != 0;
+                CloseHandle(handle);
+                read && u32::try_from(STILL_ACTIVE) == Ok(code)
+            }
         }
     }
 
@@ -331,14 +467,17 @@ mod ipc {
             .with_context(|| format!("opening private daemon file {}", path.display()))
     }
 
-    /// Starts `ghidra-mcp --daemon` in a process separate from the caller.
+    /// Starts `ghidra-mcp daemon run` in a process separate from the caller.
     /// On Unix, the daemon runs in a new session. On Windows, it runs outside the
     /// console and the job of the caller. The daemon owns its log with rotation.
-    fn spawn_daemon() -> Result<()> {
+    fn spawn_daemon(listen: Option<SocketAddr>) -> Result<()> {
         let mut process =
             Command::new(std::env::current_exe().context("locating ghidra-mcp executable")?);
+        process.args(["daemon", "run"]);
+        if let Some(address) = listen {
+            process.arg("--listen").arg(address.to_string());
+        }
         process
-            .arg("--daemon")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
