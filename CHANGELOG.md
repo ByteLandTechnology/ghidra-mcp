@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.1.0...v1.2.0) (2026-11-15)
+
+
+### Features
+
+* **xtask:** add npm package generation ([35bef82](https://github.com/ByteLandTechnology/ghidra-mcp/commit/35bef82ecf12ef9beb15dbcd5760bf7a8d537c50))
+
+
+### Bug Fixes
+
+* **build:** bump rmcp from 3.8.0 to 3.10.0 ([4016295](https://github.com/ByteLandTechnology/ghidra-mcp/commit/40162955d9ce170efe2eb687aa492e5943823ca7))
+* **build:** bump rustix from 1.1.5 to 1.1.6 ([cc205e6](https://github.com/ByteLandTechnology/ghidra-mcp/commit/cc205e69fba59ad4edc7e88d3575af77ad3a3192))
+* **build:** let release-please update npm optional dependencies ([9443d6f](https://github.com/ByteLandTechnology/ghidra-mcp/commit/9443d6f6fa1c4c18d902f6a9d2a60b925619f12e))
+
 ## [1.1.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.0.3...v1.1.0) (2026-11-02)
 
 
