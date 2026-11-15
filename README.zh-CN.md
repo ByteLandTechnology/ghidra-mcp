@@ -62,6 +62,35 @@ MCP 客户端通过 stdio 或 HTTP 连接守护进程。
 - Java 21。
 - 本地 Ghidra 安装，包含 `analyzeHeadless`（Windows 上为 `analyzeHeadless.bat`）。
 
+### 使用 npm 安装
+
+如果已安装 Node.js 18 或更高版本，可以用 npm 安装适合当前平台的可执行文件：
+
+```sh
+npx @ghidra-mcp/cli tools
+```
+
+也可以全局安装该命令：
+
+```sh
+npm install --global @ghidra-mcp/cli
+ghidra-mcp tools
+```
+
+在 MCP 客户端中使用 `npx`：
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "@ghidra-mcp/cli"]
+}
+```
+
+npm 只安装一个平台包，例如 `@ghidra-mcp/linux-x64`。
+平台包是可选依赖，因此不要使用 `--omit=optional`。
+Linux 平台包需要 glibc。在 Alpine 等 musl 系统上，请[从源代码构建](#从源代码构建)。
+可执行文件同样需要能找到 Ghidra（见[查找 Ghidra](#查找-ghidra)）。
+
 ### 使用预构建的可执行文件
 
 1. 从 [GitHub Releases](https://github.com/ByteLandTechnology/ghidra-mcp/releases) 下载适合您平台的文件。
@@ -591,9 +620,12 @@ release-please 会打开一个发布拉取请求。
 合并后，release-please 在固定提交上创建版本标签和发布草稿。
 六个平台的构建及依赖审计均使用该提交。
 检查全部通过后，CI 上传可执行文件、SHA-256 校验和及许可证文本。
-然后 CI 公开发布草稿。
+然后 CI 发布 npm 包，并公开发布草稿。
 检查失败时，发布保持草稿状态。请重新运行失败的任务。
-CI 使用默认的 `GITHUB_TOKEN`，不需要其他密钥。
+如果 npm 上已有某个包的该版本，CI 会跳过这个包。
+CI 在 GitHub 上使用默认的 `GITHUB_TOKEN`。
+在 npm 上，CI 通过 GitHub OIDC 使用 trusted publisher，不需要其他密钥。
+每个 npm 包都必须为本仓库和 `ci.yml` 工作流配置 trusted publisher。
 
 > [!NOTE]
 > - 仓库必须允许 GitHub Actions 创建拉取请求。

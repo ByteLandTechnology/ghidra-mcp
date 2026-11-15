@@ -63,6 +63,35 @@ For client setup snippets and walkthroughs, read the
 - Java 21.
 - A local Ghidra installation that has `analyzeHeadless` (`analyzeHeadless.bat` on Windows).
 
+### Install with npm
+
+If you have Node.js 18 or later, npm can install the executable for your platform:
+
+```sh
+npx @ghidra-mcp/cli tools
+```
+
+Or install the command for all projects:
+
+```sh
+npm install --global @ghidra-mcp/cli
+ghidra-mcp tools
+```
+
+To use `npx` from an MCP client:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "@ghidra-mcp/cli"]
+}
+```
+
+npm installs one platform package, such as `@ghidra-mcp/linux-x64`.
+Do not use `--omit=optional`, because the platform packages are optional dependencies.
+The Linux packages need glibc. On musl systems, such as Alpine, use [Build from source](#build-from-source).
+The executable must also find Ghidra (see [Find Ghidra](#find-ghidra)).
+
 ### Use a prebuilt executable
 
 1. Download the file for your platform from [GitHub Releases](https://github.com/ByteLandTechnology/ghidra-mcp/releases).
@@ -600,9 +629,13 @@ After you merge it, release-please creates a version tag and a draft release at 
 All six builds and the dependency audit use that commit.
 
 After those checks pass, CI attaches the executables, SHA-256 checksums and license texts.
-Then CI publishes the draft.
+Then CI publishes the npm packages and makes the draft public.
 Failed checks leave the release as a draft. Rerun the failed jobs.
-CI uses the default `GITHUB_TOKEN`. You do not need other secrets.
+CI does not publish an npm package again if npm has that version.
+
+CI uses the default `GITHUB_TOKEN` for GitHub.
+For npm, CI uses trusted publishers through GitHub OIDC. You do not need other secrets.
+Each npm package must have a trusted publisher for this repository and the `ci.yml` workflow.
 
 > [!NOTE]
 > - The repository must let GitHub Actions make pull requests.

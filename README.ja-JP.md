@@ -62,6 +62,35 @@ MCP クライアントは stdio または HTTP でデーモンに接続します
 - Java 21。
 - `analyzeHeadless`（Windows では `analyzeHeadless.bat`）を含むローカルの Ghidra インストール。
 
+### npm でインストール
+
+Node.js 18 以降がある場合、npm でお使いのプラットフォーム用の実行ファイルをインストールできます。
+
+```sh
+npx @ghidra-mcp/cli tools
+```
+
+コマンドをグローバルにインストールすることもできます。
+
+```sh
+npm install --global @ghidra-mcp/cli
+ghidra-mcp tools
+```
+
+MCP クライアントから `npx` を使う場合:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "@ghidra-mcp/cli"]
+}
+```
+
+npm は `@ghidra-mcp/linux-x64` などのプラットフォームパッケージを 1 つだけインストールします。
+プラットフォームパッケージはオプションの依存関係なので、`--omit=optional` を使わないでください。
+Linux 用パッケージには glibc が必要です。Alpine などの musl システムでは、[ソースからのビルド](#ソースからのビルド)を使用してください。
+実行ファイルは Ghidra も見つけられる必要があります（[Ghidra の検索](#ghidra-の検索)を参照）。
+
 ### ビルド済み実行ファイルの使用
 
 1. [GitHub Releases](https://github.com/ByteLandTechnology/ghidra-mcp/releases) から、お使いのプラットフォーム用のファイルをダウンロードします。
@@ -593,9 +622,12 @@ release-please はリリース用のプルリクエストを作成します。
 マージ後、release-please は固定したコミットにバージョンタグとリリースの下書きを作成します。
 6 つのビルドと依存関係の監査は、すべてそのコミットを使用します。
 検査がすべて成功すると、CI は実行ファイル、SHA-256 チェックサム、ライセンス文書を添付します。
-次に、CI は下書きを公開します。
+次に、CI は npm パッケージを公開し、下書きを公開します。
 検査が失敗した場合、リリースは下書きのままです。失敗したジョブを再実行してください。
-CI はデフォルトの `GITHUB_TOKEN` を使用します。他のシークレットは必要ありません。
+npm にそのバージョンが既にあるパッケージは、CI が公開をスキップします。
+CI は GitHub に対してデフォルトの `GITHUB_TOKEN` を使用します。
+npm に対しては、GitHub OIDC による trusted publisher を使用します。他のシークレットは必要ありません。
+各 npm パッケージには、このリポジトリと `ci.yml` ワークフローの trusted publisher を設定する必要があります。
 
 > [!NOTE]
 > - リポジトリは、GitHub Actions によるプルリクエストの作成を許可する必要があります。
