@@ -7,7 +7,14 @@
   "packages": {
     ".": {
       "release-type": "rust",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "npm/cli/package.json",
+          "jsonpath": "$.version"
+        }
+      ]
     }
   }
 }
