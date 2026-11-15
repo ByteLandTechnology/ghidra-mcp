@@ -50,6 +50,10 @@ jobs:
       always() && !cancelled() &&
       (needs.release-please.result == 'success' || needs.release-please.result == 'skipped')
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # audit-check makes a check run to report advisories.
+      checks: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
