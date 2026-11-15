@@ -72,7 +72,12 @@ fn bridge_domains_match_the_bridge_mcp_server() {
         .collect();
     assert_eq!(
         local,
-        BTreeSet::from(["ghidra_job", "ghidra_session", "ghidra_upload"])
+        BTreeSet::from([
+            "ghidra_daemon",
+            "ghidra_job",
+            "ghidra_session",
+            "ghidra_upload"
+        ])
     );
 }
 
@@ -82,7 +87,7 @@ fn bridge_domains_match_the_bridge_mcp_server() {
 fn tool_definitions_have_routes_and_annotations() {
     let tools = tool_definitions();
     assert_eq!(tools[0]["name"], "ghidra_help");
-    assert_eq!(tools.len(), 18);
+    assert_eq!(tools.len(), 19);
     let tool = |name: &str| {
         tools
             .iter()
@@ -114,6 +119,14 @@ fn tool_definitions_have_routes_and_annotations() {
         tool("ghidra_session")["annotations"]["destructiveHint"],
         true
     );
+
+    assert_eq!(
+        tool("ghidra_daemon")["annotations"]["destructiveHint"],
+        true
+    );
+    assert!(tool("ghidra_daemon")["inputSchema"]["properties"]
+        .get("md5")
+        .is_none());
 
     let session = &tool("ghidra_session")["inputSchema"]["properties"];
     assert!(session["md5"].is_object());
@@ -355,7 +368,7 @@ fn prepare_refuses_invalid_calls() {
 fn help_has_three_levels() {
     let (_, domains) = help::run(Map::new()).expect("domains");
     let domains = domains["domains"].as_array().expect("domain list");
-    assert_eq!(domains.len(), 17);
+    assert_eq!(domains.len(), 18);
     assert_eq!(domains[0], "ghidra_session");
 
     let (_, memory) = help::run(object(json!({ "domain": "memory" }))).expect("operations");
@@ -429,4 +442,69 @@ fn help_has_three_levels() {
         let error = help::run(object(arguments.clone())).expect_err("invalid help");
         assert!(reason(&error).contains(expected), "{arguments}: {error}");
     }
+}
+
+/// Makes a daemon without Ghidra processes, for the local operations.
+fn test_daemon(root: &std::path::Path) -> super::Daemon {
+    let state = crate::state::test_state(root);
+    std::fs::create_dir_all(&state.paths.tmp_dir).unwrap();
+    let authorities = ["127.0.0.1:1".to_string(), "localhost:1".to_string()];
+    let uploads = crate::upload::UploadService::new(
+        state.clone(),
+        authorities,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .unwrap();
+    super::Daemon {
+        state,
+        uploads,
+        control: super::Control::default(),
+    }
+}
+
+/// Makes sure that `ghidra_job list` and `ghidra_daemon status` show the jobs.
+#[tokio::test]
+async fn job_list_and_daemon_status_show_jobs() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let job = daemon.state.insert_job("analysis", None);
+    let call = |tool: &'static str, operation: &'static str| {
+        super::call(&daemon, tool, object(json!({ "operation": operation })))
+    };
+
+    let (_, listed) = call("ghidra_job", "list").await.unwrap();
+    assert_eq!(listed["jobs"][0]["id"], job.id);
+    let (_, status) = call("ghidra_daemon", "status").await.unwrap();
+    assert_eq!(status["daemon"]["pid"], std::process::id());
+    assert_eq!(status["jobs"][0]["id"], job.id);
+}
+
+/// Makes sure that `ghidra_daemon shutdown` refuses live work without `force`.
+#[tokio::test]
+async fn daemon_shutdown_needs_force_for_live_work() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let record = crate::model::SessionRecord::launching(md5.into(), "bin".into(), "t".into());
+    daemon.state.put_session(&record).unwrap();
+    let shutdown = |force: bool| {
+        super::call(
+            &daemon,
+            "ghidra_daemon",
+            object(json!({ "operation": "shutdown", "params": { "force": force } })),
+        )
+    };
+
+    let error = shutdown(false).await.unwrap_err();
+    assert!(reason(&error).contains(md5), "{error:#}");
+    assert!(!daemon.control.shutdown.is_cancelled());
+
+    let (_, result) = shutdown(true).await.unwrap();
+    assert_eq!(result["sessions"], json!([md5]));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        daemon.control.shutdown.cancelled(),
+    )
+    .await
+    .expect("shutdown starts after the reply");
 }

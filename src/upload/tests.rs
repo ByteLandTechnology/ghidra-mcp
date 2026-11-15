@@ -16,7 +16,15 @@ fn test_server() -> (tempfile::TempDir, ToolServer) {
     fs::create_dir_all(&state.paths.tmp_dir).unwrap();
     let uploads =
         UploadService::new(state.clone(), authorities(), CancellationToken::new()).unwrap();
-    (root, ToolServer::local(Daemon { state, uploads }))
+    let control = crate::tools::Control::default();
+    (
+        root,
+        ToolServer::local(Daemon {
+            state,
+            uploads,
+            control,
+        }),
+    )
 }
 
 /// Returns the permitted listener authorities.

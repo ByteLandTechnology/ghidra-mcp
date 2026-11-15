@@ -545,6 +545,13 @@ impl McpState {
             })
     }
 
+    /// Returns a copy of each job that the daemon still keeps.
+    pub fn jobs(&self) -> Vec<JobRecord> {
+        let mut map = self.job_map();
+        Self::prune_jobs(&mut map);
+        map.values().map(|entry| entry.record.clone()).collect()
+    }
+
     /// Changes a job and wakes the waiters.
     fn update_job(&self, job_id: &str, mutate: impl FnOnce(&mut JobRecord)) {
         if let Some(entry) = self.job_map().get_mut(job_id) {

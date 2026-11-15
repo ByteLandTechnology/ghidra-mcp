@@ -14,7 +14,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// An operation that the daemon runs.
 pub(super) struct LocalOperation {
@@ -279,6 +279,63 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         },
     },
     LocalOperation {
+        domain: "job",
+        name: "list",
+        description: "List the background jobs that the daemon keeps.",
+        schema: no_params,
+        md5: Md5Rule::Absent,
+        basis: Basis::Own(READ),
+        run: |daemon, _| {
+            Box::pin(async move {
+                let jobs = daemon.state.jobs();
+                Ok((
+                    format!("Found {} job(s)", jobs.len()),
+                    json!({ "jobs": jobs }),
+                ))
+            })
+        },
+    },
+    LocalOperation {
+        domain: "daemon",
+        name: "status",
+        description: concat!(
+            "Get the process ID, version, start time and MCP URL of the daemon, with the ",
+            "session summaries and the running jobs."
+        ),
+        schema: no_params,
+        md5: Md5Rule::Absent,
+        basis: Basis::Own(READ),
+        run: |daemon, _| Box::pin(async move { Ok(daemon_status(daemon)) }),
+    },
+    LocalOperation {
+        domain: "daemon",
+        name: "shutdown",
+        description: concat!(
+            "Stop the shared daemon for all clients. The daemon closes all sessions first. ",
+            "If a session is live or a job runs, the operation fails unless force=true. ",
+            "Get approval from the user before you use this operation."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "force": { "type": "boolean", "default": false }
+                },
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Absent,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: false,
+            destructive: true,
+            idempotent: false,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| Box::pin(async move { shutdown_daemon(daemon, request) }),
+    },
+    LocalOperation {
         domain: "analysis",
         name: "start",
         description: concat!(
@@ -348,6 +405,103 @@ struct JobArgs {
     job_id: String,
     /// The maximum wait of `ghidra_job wait`, instead of the launch timeout.
     timeout_ms: Option<u64>,
+}
+
+/// The parameters of `ghidra_daemon shutdown`.
+#[derive(Deserialize)]
+struct ShutdownArgs {
+    /// Stop the daemon also if a session is live or a job runs.
+    #[serde(default)]
+    force: bool,
+}
+
+/// Returns the MD5 of each live session and the ID of each job that runs.
+fn live_work(daemon: &Daemon) -> (Vec<String>, Vec<String>) {
+    let mut sessions: Vec<String> = daemon
+        .state
+        .sessions()
+        .into_iter()
+        .filter(|session| session.status.is_live())
+        .map(|session| session.session_id)
+        .collect();
+    let mut jobs: Vec<String> = daemon
+        .state
+        .jobs()
+        .into_iter()
+        .filter(|job| job.status == JobStatus::Running)
+        .map(|job| job.id)
+        .collect();
+    sessions.sort();
+    jobs.sort();
+    (sessions, jobs)
+}
+
+/// Runs `ghidra_daemon status`.
+fn daemon_status(daemon: &Daemon) -> Output {
+    let control = &daemon.control;
+    let started = control
+        .started_at
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    let uptime = control.started_at.elapsed().unwrap_or_default();
+    let sessions: Vec<Value> = daemon
+        .state
+        .sessions()
+        .iter()
+        .map(SessionRecord::summary)
+        .collect();
+    let jobs: Vec<_> = daemon
+        .state
+        .jobs()
+        .into_iter()
+        .filter(|job| job.status == JobStatus::Running)
+        .collect();
+    let pid = std::process::id();
+    (
+        format!("Daemon {pid} runs with {} session(s)", sessions.len()),
+        json!({
+            "daemon": {
+                "pid": pid,
+                "version": env!("CARGO_PKG_VERSION"),
+                "startedAt": started.as_secs(),
+                "uptimeSeconds": uptime.as_secs(),
+                "mcpUrl": control.mcp_url,
+            },
+            "sessions": sessions,
+            "jobs": jobs,
+        }),
+    )
+}
+
+/// The time between the reply of `ghidra_daemon shutdown` and the start of the shutdown.
+/// Then the reply gets to the client before the daemon closes the connections.
+const SHUTDOWN_DELAY: Duration = Duration::from_millis(200);
+
+/// Runs `ghidra_daemon shutdown`.
+fn shutdown_daemon(daemon: &Daemon, request: Request) -> Result<Output> {
+    let ShutdownArgs { force } = parse(&request.label, request.params)?;
+    let (sessions, jobs) = live_work(daemon);
+    if !force && (!sessions.is_empty() || !jobs.is_empty()) {
+        return Err(DomainError::invalid_argument(
+            "force",
+            format!(
+                "the daemon has {} live session(s) {sessions:?} and {} running job(s) {jobs:?}; \
+                 set force=true to stop it",
+                sessions.len(),
+                jobs.len()
+            ),
+        )
+        .into());
+    }
+    let shutdown = daemon.control.shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(SHUTDOWN_DELAY).await;
+        shutdown.cancel();
+    });
+    Ok((
+        "The daemon is shutting down".to_string(),
+        json!({ "shuttingDown": true, "sessions": sessions, "jobs": jobs }),
+    ))
 }
 
 /// Runs `ghidra_session open`: imports a file on the daemon host, or opens a saved binary.

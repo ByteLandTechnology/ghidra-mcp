@@ -38,6 +38,8 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
+use std::time::SystemTime;
+use tokio_util::sync::CancellationToken;
 
 /// The objects that the operations use.
 pub struct Daemon {
@@ -45,6 +47,29 @@ pub struct Daemon {
     pub state: Arc<McpState>,
     /// The upload credentials, for `ghidra_upload prepare`.
     pub uploads: Arc<UploadService>,
+    /// The process data and the shutdown trigger, for `ghidra_daemon`.
+    pub control: Control,
+}
+
+/// The process data of the daemon, and the trigger that stops it.
+pub struct Control {
+    /// `ghidra_daemon shutdown` cancels this token. Then the daemon stops.
+    pub shutdown: CancellationToken,
+    /// The time when the daemon started.
+    pub started_at: SystemTime,
+    /// The URL of the HTTP MCP endpoint.
+    pub mcp_url: String,
+}
+
+impl Default for Control {
+    /// Makes control data with a new token, the current time and no URL.
+    fn default() -> Self {
+        Self {
+            shutdown: CancellationToken::new(),
+            started_at: SystemTime::now(),
+            mcp_url: String::new(),
+        }
+    }
 }
 
 /// The summary text and the structured result of an operation.

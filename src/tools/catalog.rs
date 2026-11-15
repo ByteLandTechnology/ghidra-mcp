@@ -39,6 +39,7 @@ const DOMAINS: &[(&str, &str)] = &[
         "to send a binary from a remote client to the daemon",
     ),
     ("job", "to examine background jobs and to wait for them"),
+    ("daemon", "to examine the shared daemon and to stop it"),
     ("bridge", "for the Ghidra bridge of a session"),
     ("program", "for program data"),
     ("address", "for address data"),

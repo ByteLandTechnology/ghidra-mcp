@@ -11,8 +11,8 @@
 //!
 //! It also serves MCP on a local socket for the stdio proxy and the CLI (see
 //! [`ipc`]). One daemon runs for each runtime directory. A file lock enforces
-//! this rule. The daemon runs until it gets a stop signal. Then it stops all
-//! Ghidra processes.
+//! this rule. The daemon runs until it gets a stop signal or `ghidra_daemon
+//! shutdown`. Then it stops all Ghidra processes.
 
 mod ipc {
     //! The local endpoint of the daemon, its lifetime lock and its detached start.
@@ -408,7 +408,7 @@ pub use ipc::ProxyConnectionManager;
 use crate::bridge::AGENT_WS_PATH;
 use crate::mcp::ToolServer;
 use crate::state::McpState;
-use crate::tools::Daemon;
+use crate::tools::{Control, Daemon};
 use crate::upload::UploadService;
 use anyhow::{ensure, Context, Result};
 use axum::{
@@ -427,7 +427,8 @@ use tokio_util::sync::CancellationToken;
 /// The time for the servers to complete their connections during shutdown.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Runs the daemon on `address` until a stop signal or a server failure.
+/// Runs the daemon on `address` until a stop signal, `ghidra_daemon shutdown`
+/// or a server failure.
 /// Returns immediately if another daemon has the lock.
 ///
 /// # Errors
@@ -465,9 +466,15 @@ pub async fn run(address: SocketAddr) -> Result<()> {
         authorities.clone(),
         cancellation.child_token(),
     )?;
+    let shutdown = CancellationToken::new();
     let server = ToolServer::local(Daemon {
         state: state.clone(),
         uploads: uploads.clone(),
+        control: Control {
+            shutdown: shutdown.clone(),
+            started_at: std::time::SystemTime::now(),
+            mcp_url: format!("http://{address}/mcp"),
+        },
     });
     let mcp = crate::mcp_http::router(
         server.clone(),
@@ -501,6 +508,10 @@ pub async fn run(address: SocketAddr) -> Result<()> {
 
     let result = tokio::select! {
         signal = shutdown_signal() => signal,
+        () = shutdown.cancelled() => {
+            crate::process::log_daemon("ghidra-mcp daemon stops: ghidra_daemon shutdown");
+            Ok(())
+        }
         Some(joined) = servers.join_next() => {
           joined.context("joining daemon server").and_then(|result| result)
         }
