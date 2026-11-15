@@ -217,6 +217,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      # The npm trusted publisher feature uses the GitHub OIDC token.
+      id-token: write
     steps:
       - name: Checkout release commit
         uses: actions/checkout@v4
@@ -244,6 +246,7 @@ jobs:
               '.packages[] | select(.name == $package) | .version' <<< "$metadata")"
             test "$actual" = "$RELEASE_VERSION"
           done
+          test "$(jq -r .version npm/cli/package.json)" = "$RELEASE_VERSION"
 
       - name: Download release executables
         uses: actions/download-artifact@v4
@@ -271,5 +274,42 @@ jobs:
           cp LICENSE dist/LICENSE
           cp bridge/LICENSE dist/LICENSE-ghidra-bridge
           gh release upload "$RELEASE_TAG" "${assets[@]}" dist/SHA256SUMS dist/LICENSE dist/LICENSE-ghidra-bridge dist/THIRD_PARTY_LICENSES.txt --clobber
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          # The npm trusted publisher feature needs npm 11.5.1 or later.
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Make npm packages
+        run: cargo xtask npm-pack --dist dist --out npm-dist
+
+      - name: Publish npm packages
+        env:
+          RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          # Publish the platform packages before the main package that needs them.
+          # Skip a package that has this version already, so that a failed run can run again.
+          platforms=()
+          for directory in npm-dist/*/; do
+            [ "$directory" = npm-dist/cli/ ] || platforms+=("$directory")
+          done
+          test "${#platforms[@]}" -eq 6
+          for directory in "${platforms[@]}" npm-dist/cli/; do
+            name="$(jq -r .name "$directory/package.json")"
+            if npm view "$name@$RELEASE_VERSION" version > /dev/null 2>&1; then
+              echo "$name@$RELEASE_VERSION is on npm already"
+              continue
+            fi
+            npm publish "$directory" --access public
+          done
+
+      - name: Make release public
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
           release_api="$(gh release view "$RELEASE_TAG" --json apiUrl --jq .apiUrl)"
           gh api --method PATCH "$release_api" -F draft=false -f make_latest=legacy --silent
