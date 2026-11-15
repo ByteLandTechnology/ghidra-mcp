@@ -1,6 +1,6 @@
 {
   "name": "@ghidra-mcp/cli",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Headless Ghidra analysis for MCP clients. Clients can start sessions, decompile code, examine symbols, and change Ghidra programs.",
   "license": "MIT",
   "repository": {
@@ -8,20 +8,28 @@
     "url": "git+https://github.com/ByteLandTechnology/ghidra-mcp.git"
   },
   "homepage": "https://github.com/ByteLandTechnology/ghidra-mcp#readme",
-  "keywords": ["ghidra", "mcp", "reverse-engineering", "static-analysis", "decompiler"],
+  "keywords": [
+    "ghidra",
+    "mcp",
+    "reverse-engineering",
+    "static-analysis",
+    "decompiler"
+  ],
   "bin": {
     "ghidra-mcp": "bin/ghidra-mcp.js"
   },
-  "files": ["bin"],
+  "files": [
+    "bin"
+  ],
   "engines": {
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@ghidra-mcp/darwin-arm64": "1.1.0",
-    "@ghidra-mcp/darwin-x64": "1.1.0",
-    "@ghidra-mcp/linux-arm64": "1.1.0",
-    "@ghidra-mcp/linux-x64": "1.1.0",
-    "@ghidra-mcp/win32-arm64": "1.1.0",
-    "@ghidra-mcp/win32-x64": "1.1.0"
+    "@ghidra-mcp/darwin-arm64": "1.2.0",
+    "@ghidra-mcp/darwin-x64": "1.2.0",
+    "@ghidra-mcp/linux-arm64": "1.2.0",
+    "@ghidra-mcp/linux-x64": "1.2.0",
+    "@ghidra-mcp/win32-arm64": "1.2.0",
+    "@ghidra-mcp/win32-x64": "1.2.0"
   }
 }
