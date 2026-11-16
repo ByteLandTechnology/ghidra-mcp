@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.0.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.2.0...v2.0.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** use "ghidra-mcp daemon run" instead of "ghidra-mcp --daemon".
+
+### Features
+
+* **cli:** add management commands and replace --daemon ([baece2b](https://github.com/ByteLandTechnology/ghidra-mcp/commit/baece2be470615c025d542eee9ed4f26a4a0e2f9))
+* **tools:** add daemon status, daemon shutdown and job list ([79e57ba](https://github.com/ByteLandTechnology/ghidra-mcp/commit/79e57baf60c2613a1e1885dc587027ddf80e045a))
+
 ## [1.2.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.1.0...v1.2.0) (2026-11-15)
 
 
