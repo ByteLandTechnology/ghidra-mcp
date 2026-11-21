@@ -9,7 +9,7 @@
 //! progress fields of each snapshot. Then `job.get` can show them.
 
 use crate::error::DomainError;
-use crate::model::{job_kind, JobRecord, RpcEnvelope, SessionStatus};
+use crate::model::{job_kind, JobRecord, JobStatus, RpcEnvelope, SessionStatus};
 use crate::session;
 use crate::state::McpState;
 use anyhow::Result;
@@ -53,6 +53,57 @@ pub async fn start(
         );
     });
     state.await_job(&job.id, wait).await
+}
+
+/// Cancels a `start-analysis` job through `analysis.cancel`. If the job already
+/// finished, it returns the latest record without another bridge request.
+pub async fn cancel_job(
+    state: &Arc<McpState>,
+    job_id: &str,
+    wait: Option<Duration>,
+) -> Result<JobRecord> {
+    let job = state.job(job_id)?;
+    if job.kind != job_kind::START_ANALYSIS {
+        return Err(DomainError::invalid_argument(
+            "jobId",
+            format!(
+                "job {} has kind `{}` and cannot be cancelled with `ghidra_job cancel`; \
+                 call `ghidra_session close` instead",
+                job.id, job.kind
+            ),
+        )
+        .into());
+    }
+    if job.status != JobStatus::Running {
+        return Ok(job);
+    }
+    let md5 = job.session_id.ok_or_else(|| {
+        DomainError::invalid_argument("jobId", format!("analysis job {} has no session", job.id))
+    })?;
+
+    match session::call(state, &md5, "analysis.cancel", json!({})).await {
+        Ok(envelope) => {
+            let snapshot = rpc_result(envelope)?;
+            record_progress(state, job_id, &snapshot);
+            match check_terminal_status(&snapshot) {
+                Ok(Some(terminal)) => state.finish_job(job_id, Ok(terminal)),
+                Ok(None) => {}
+                Err(err) => state.finish_job(job_id, Err(DomainError::from_error(&err))),
+            }
+        }
+        Err(err) => {
+            let latest = state.job(job_id)?;
+            if latest.status != JobStatus::Running {
+                return Ok(latest);
+            }
+            return Err(err);
+        }
+    }
+
+    match wait {
+        Some(timeout) => state.wait_job_settled(job_id, timeout).await,
+        None => state.job(job_id),
+    }
 }
 
 /// Starts the analysis. Then it asks `analysis.get` for the status until the
@@ -117,14 +168,20 @@ fn check_terminal_status(snapshot: &Value) -> Result<Option<Value>> {
             let reason = snapshot
                 .get("error")
                 .and_then(Value::as_str)
+                .filter(|error| !error.is_empty())
                 .unwrap_or("analysis failed")
                 .to_string();
             Err(DomainError::transaction_failed(reason).into())
         }
-        Some("cancelled") => Err(DomainError::Internal {
-            message: "analysis cancelled".to_string(),
+        Some("cancelled") => {
+            let reason = snapshot
+                .get("error")
+                .and_then(Value::as_str)
+                .filter(|error| !error.is_empty())
+                .unwrap_or("analysis cancelled")
+                .to_string();
+            Err(DomainError::Internal { message: reason }.into())
         }
-        .into()),
         Some("idle") => Err(DomainError::Internal {
             message: "analysis did not start".to_string(),
         }
