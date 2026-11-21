@@ -527,9 +527,23 @@ impl Operation {
         }
         if self.schema.get("additionalProperties") == Some(&json!(false)) {
             if let Some(key) = params.keys().find(|key| !properties.contains_key(*key)) {
+                let mut valid_keys: Vec<&str> = properties.keys().map(String::as_str).collect();
+                valid_keys.sort_unstable();
+                let valid = if valid_keys.is_empty() {
+                    "none".to_string()
+                } else {
+                    valid_keys
+                        .into_iter()
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
                 return Err(DomainError::invalid_argument(
                     key,
-                    format!("`{label}` does not accept parameter `{key}`"),
+                    format!(
+                        "`{label}` does not accept parameter `{key}`. Valid parameters: {valid}. \
+                         Call {HELP_TOOL} with the domain and operation to get the params schema"
+                    ),
                 )
                 .into());
             }
