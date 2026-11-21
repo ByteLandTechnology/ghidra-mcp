@@ -1,11 +1,12 @@
 // Copyright 2026 ByteLand Technology Limited
 // SPDX-License-Identifier: MIT
 
-//! The public MCP tools: `ghidra_help` and one tool for each domain.
+//! The public MCP tools: `ghidra_help` and one flat tool for each operation.
 //!
-//! The bridge domains and operations use the names of the bridge MCP server.
-//! A domain tool takes `operation` and `params`. An operation that names one
-//! session also takes `md5`, the MD5 of that session.
+//! Each operation tool takes its parameter fields directly at the top level.
+//! An operation that names one session also takes `md5`, the MD5 of that
+//! session, at the top level. For compatibility with older clients, `tools/call`
+//! also accepts legacy `ghidra_<domain>` calls with `(operation, md5, params)`.
 //!
 //! There are two types of operations:
 //!
@@ -13,7 +14,7 @@
 //! - The bridge methods of the bridge contract. The daemon sends them to the
 //!   bridge of the session.
 //!
-//! [`call`] checks the required and unexpected top-level `params` fields
+//! [`call`] checks the required and unexpected top-level parameter fields
 //! against the schema of the operation (see [`catalog`]). Local handlers and
 //! the bridge check the other parameters.
 //!
@@ -45,15 +46,15 @@ use tokio_util::sync::CancellationToken;
 pub struct Daemon {
     /// The shared daemon state.
     pub state: Arc<McpState>,
-    /// The upload credentials, for `ghidra_upload prepare`.
+    /// The upload credentials, for `ghidra_upload_prepare`.
     pub uploads: Arc<UploadService>,
-    /// The process data and the shutdown trigger, for `ghidra_daemon`.
+    /// The process data and the shutdown trigger, for `ghidra_daemon_shutdown`.
     pub control: Control,
 }
 
 /// The process data of the daemon, and the trigger that stops it.
 pub struct Control {
-    /// `ghidra_daemon shutdown` cancels this token. Then the daemon stops.
+    /// `ghidra_daemon_shutdown` cancels this token. Then the daemon stops.
     pub shutdown: CancellationToken,
     /// The time when the daemon started.
     pub started_at: SystemTime,
@@ -77,7 +78,7 @@ type Output = (String, Value);
 
 /// The validated input of one operation.
 struct Request {
-    /// The tool name and the operation name, for messages.
+    /// The tool name (or legacy tool and operation name), for messages.
     label: String,
     /// The session that the operation names. The md5 rule of the operation
     /// controls if it has a value.
@@ -103,7 +104,15 @@ impl Request {
 /// Runs a local operation.
 type Handler = for<'a> fn(&'a Daemon, Request) -> BoxFuture<'a, Result<Output>>;
 
-/// The arguments of a domain tool.
+/// The optional top-level `md5` field of a flat operation tool call.
+#[derive(Deserialize)]
+struct Md5Field {
+    /// The session that the operation names.
+    #[serde(default, deserialize_with = "deserialize_optional_md5")]
+    md5: Option<String>,
+}
+
+/// The arguments of a legacy domain tool.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ToolCall {
@@ -141,13 +150,35 @@ pub async fn call(daemon: &Daemon, tool: &str, arguments: Map<String, Value>) ->
     }
 }
 
-/// Finds the operation of a domain tool call and validates its arguments.
+/// Finds the operation of a flat tool call or a legacy domain tool call, and
+/// validates its arguments.
 ///
 /// # Errors
 ///
 /// Fails if the tool or the operation is unknown. Also fails if the arguments
 /// do not obey the md5 rule or the top-level field rules of the operation.
-fn prepare(tool: &str, arguments: Map<String, Value>) -> Result<(&'static Operation, Request)> {
+fn prepare(tool: &str, mut arguments: Map<String, Value>) -> Result<(&'static Operation, Request)> {
+    if let Some((_, operation)) = catalog::operation_of_tool(tool) {
+        let label = tool.to_string();
+        let md5 = match arguments.remove("md5") {
+            None => None,
+            Some(raw_md5) => {
+                let Md5Field { md5 } = parse(&label, json!({ "md5": raw_md5 }))?;
+                md5
+            }
+        };
+        operation.check_md5(&label, md5.as_deref())?;
+        operation.validate(&label, &arguments)?;
+        return Ok((
+            operation,
+            Request {
+                label,
+                md5,
+                params: Value::Object(arguments),
+            },
+        ));
+    }
+
     let domain = catalog::domain_of_tool(tool)
         .ok_or_else(|| DomainError::invalid_argument("tool", format!("unknown tool: {tool}")))?;
     let ToolCall {

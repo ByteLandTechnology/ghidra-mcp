@@ -61,7 +61,7 @@ A module uses only the modules in the layers below it:
 | `mcp` | The MCP handler. It runs calls in the daemon, or sends them from the proxy to the daemon. |
 | `mcp_http` | Streamable HTTP, legacy SSE sessions, CORS and HTTP compatibility. |
 | `upload` | Upload credentials and the `POST /upload` endpoint. |
-| `tools` | The MCP tools: the domain catalog, the local operations, the call validation and `ghidra_help`. |
+| `tools` | The MCP tools: the operation catalog, the local operations, the call validation and `ghidra_help`. |
 | `session` | Open, launch, wait, relaunch, call and close for sessions. |
 | `analysis` | Auto-analysis as a background job. |
 | `project` | Saved binaries and the preparation of Ghidra projects. |
@@ -82,17 +82,17 @@ To read the API documentation of each module and item, use `cargo doc --document
 
 ![Tool Call Sequence](img/tool_call.svg)
 
-The daemon shows `ghidra_help` and one MCP tool for each domain, for example `ghidra_function`.
-The bridge domain tools use the domain and operation names of the bridge MCP server.
-The daemon also has local operations and does not expose the bridge shutdown operation.
+The daemon shows `ghidra_help` and one flat MCP tool for each operation, for example `ghidra_function_list`.
+The bridge operation tools use the underscored names of the bridge MCP server.
+The daemon also has local operation tools and does not expose `ghidra_bridge_shutdown`.
+For compatibility, `tools/call` also accepts legacy `ghidra_<domain>` calls with `(operation, md5, params)`.
 
-A call has an `operation` and its `params`. An operation that names one session also has the `md5` of that session, never in `params`.
-`ghidra_help` shows the `params` schema, md5 rule (`required`, `optional` or `absent`) and effects of each operation.
-The domain tool descriptions tell clients to get this schema before the first call to an operation.
-This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
+Each operation tool takes its parameter fields directly at the top level.
+An operation that names one session also takes `md5` at the top level.
+`ghidra_help` shows the parameter schema, md5 rule (`required`, `optional` or `absent`) and effects of each operation.
 
-`tools::call` finds the domain and the operation in the catalog (`tools/catalog.rs`).
-It checks the required top-level `params` fields and rejects unexpected top-level fields when the schema does not permit them.
+`tools::call` finds the operation in the catalog (`tools/catalog.rs`).
+It checks the required top-level fields and rejects unexpected top-level fields when the schema does not permit them.
 Local handlers and the bridge check the other parameters.
 Then it does one of these:
 
@@ -108,13 +108,13 @@ The bridge distinguishes database transaction failures (HTTP 500 `transaction_fa
 
 ### Open a binary
 
-`ghidra_session open` accepts a `path` on the daemon host, or the `md5` of a binary that the daemon saved before.
+`ghidra_session_open` accepts a `path` on the daemon host, or the `md5` of a binary that the daemon saved before.
 For a path, the daemon calculates the MD5 and copies the file into the persistent home.
 Then later calls need only the MD5.
 The daemon uses a connected session again, or joins a launch in progress, or starts a new launch.
 [Session lifecycle](#session-lifecycle) describes the launch.
 
-`ghidra_session open` returns the launch job immediately. If the client sets `wait`, it waits for the job.
+`ghidra_session_open` returns the launch job immediately. If the client sets `wait`, it waits for the job.
 
 ### Upload a binary
 
@@ -122,13 +122,13 @@ The daemon uses a connected session again, or joins a launch in progress, or sta
 
 The client can use a credential only one time.
 The request uses the credential before the daemon reads the first byte.
-The client must start the upload within ten minutes after `ghidra_upload prepare`.
+The client must start the upload within ten minutes after `ghidra_upload_prepare`.
 The daemon does not stop an active upload.
 
 ### Shutdown
 
-These events stop the daemon: Ctrl-C, `SIGTERM`, `SIGHUP`, the equivalent Windows console events, and `ghidra_daemon shutdown`.
-`ghidra-mcp daemon stop` uses `ghidra_daemon shutdown`.
+These events stop the daemon: Ctrl-C, `SIGTERM`, `SIGHUP`, the equivalent Windows console events, and `ghidra_daemon_shutdown`.
+`ghidra-mcp daemon stop` stops the daemon through the local socket.
 The daemon then does these steps:
 
 1. It refuses new work.
@@ -266,7 +266,7 @@ This alias is a symbolic link to the `projects/` directory in the persistent hom
 |---|---|---|
 | MCP tools `ghidra_*` | MCP through stdio, a local socket, Streamable HTTP or legacy SSE. | The operations in `LOCAL_OPERATIONS` and in the bridge contract. `ghidra_help` describes them. |
 | Bridge WebSocket `/ws/agent` | Strict JSON-RPC 2.0 (`jsonrpc.rs`). | `bridge/docs/asyncapi.yaml`, from the bridge build. |
-| Upload `POST /upload` | Raw bytes with a bearer credential. | The result of `ghidra_upload prepare`. |
+| Upload `POST /upload` | Raw bytes with a bearer credential. | The result of `ghidra_upload_prepare`. |
 | `server.json` | JSON with `pid`, `mcpUrl`, `bridgeWsUrl` and `localSocket`. | Local clients read it. |
 | `config.toml` | TOML. | The README and `config.rs`. |
 | Error Envelope | JSON inside MCP `structured_content`. | Standard JSON-RPC error codes (`-32602` to `-32603`) and machine-readable error variants. |
@@ -310,7 +310,7 @@ Do not make it available to other hosts.
   `ghidra_help`, the tool definitions and the validation then include the operation.
 - **A bridge method.** Add the method to the bridge.
   Regenerate the contract after you add the method.
-  The daemon reads the contract at compile time and shows the method in its domain tool.
+  The daemon reads the contract at compile time and publishes a tool for the method.
   For a new domain, add the domain to `DOMAINS` in `src/tools/catalog.rs`.
   If the bridge MCP server puts the method in a different domain, add the same domain and operation names to `bridge_target`.
 - **A session state or a transition.** Add a `mark_*` method to `SessionRecord` in `model.rs`.

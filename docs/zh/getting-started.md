@@ -204,40 +204,33 @@ claude mcp get ghidra-mcp
 
 ## 首次分析过程
 
-守护进程提供 `ghidra_help`，并为每个领域提供一个 MCP 工具。
-每个领域工具接受一个 `operation` 及其 `params`。
-指定一个会话的操作还接受该会话的 `md5`。
-本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
+守护进程提供 `ghidra_help`，并为每个操作提供一个扁平 MCP 工具。
+每个操作工具都在 `tools/list` 中发布完整的类型化 `inputSchema`。
+指定一个会话的操作在顶层接受该会话的 `md5`。
+操作需要 `md5` 时，请使用文件摘要或已有会话的 MD5，格式为 32 位十六进制字符。
 
-首次调用某个操作前，使用其领域和操作名调用 `ghidra_help`。
-例如，使用以下参数调用 `ghidra_help`：
+您也可以用 `ghidra_help` 查看任意领域或操作的说明：
 
 ```json
-{ "domain": "ghidra_memory", "operation": "read" }
+{ "domain": "ghidra_memory_read" }
 ```
-
-结果中的 `inputSchema` 描述 `params` 的内容，`md5` 规则描述顶层参数。
-对于 `read`，将 `address` 放在 `params.selector` 中。可选的 `length` 放在 `params` 中，默认为 256 字节。
-操作需要 `md5` 时，请使用文件摘要或已有会话的 MD5，格式为 32 位十六进制字符。
 
 ### 1. 打开二进制会话
 
-使用 `ghidra_session` 打开本地二进制文件：
+使用 `ghidra_session_open` 打开本地二进制文件：
 
 ```json
 {
-  "operation": "open",
-  "params": { "path": "/path/to/target_binary" }
+  "path": "/path/to/target_binary"
 }
 ```
 
 守护进程计算 MD5 哈希并将二进制文件复制到持久存储中。
 调用返回一个启动作业记录。
-使用 `ghidra_session` 检查会话状态：
+使用 `ghidra_session_get` 检查会话状态：
 
 ```json
 {
-  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
@@ -246,11 +239,10 @@ claude mcp get ghidra-mcp
 
 ### 2. 启动后台分析
 
-使用 `ghidra_analysis` 在打开的二进制文件上启动自动分析：
+使用 `ghidra_analysis_start` 在打开的二进制文件上启动自动分析：
 
 ```json
 {
-  "operation": "start",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
@@ -259,21 +251,20 @@ claude mcp get ghidra-mcp
 
 ### 3. 轮询作业进度
 
-使用 `ghidra_job` 以 500 毫秒间隔轮询作业状态：
+使用 `ghidra_job_get` 以 500 毫秒间隔轮询作业状态：
 
 ```json
 {
-  "operation": "get",
-  "params": { "jobId": "job-12345" }
+  "jobId": "job-12345"
 }
 ```
 
-或者，阻塞等待作业完成：
+或者，使用 `ghidra_job_wait` 阻塞等待作业完成：
 
 ```json
 {
-  "operation": "wait",
-  "params": { "jobId": "job-12345", "timeoutMs": 60000 }
+  "jobId": "job-12345",
+  "timeoutMs": 60000
 }
 ```
 
@@ -281,31 +272,28 @@ claude mcp get ghidra-mcp
 
 ### 4. 检查符号与反编译
 
-使用 `ghidra_function` 列出二进制文件中的函数：
+使用 `ghidra_function_list` 列出二进制文件中的函数：
 
 ```json
 {
-  "operation": "list",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-使用 `ghidra_symbol` 检查符号：
+使用 `ghidra_symbol_list` 检查符号：
 
 ```json
 {
-  "operation": "list",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-使用 `ghidra_decompilation` 在入口点反编译函数：
+使用 `ghidra_decompilation_get` 在入口点反编译函数：
 
 ```json
 {
-  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef",
-  "params": { "selector": { "entry": "ram:140001000" } }
+  "selector": { "entry": "ram:140001000" }
 }
 ```
 
@@ -313,20 +301,18 @@ claude mcp get ghidra-mcp
 
 ### 5. 保存更改与关闭
 
-使用 `ghidra_program` 将程序更改保存到 Ghidra 项目中：
+使用 `ghidra_program_save` 将程序更改保存到 Ghidra 项目中：
 
 ```json
 {
-  "operation": "save",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-使用 `ghidra_session` 关闭活动会话：
+使用 `ghidra_session_close` 关闭活动会话：
 
 ```json
 {
-  "operation": "close",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```

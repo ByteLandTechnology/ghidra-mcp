@@ -69,6 +69,46 @@ fn no_params() -> Value {
     json!({ "type": "object", "properties": {}, "additionalProperties": false })
 }
 
+/// Fails at compile time if a local operation parameter uses reserved `md5`.
+const fn assert_not_md5(name: &str) {
+    let bytes = name.as_bytes();
+    assert!(
+        !(bytes.len() == 3 && bytes[0] == b'm' && bytes[1] == b'd' && bytes[2] == b'5'),
+        "local operation schema defines reserved top-level property `md5`"
+    );
+}
+
+/// Builds a closed parameter schema after a compile-time `md5` collision check.
+macro_rules! params_schema {
+    (
+        properties: { $($key:literal : $schema:tt),* $(,)? }
+        $(, required: [ $($req:literal),* $(,)? ])?
+    ) => {{
+        const {
+            $(assert_not_md5($key);)*
+        }
+        json!({
+            "type": "object",
+            "properties": { $($key: $schema),* },
+            $( "required": [ $($req),* ], )?
+            "additionalProperties": false
+        })
+    }};
+}
+
+/// Builds an extension parameter schema after a compile-time `md5` collision check.
+macro_rules! extension_schema {
+    (properties: { $($key:literal : $schema:tt),* $(,)? }) => {{
+        const {
+            $(assert_not_md5($key);)*
+        }
+        json!({
+            "type": "object",
+            "properties": { $($key: $schema),* }
+        })
+    }};
+}
+
 /// All local operations, in the sequence of `ghidra_help`.
 pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
     LocalOperation {
@@ -76,20 +116,18 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         name: "open",
         description: concat!(
             "Open or reuse a binary session without auto-analysis. Set md5 to load an active ",
-            "or saved project, or params.path to import a daemon-local file. Returns at once ",
+            "or saved project, or path to import a daemon-local file. Returns at once ",
             "by default. Set wait=true to wait until ready. Upload remote files with ",
-            "ghidra_upload prepare."
+            "ghidra_upload_prepare."
         ),
         schema: || {
-            json!({
-                "type": "object",
-                "properties": {
+            params_schema!(
+                properties: {
                     "path": { "type": "string" },
                     "wait": { "type": "boolean", "default": false },
                     "timeoutMs": { "type": "integer", "minimum": 1 }
-                },
-                "additionalProperties": false
-            })
+                }
+            )
         },
         md5: Md5Rule::Optional,
         // An open with `path` imports the binary into a new Ghidra program.
@@ -151,13 +189,11 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         name: "close",
         description: "Close an active session.",
         schema: || {
-            json!({
-                "type": "object",
-                "properties": {
+            params_schema!(
+                properties: {
                     "force": { "type": "boolean", "default": false }
-                },
-                "additionalProperties": false
-            })
+                }
+            )
         },
         md5: Md5Rule::Required,
         basis: Basis::Own(Effects {
@@ -192,9 +228,8 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
             "Set fileName to a name without a directory. Set size to the exact file size in bytes."
         ),
         schema: || {
-            json!({
-                "type": "object",
-                "properties": {
+            params_schema!(
+                properties: {
                     "fileName": {
                         "type": "string",
                         "minLength": 1,
@@ -209,9 +244,8 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
                         "description": "The exact file size in bytes"
                     }
                 },
-                "required": ["fileName", "size"],
-                "additionalProperties": false
-            })
+                required: ["fileName", "size"]
+            )
         },
         md5: Md5Rule::Required,
         basis: Basis::Own(Effects {
@@ -235,12 +269,10 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         name: "get",
         description: "Get one background job by ID.",
         schema: || {
-            json!({
-                "type": "object",
-                "properties": { "jobId": { "type": "string" } },
-                "required": ["jobId"],
-                "additionalProperties": false
-            })
+            params_schema!(
+                properties: { "jobId": { "type": "string" } },
+                required: ["jobId"]
+            )
         },
         md5: Md5Rule::Absent,
         basis: Basis::Own(READ),
@@ -257,15 +289,13 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         name: "wait",
         description: "Wait for a background job to finish.",
         schema: || {
-            json!({
-                "type": "object",
-                "properties": {
+            params_schema!(
+                properties: {
                     "jobId": { "type": "string" },
                     "timeoutMs": { "type": "integer", "minimum": 1 }
                 },
-                "required": ["jobId"],
-                "additionalProperties": false
-            })
+                required: ["jobId"]
+            )
         },
         md5: Md5Rule::Absent,
         basis: Basis::Own(READ),
@@ -316,13 +346,11 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
             "Get approval from the user before you use this operation."
         ),
         schema: || {
-            json!({
-                "type": "object",
-                "properties": {
+            params_schema!(
+                properties: {
                     "force": { "type": "boolean", "default": false }
-                },
-                "additionalProperties": false
-            })
+                }
+            )
         },
         md5: Md5Rule::Absent,
         basis: Basis::Own(Effects {
@@ -343,13 +371,12 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
             "Set wait=true to block until analysis completes."
         ),
         schema: || {
-            json!({
-                "type": "object",
-                "properties": {
+            extension_schema!(
+                properties: {
                     "wait": { "type": "boolean", "default": false },
                     "timeoutMs": { "type": "integer", "minimum": 1 }
                 }
-            })
+            )
         },
         md5: Md5Rule::Required,
         basis: Basis::Extends("analysis.start"),
@@ -511,6 +538,7 @@ async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
     let wait = args
         .wait
         .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
+    let label = request.label;
     match (args.path, request.md5) {
         (Some(path), None) => {
             let raw = PathBuf::from(path);
@@ -536,12 +564,12 @@ async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
         (None, Some(md5)) => session::open(state, md5, None, wait).await,
         (None, None) => Err(DomainError::invalid_argument(
             "path/md5",
-            "`ghidra_session open` requires either params.path or md5",
+            format!("`{label}` requires either path or md5"),
         )
         .into()),
         (Some(_), Some(_)) => Err(DomainError::invalid_argument(
             "path/md5",
-            "`ghidra_session open` accepts either params.path or md5, not both",
+            format!("`{label}` accepts either path or md5, not both"),
         )
         .into()),
     }

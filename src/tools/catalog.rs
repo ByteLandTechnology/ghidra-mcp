@@ -8,9 +8,10 @@
 //! methods use the same domains and operation names as the MCP server of the
 //! bridge (`McpToolRegistry` in the bridge repository).
 //!
-//! Each operation has the effects of the bridge contract, and a rule for the
-//! `md5` argument of the tool. An operation that names one session takes the
-//! MD5 of that session in `md5`, never in `params`.
+//! `tools/list` publishes `ghidra_help` and one flat tool for each operation,
+//! such as `ghidra_decompilation_get`. Each operation tool merges its top-level
+//! `md5` field with the operation properties based on [`Md5Rule`]. Legacy
+//! `ghidra_<domain>` names remain available in `tools/call`.
 
 use super::local::{Basis, LocalOperation, LOCAL_OPERATIONS};
 use super::Handler;
@@ -18,6 +19,7 @@ use crate::error::DomainError;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 /// The prefix of all tool names.
@@ -26,37 +28,27 @@ pub(super) const TOOL_PREFIX: &str = "ghidra_";
 /// The name of the help tool.
 pub(super) const HELP_TOOL: &str = "ghidra_help";
 
-/// The domains in the sequence of `tools/list`, with the purpose that the tool
-/// description shows. The domains of the bridge have the sequence of the bridge
-/// MCP server.
-const DOMAINS: &[(&str, &str)] = &[
-    (
-        "session",
-        "to open, list, examine, and close the binary sessions of the daemon",
-    ),
-    (
-        "upload",
-        "to send a binary from a remote client to the daemon",
-    ),
-    ("job", "to examine background jobs and to wait for them"),
-    ("daemon", "to examine the shared daemon and to stop it"),
-    ("bridge", "for the Ghidra bridge of a session"),
-    ("program", "for program data"),
-    ("address", "for address data"),
-    ("memory", "for memory data"),
-    (
-        "listing",
-        "for code units, instructions, and flow overrides",
-    ),
-    ("global_variable", "for global variable data"),
-    ("function", "for function data"),
-    ("analysis", "for auto-analysis"),
-    ("decompilation", "for decompilation data"),
-    ("symbol", "for symbol data"),
-    ("reference", "for reference data"),
-    ("comment", "for comment data"),
-    ("data_type", "for data type data"),
-    ("batch", "for batch data"),
+/// The domains in the sequence of `tools/list`. The domains of the bridge have
+/// the sequence of the bridge MCP server.
+const DOMAINS: &[&str] = &[
+    "session",
+    "upload",
+    "job",
+    "daemon",
+    "bridge",
+    "program",
+    "address",
+    "memory",
+    "listing",
+    "global_variable",
+    "function",
+    "analysis",
+    "decompilation",
+    "symbol",
+    "reference",
+    "comment",
+    "data_type",
+    "batch",
 ];
 
 /// The catalog. The daemon makes it one time, at its first use.
@@ -97,18 +89,16 @@ pub(super) enum Md5Rule {
     Absent,
 }
 
-/// A group of operations. Each domain is one MCP tool.
+/// A group of operations. Legacy `ghidra_<domain>` calls dispatch by domain.
 pub(super) struct Domain {
     /// The domain name, for example `function`.
     pub name: &'static str,
-    /// The purpose that the tool description shows.
-    purpose: &'static str,
-    /// The operations, in the sequence of `ghidra_help` and of the tool definition.
+    /// The operations, in the sequence of `ghidra_help` and `tools/list`.
     pub operations: Vec<Operation>,
 }
 
 impl Domain {
-    /// Returns the MCP tool name of the domain.
+    /// Returns the legacy domain tool name, for example `ghidra_function`.
     pub fn tool(&self) -> String {
         format!("{TOOL_PREFIX}{}", self.name)
     }
@@ -132,90 +122,15 @@ impl Domain {
             DomainError::missing_target(name, format!("unknown operation of {tool}: {name}")).into()
         })
     }
-
-    /// Returns `true` if each operation obeys `predicate`.
-    fn all(&self, predicate: impl Fn(&Operation) -> bool) -> bool {
-        self.operations.iter().all(predicate)
-    }
-
-    /// Returns `true` if one or more operations obey `predicate`.
-    fn any(&self, predicate: impl Fn(&Operation) -> bool) -> bool {
-        self.operations.iter().any(predicate)
-    }
-
-    /// Returns the MCP tool definition of the domain.
-    fn definition(&self) -> Value {
-        let names: Vec<&str> = self
-            .operations
-            .iter()
-            .map(|operation| operation.name.as_str())
-            .collect();
-        let mut description = format!(
-            "Use this tool {}. Select an operation: {}. Before your first call to an operation, \
-             call \
-             {HELP_TOOL} with domain=\"{}\" and the operation name. Read its inputSchema for \
-             the required fields, types, and nested objects in params. Do not guess fields.",
-            self.purpose,
-            names.join(", "),
-            self.tool()
-        );
-        let mut properties = Map::new();
-        properties.insert(
-            "operation".into(),
-            json!({ "type": "string", "description": "The operation to perform", "enum": names }),
-        );
-        let mut required = vec!["operation"];
-        if self.any(|operation| operation.md5 != Md5Rule::Absent) {
-            properties.insert(
-                "md5".into(),
-                json!({
-                    "type": "string",
-                    "description": concat!(
-                        "The binary MD5: exactly 32 hexadecimal characters. Use the actual ",
-                        "file digest or the MD5 of an existing session, not a name or label."
-                    )
-                }),
-            );
-            if self.all(|operation| operation.md5 == Md5Rule::Required) {
-                description.push_str(" Set md5 to the MD5 of the session.");
-                required.push("md5");
-            } else {
-                description.push_str(" Set md5 when the operation names a session. ");
-                description.push_str(HELP_TOOL);
-                description.push_str(" shows the md5 rule of each operation.");
-            }
-        }
-        properties.insert(
-            "params".into(),
-            json!({
-                "type": "object",
-                "description": concat!(
-                    "The parameters for the selected operation. If you do not have its schema, ",
-                    "call ghidra_help with the domain and operation before you set parameters."
-                )
-            }),
-        );
-        json!({
-            "name": self.tool(),
-            "description": description,
-            "inputSchema": { "type": "object", "properties": properties, "required": required },
-            "annotations": {
-                "readOnlyHint": self.all(|operation| operation.effects.read_only),
-                "destructiveHint": self.any(|operation| operation.effects.destructive),
-                "idempotentHint": self.all(|operation| operation.effects.idempotent),
-                "openWorldHint": false
-            }
-        })
-    }
 }
 
 /// One operation of a domain.
 pub(super) struct Operation {
     /// The operation name in the domain, for example `parameter.create`.
     pub name: String,
-    /// The description that `ghidra_help` shows.
+    /// The description that `tools/list` and `ghidra_help` show.
     pub description: String,
-    /// The JSON Schema of `params`.
+    /// The JSON Schema of the operation parameters (without `md5`).
     pub schema: Value,
     /// The rule for the `md5` argument.
     pub md5: Md5Rule,
@@ -238,14 +153,27 @@ pub(super) fn domains() -> &'static [Domain] {
     &CATALOG
 }
 
-/// Returns the domain of an exact tool name, for example `ghidra_function`.
+/// Returns the domain and operation of a per-operation tool name, such as
+/// `ghidra_decompilation_get`.
+pub(super) fn operation_of_tool(tool: &str) -> Option<(&'static Domain, &'static Operation)> {
+    for domain in CATALOG.iter() {
+        for operation in &domain.operations {
+            if operation.tool(domain.name) == tool {
+                return Some((domain, operation));
+            }
+        }
+    }
+    None
+}
+
+/// Returns the domain of an exact legacy domain tool name, such as `ghidra_function`.
 pub(super) fn domain_of_tool(tool: &str) -> Option<&'static Domain> {
     let name = tool.strip_prefix(TOOL_PREFIX)?;
     CATALOG.iter().find(|domain| domain.name == name)
 }
 
-/// Returns the domain of a tool name, or of a domain name without the prefix.
-/// `ghidra_help` accepts the two forms.
+/// Returns the domain of a legacy domain tool name, or of a domain name without
+/// the prefix. `ghidra_help` accepts the two forms.
 pub(super) fn domain(name: &str) -> Option<&'static Domain> {
     domain_of_tool(name).or_else(|| CATALOG.iter().find(|domain| domain.name == name))
 }
@@ -262,7 +190,7 @@ fn bridge_target(method: &str) -> Option<(&'static str, String)> {
     let target = match prefix {
         // The bridge MCP server also does not show the contract.
         "interface" => return None,
-        // `ghidra_session close` stops the bridge with the lifecycle lock and
+        // `ghidra_session_close` stops the bridge with the lifecycle lock and
         // records the new session status. A direct stop does not.
         "session" if operation == "shutdown" => return None,
         "session" => ("bridge", operation.to_string()),
@@ -276,7 +204,7 @@ fn bridge_target(method: &str) -> Option<(&'static str, String)> {
         "function_parameter" => ("function", format!("parameter.{operation}")),
         "function_local_variable" => ("function", format!("local_variable.{operation}")),
         "data_type_category" => ("data_type", format!("category.{operation}")),
-        _ => (DOMAINS[domain_index(prefix)].0, operation.to_string()),
+        _ => (DOMAINS[domain_index(prefix)], operation.to_string()),
     };
     Some(target)
 }
@@ -289,7 +217,7 @@ fn bridge_target(method: &str) -> Option<(&'static str, String)> {
 fn domain_index(name: &str) -> usize {
     DOMAINS
         .iter()
-        .position(|(domain, _)| *domain == name)
+        .position(|domain| *domain == name)
         .unwrap_or_else(|| panic!("domain `{name}` is not in the domain table"))
 }
 
@@ -303,13 +231,13 @@ fn bridge_effects(method: &str, contract: &Value) -> Effects {
         .unwrap_or_else(|error| panic!("effects of bridge method `{method}`: {error}"))
 }
 
-/// Returns the operation names of each tool of the bridge MCP server, in the
-/// sequence of that server, by tool name.
+/// Returns the tool names of the bridge MCP server in the sequence of
+/// `bridge/docs/mcp-tools.json`.
 ///
 /// # Panics
 ///
 /// Panics if the tool contract of the bridge is not valid.
-fn bridge_tool_operations() -> Vec<(String, Vec<String>)> {
+fn bridge_tool_sequence() -> Vec<String> {
     // The bridge build makes this contract. It gives the operation sequence,
     // which the method contract does not keep.
     let contract: Value = serde_json::from_str(include_str!("../../bridge/docs/mcp-tools.json"))
@@ -318,33 +246,25 @@ fn bridge_tool_operations() -> Vec<(String, Vec<String>)> {
         .as_array()
         .expect("bridge MCP tools")
         .iter()
-        .filter_map(|tool| {
-            let names = tool["inputSchema"]["properties"]["operation"]["enum"].as_array()?;
-            let names = names
-                .iter()
-                .map(|name| name.as_str().expect("bridge operation name").to_string());
-            Some((
-                tool["name"].as_str().expect("bridge tool name").to_string(),
-                names.collect(),
-            ))
-        })
+        .map(|tool| tool["name"].as_str().expect("bridge tool name").to_string())
+        .filter(|name| name != HELP_TOOL)
         .collect()
 }
 
 /// Makes the catalog. The local operations come first, then the bridge
-/// methods. The operations of a domain of the bridge MCP server then get the
+/// methods. Operations that match tools of the bridge MCP server get the
 /// sequence of that server.
 ///
 /// # Panics
 ///
-/// Panics if the local operations or the bridge contracts are not consistent,
-/// for example for an unknown domain or a duplicate operation.
+/// Panics if the local operations or the bridge contracts are not consistent.
+/// Examples include an unknown domain, a duplicate tool name, or an `md5`
+/// property collision.
 fn build() -> Vec<Domain> {
     let mut domains: Vec<Domain> = DOMAINS
         .iter()
-        .map(|&(name, purpose)| Domain {
+        .map(|&name| Domain {
             name,
-            purpose,
             operations: Vec::new(),
         })
         .collect();
@@ -384,17 +304,38 @@ fn build() -> Vec<Domain> {
         };
         add(domain, operation);
     }
-    for (tool, sequence) in bridge_tool_operations() {
-        let Some(domain) = domains.iter_mut().find(|domain| domain.tool() == tool) else {
-            continue;
+    let sequence = bridge_tool_sequence();
+    for domain in &mut domains {
+        let domain_name = domain.name;
+        let position = |operation: &Operation| {
+            let tool_name = operation.tool(domain_name);
+            sequence.iter().position(|item| item == &tool_name)
         };
-        let position = |name: &str| sequence.iter().position(|item| item == name);
         // An operation that the bridge does not show goes last.
         domain
             .operations
-            .sort_by_key(|operation| position(&operation.name).unwrap_or(usize::MAX));
+            .sort_by_key(|operation| position(operation).unwrap_or(usize::MAX));
     }
     domains.retain(|domain| !domain.operations.is_empty());
+
+    let mut published = BTreeSet::from([HELP_TOOL.to_string()]);
+    for domain in &domains {
+        for operation in &domain.operations {
+            let tool_name = operation.tool(domain.name);
+            assert!(
+                published.insert(tool_name.clone()),
+                "duplicate tool name `{tool_name}`"
+            );
+            let _ = merge_input_schema(&tool_name, operation.md5, &operation.schema);
+        }
+    }
+    for domain in &domains {
+        let legacy = domain.tool();
+        assert!(
+            !published.contains(&legacy),
+            "legacy domain tool `{legacy}` collides with an operation tool"
+        );
+    }
     domains
 }
 
@@ -436,27 +377,94 @@ fn local_operation(local: &LocalOperation) -> Operation {
     }
 }
 
-/// Returns the MCP tool definitions: `ghidra_help`, then one tool for each domain.
+/// Returns `true` if `value` contains a nested JSON Schema `$ref`.
+fn contains_ref(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().any(contains_ref),
+        Value::Object(map) => map.contains_key("$ref") || map.values().any(contains_ref),
+        _ => false,
+    }
+}
+
+/// Merges the top-level `md5` property with the parameter schema of one
+/// operation.
+///
+/// # Panics
+///
+/// Panics if `schema` is not an object schema with `properties`, or if `schema`
+/// defines a top-level `md5` property.
+pub(super) fn merge_input_schema(tool_name: &str, md5_rule: Md5Rule, schema: &Value) -> Value {
+    let op_properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("operation `{tool_name}` schema has no `properties` object"));
+    assert!(
+        !op_properties.contains_key("md5"),
+        "operation `{tool_name}` defines reserved top-level property `md5`"
+    );
+
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+    if md5_rule != Md5Rule::Absent {
+        properties.insert(
+            "md5".into(),
+            json!({
+                "type": "string",
+                "description": concat!(
+                    "The binary MD5: exactly 32 hexadecimal characters. Use the actual ",
+                    "file digest or the MD5 of an existing session, not a name or label."
+                )
+            }),
+        );
+        if md5_rule == Md5Rule::Required {
+            required.push(json!("md5"));
+        }
+    }
+    for (field, field_schema) in op_properties {
+        properties.insert(field.clone(), field_schema.clone());
+    }
+    if let Some(op_required) = schema.get("required").and_then(Value::as_array) {
+        required.extend(op_required.iter().cloned());
+    }
+
+    let properties_value = Value::Object(properties);
+    let mut merged = Map::new();
+    merged.insert("type".into(), json!("object"));
+    if contains_ref(&properties_value) {
+        if let Some(defs) = schema.get("$defs") {
+            merged.insert("$defs".into(), defs.clone());
+        }
+    }
+    merged.insert("properties".into(), properties_value);
+    if !required.is_empty() {
+        merged.insert("required".into(), Value::Array(required));
+    }
+    Value::Object(merged)
+}
+
+/// Returns the MCP tool definitions: `ghidra_help`, then one flat tool for each
+/// operation.
 pub fn tool_definitions() -> Vec<Value> {
     let mut tools = vec![json!({
         "name": HELP_TOOL,
         "description": concat!(
-            "Get the domain tools, the operations of one domain, or the parameter schema, ",
-            "the md5 rule and the effects of one operation. Before the first call to an ",
-            "operation, set domain to its tool name and operation to its name. The returned ",
-            "inputSchema describes params, not the top-level tool arguments. Pass no ",
-            "arguments to list the domain tools."
+            "Get the domains, the operations of one domain, or the parameter schema, md5 ",
+            "rule, and effects of one operation. Pass no arguments to list the domains. Set ",
+            "domain to a domain name, or set domain to a tool name."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "domain": {
                     "type": "string",
-                    "description": "A domain tool name, such as ghidra_function, or a domain name"
+                    "description": concat!(
+                        "A domain name, such as function, or a tool name, such as ",
+                        "ghidra_function_list"
+                    )
                 },
                 "operation": {
                     "type": "string",
-                    "description": "An operation of the domain. Requires domain."
+                    "description": "An operation name in the domain, such as list"
                 }
             }
         },
@@ -467,11 +475,37 @@ pub fn tool_definitions() -> Vec<Value> {
             "openWorldHint": false
         }
     })];
-    tools.extend(CATALOG.iter().map(Domain::definition));
+    for domain in CATALOG.iter() {
+        for operation in &domain.operations {
+            tools.push(operation.definition(domain.name));
+        }
+    }
     tools
 }
 
 impl Operation {
+    /// Returns the MCP tool name of this operation in `domain`.
+    pub fn tool(&self, domain: &str) -> String {
+        format!("{TOOL_PREFIX}{domain}_{}", self.name.replace('.', "_"))
+    }
+
+    /// Returns the flat MCP tool definition of this operation in `domain`.
+    fn definition(&self, domain: &str) -> Value {
+        let name = self.tool(domain);
+        let input_schema = merge_input_schema(&name, self.md5, &self.schema);
+        json!({
+            "name": name,
+            "description": self.description,
+            "inputSchema": input_schema,
+            "annotations": {
+                "readOnlyHint": self.effects.read_only,
+                "destructiveHint": self.effects.destructive,
+                "idempotentHint": self.effects.idempotent,
+                "openWorldHint": false
+            }
+        })
+    }
+
     /// Examines the `md5` argument against the md5 rule of the operation.
     /// `label` identifies the operation in the error messages.
     ///
@@ -518,10 +552,7 @@ impl Operation {
                 .join(", ");
             return Err(DomainError::invalid_argument(
                 *field,
-                format!(
-                    "`{label}` requires parameter `{field}`. Missing parameters: {fields}. \
-                     Call {HELP_TOOL} with the domain and operation to get the params schema"
-                ),
+                format!("`{label}` requires parameter `{field}`. Missing parameters: {fields}."),
             )
             .into());
         }

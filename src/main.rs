@@ -22,7 +22,7 @@
 //! | Layer | Modules |
 //! |---|---|
 //! | Front ends | [`cli`], [`daemon`], [`mcp`], [`mcp_http`], [`upload`] |
-//! | Tools | [`tools`] (`ghidra_help` and the domain tools) |
+//! | Tools | [`tools`] (`ghidra_help` and the operation tools) |
 //! | Domain | [`session`], [`analysis`], [`project`] |
 //! | Bridge | [`bridge`], [`jsonrpc`] |
 //! | State | [`state`], [`model`] |
