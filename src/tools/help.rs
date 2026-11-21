@@ -1,10 +1,10 @@
 // Copyright 2026 ByteLand Technology Limited
 // SPDX-License-Identifier: MIT
 
-//! The `ghidra_help` tool: the domain tools, the operations of one domain, and
-//! the parameter schema, the md5 rule and the effects of one operation.
+//! The `ghidra_help` tool: the domains, the operations of one domain, and the
+//! parameter schema, the md5 rule and the effects of one operation.
 
-use super::catalog::{self, HELP_TOOL};
+use super::catalog::{self, Domain, Operation, HELP_TOOL};
 use super::{parse, Output};
 use crate::error::DomainError;
 use anyhow::Result;
@@ -15,10 +15,28 @@ use serde_json::{json, Map, Value};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HelpArgs {
-    /// A domain tool name or a domain name.
+    /// A domain name, a legacy domain tool name, or an operation tool name.
     domain: Option<String>,
     /// An operation of the domain.
     operation: Option<String>,
+}
+
+/// Formats the help result of one operation.
+fn operation_help(domain: &Domain, operation: &Operation) -> Output {
+    let domain_tool = domain.tool();
+    let operation_name = &operation.name;
+    (
+        format!("Help for {domain_tool} {operation_name}"),
+        json!({
+            "domain": domain_tool,
+            "operation": operation.name,
+            "tool": operation.tool(domain.name),
+            "description": operation.description,
+            "md5": operation.md5,
+            "effects": operation.effects,
+            "inputSchema": operation.schema
+        }),
+    )
 }
 
 /// Runs `ghidra_help`.
@@ -38,15 +56,17 @@ pub(super) fn run(arguments: Map<String, Value>) -> Result<Output> {
             )
             .into());
         }
-        let tools: Vec<String> = catalog::domains()
-            .iter()
-            .map(catalog::Domain::tool)
-            .collect();
+        let tools: Vec<String> = catalog::domains().iter().map(Domain::tool).collect();
         return Ok((
             format!("Found {} domain tool(s)", tools.len()),
             json!({ "domains": tools }),
         ));
     };
+    if args.operation.is_none() {
+        if let Some((domain, operation)) = catalog::operation_of_tool(&name) {
+            return Ok(operation_help(domain, operation));
+        }
+    }
     let domain = catalog::domain(&name).ok_or_else(|| {
         DomainError::missing_target(name.clone(), format!("unknown domain: {name}"))
     })?;
@@ -58,6 +78,7 @@ pub(super) fn run(arguments: Map<String, Value>) -> Result<Output> {
             .map(|operation| {
                 json!({
                     "name": operation.name,
+                    "tool": operation.tool(domain.name),
                     "description": operation.description,
                     "md5": operation.md5,
                     "effects": operation.effects
@@ -70,15 +91,5 @@ pub(super) fn run(arguments: Map<String, Value>) -> Result<Output> {
         ));
     };
     let operation = domain.require_operation(&operation_name)?;
-    Ok((
-        format!("Help for {tool} {operation_name}"),
-        json!({
-            "domain": tool,
-            "operation": operation.name,
-            "description": operation.description,
-            "md5": operation.md5,
-            "effects": operation.effects,
-            "inputSchema": operation.schema
-        }),
-    ))
+    Ok(operation_help(domain, operation))
 }

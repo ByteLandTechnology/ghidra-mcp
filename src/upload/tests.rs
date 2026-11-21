@@ -45,8 +45,23 @@ fn request(method: Method, path: &str, body: &Value) -> Request {
         .unwrap()
 }
 
-/// Makes a valid upload preparation message.
+/// Makes a valid flat upload preparation message.
 fn prepare(id: u32) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": {
+            "name": "ghidra_upload_prepare",
+            "arguments": {
+                "md5": "0123456789abcdef0123456789abcdef",
+                "fileName": "program.bin",
+                "size": 1024
+            }
+        }
+    })
+}
+
+/// Makes a valid legacy upload preparation message.
+fn prepare_legacy(id: u32) -> Value {
     json!({
         "jsonrpc": "2.0", "id": id, "method": "tools/call",
         "params": {
@@ -139,11 +154,24 @@ async fn returns_absolute_upload_urls_over_http() {
     }))
     .await;
 
+    let legacy_response = app
+        .oneshot(request(Method::POST, "/mcp", &prepare_legacy(9)))
+        .await
+        .unwrap();
+    assert_eq!(legacy_response.status(), StatusCode::OK);
+    let legacy_body = axum::body::to_bytes(legacy_response.into_body(), 4096)
+        .await
+        .unwrap();
+    check_result(
+        &serde_json::from_slice(&legacy_body).unwrap(),
+        "http://127.0.0.1:18489/upload",
+    );
+
     let arguments = prepare(1)["params"]["arguments"]
         .as_object()
         .unwrap()
         .clone();
-    let result = server.call("ghidra_upload".into(), arguments).await;
+    let result = server.call("ghidra_upload_prepare".into(), arguments).await;
     let structured = result.structured_content.unwrap();
     assert_eq!(structured["url"], "upload");
     let content: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();

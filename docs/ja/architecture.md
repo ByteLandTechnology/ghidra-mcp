@@ -59,7 +59,7 @@ Unix では、ローカルソケットは Unix ドメインソケットです。
 | `mcp` | MCP ハンドラー。デーモン内で呼び出しを実行するか、プロキシからデーモンに呼び出しを送ります。 |
 | `mcp_http` | Streamable HTTP、旧式 SSE セッション、CORS、HTTP 互換性。 |
 | `upload` | アップロード資格情報と `POST /upload` エンドポイント。 |
-| `tools` | MCP ツール：ドメインカタログ、ローカル操作、呼び出しの検証、`ghidra_help`。 |
+| `tools` | MCP ツール：操作カタログ、ローカル操作、呼び出しの検証、`ghidra_help`。 |
 | `session` | セッションのオープン、起動、待機、再起動、呼び出し、クローズ。 |
 | `analysis` | バックグラウンドジョブとしての自動解析。 |
 | `project` | 保存済みのバイナリと Ghidra プロジェクトの準備。 |
@@ -80,16 +80,17 @@ Unix では、ローカルソケットは Unix ドメインソケットです。
 
 ![ツール呼び出しの流れ](../img/tool_call.svg)
 
-デーモンは `ghidra_help` と、ドメインごとに 1 つの MCP ツール（例：`ghidra_function`）を提供します。
-ブリッジのドメインツールは、ブリッジ MCP サーバーのドメイン名と操作名を使用します。
-デーモンにはローカル操作もありますが、ブリッジの shutdown 操作は公開しません。
-呼び出しには `operation` とその `params` が含まれます。1 つのセッションを指定する操作には、そのセッションの `md5` も含まれます。`md5` は `params` に入れません。
-`ghidra_help` は、各操作の `params` スキーマ、md5 ルール（`required`、`optional`、`absent`）、効果を表示します。
-ドメインツールの説明は、操作を初めて呼び出す前にスキーマを取得するようクライアントに指示します。
-このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。
+デーモンは `ghidra_help` と、操作ごとに 1 つのフラットな MCP ツール（例：`ghidra_function_list`）を提供します。
+ブリッジの操作ツールは、ブリッジ MCP サーバーのアンダースコア区切りの名前を使用します。
+デーモンにはローカルの操作ツールもあり、`ghidra_bridge_shutdown` は公開しません。
+互換性のため、`tools/call` は `(operation, md5, params)` を持つ従来の `ghidra_<domain>` 呼び出しも受け付けます。
 
-`tools::call` はカタログ（`tools/catalog.rs`）でドメインと操作を探します。
-`params` のトップレベルの必須フィールドを確認し、スキーマが許可しない追加のトップレベルフィールドを拒否します。
+各操作ツールは、トップレベルで直接パラメータフィールドを受け取ります。
+1 つのセッションを指定する操作は、トップレベルで `md5` も受け取ります。
+`ghidra_help` は、各操作のパラメータスキーマ、md5 ルール（`required`、`optional`、`absent`）、効果を表示します。
+
+`tools::call` はカタログ（`tools/catalog.rs`）で操作を探します。
+トップレベルの必須フィールドを確認し、スキーマが許可しない追加のトップレベルフィールドを拒否します。
 その他のパラメータは、ローカルハンドラーとブリッジが確認します。
 次に、以下のいずれかを行います：
 
@@ -105,12 +106,12 @@ MCP ハンドラーはエラーを型付けされた `DomainError` と JSON-RPC 
 
 ### バイナリを開く
 
-`ghidra_session open` は、デーモンホスト上の `path`、またはデーモンが以前に保存したバイナリの `md5` を受け付けます。
+`ghidra_session_open` は、デーモンホスト上の `path`、またはデーモンが以前に保存したバイナリの `md5` を受け付けます。
 パスの場合、デーモンは MD5 を計算し、ファイルを永続ホームにコピーします。
 その後の呼び出しには MD5 だけが必要です。
 デーモンは、接続済みのセッションを再利用するか、進行中の起動に参加するか、新しい起動を開始します。
 起動については[セッションのライフサイクル](#セッションのライフサイクル)で説明します。
-`ghidra_session open` は起動ジョブをすぐに返します。クライアントが `wait` を設定した場合は、ジョブを待ちます。
+`ghidra_session_open` は起動ジョブをすぐに返します。クライアントが `wait` を設定した場合は、ジョブを待ちます。
 
 ### バイナリのアップロード
 
@@ -118,13 +119,13 @@ MCP ハンドラーはエラーを型付けされた `DomainError` と JSON-RPC 
 
 クライアントは資格情報を 1 回だけ使用できます。
 リクエストは、デーモンが最初のバイトを読む前に資格情報を使用します。
-クライアントは、`ghidra_upload prepare` から 10 分以内にアップロードを開始する必要があります。
+クライアントは、`ghidra_upload_prepare` から 10 分以内にアップロードを開始する必要があります。
 デーモンは、アクティブなアップロードを停止しません。
 
 ### シャットダウン
 
-次のイベントでデーモンは停止します：Ctrl-C、`SIGTERM`、`SIGHUP`、対応する Windows コンソールイベント、および `ghidra_daemon shutdown`。
-`ghidra-mcp daemon stop` は `ghidra_daemon shutdown` を使用します。
+次のイベントでデーモンは停止します：Ctrl-C、`SIGTERM`、`SIGHUP`、対応する Windows コンソールイベント、および `ghidra_daemon_shutdown`。
+`ghidra-mcp daemon stop` はローカルソケット経由でデーモンを停止します。
 その後、デーモンは次の手順を実行します：
 
 1. 新しい作業を拒否します。
@@ -258,7 +259,7 @@ Ghidra は、隠しセグメントを含むプロジェクトパスを受け付�
 |---|---|---|
 | MCP ツール `ghidra_*` | stdio、ローカルソケット、Streamable HTTP、または旧式 SSE による MCP。 | `LOCAL_OPERATIONS` とブリッジ契約にある操作。`ghidra_help` がそれらを説明します。 |
 | ブリッジ WebSocket `/ws/agent` | 厳格な JSON-RPC 2.0（`jsonrpc.rs`）。 | ブリッジのビルドが生成する `bridge/docs/asyncapi.yaml`。 |
-| アップロード `POST /upload` | bearer 資格情報付きの生のバイト列。 | `ghidra_upload prepare` の結果。 |
+| アップロード `POST /upload` | bearer 資格情報付きの生のバイト列。 | `ghidra_upload_prepare` の結果。 |
 | `server.json` | `pid`、`mcpUrl`、`bridgeWsUrl`、`localSocket` を含む JSON。 | ローカルクライアントが読み取ります。 |
 | `config.toml` | TOML。 | README と `config.rs`。 |
 | エラーエンベロープ | MCP `structured_content` 内の JSON。 | 標準 JSON-RPC エラーコード（`-32602` から `-32603`）および機械可読なエラーバリアント。 |
@@ -302,7 +303,7 @@ MCP ツールの定義、操作のスキーマ、ヘルプの出力、応答の�
   これで `ghidra_help`、ツール定義、検証にその操作が含まれます。
 - **ブリッジメソッド。** ブリッジにメソッドを追加します。
   メソッドを追加した後、契約を再生成します。
-  デーモンはコンパイル時に契約を読み込み、そのメソッドをドメインツールで提供します。
+  デーモンはコンパイル時に契約を読み込み、そのメソッドのツールを公開します。
   新しいドメインの場合は、`src/tools/catalog.rs` の `DOMAINS` にドメインを追加します。
   ブリッジの MCP サーバーがメソッドを別のドメインに割り当てる場合は、`bridge_target` に同じドメイン名と操作名を追加します。
 - **セッションの状態または遷移。** `model.rs` の `SessionRecord` に `mark_*` メソッドを追加します。
