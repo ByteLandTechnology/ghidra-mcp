@@ -254,17 +254,51 @@ fn local_operation_extends_its_bridge_method() {
 /// Makes sure that a bridge operation goes to its bridge method.
 #[test]
 fn bridge_operation_uses_its_bridge_method() {
-    let prepared = prepare(
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let (operation, request) = prepare(
         "ghidra_bridge",
-        object(json!({ "operation": "get", "md5": "0123456789abcdef0123456789abcdef" })),
+        object(json!({ "operation": "get", "md5": md5 })),
     )
     .expect("valid call");
-    let (operation, request) = prepared;
     match &operation.route {
         Route::Bridge(method) => assert_eq!(method, "session.get"),
         Route::Local(_) => panic!("ghidra_bridge get must go to the bridge"),
     }
     assert_eq!(request.params, json!({}));
+
+    for (tool, op_name, bridge_method, params) in [
+        (
+            "ghidra_listing",
+            "string.list",
+            "string.list",
+            json!({ "filter": { "regex": "https?://", "include_candidates": true } }),
+        ),
+        (
+            "ghidra_memory",
+            "find",
+            "memory.find",
+            json!({ "filter": { "pattern": "48 8B ?? ??" } }),
+        ),
+    ] {
+        let (op, req) = prepare(
+            tool,
+            object(json!({ "operation": op_name, "md5": md5, "params": params })),
+        )
+        .expect("valid search call");
+        assert!(op.md5 == Md5Rule::Required);
+        assert!(op.effects.read_only);
+        match &op.route {
+            Route::Bridge(method) => assert_eq!(method, bridge_method),
+            Route::Local(_) => panic!("{tool} {op_name} must go to the bridge"),
+        }
+        assert_eq!(req.md5.as_deref(), Some(md5));
+        let (_, schema) =
+            help::run(object(json!({ "domain": tool, "operation": op_name }))).expect("help");
+        assert_eq!(schema["md5"], "required");
+        assert!(schema["inputSchema"]["properties"]["filter"].is_object());
+        assert!(schema["inputSchema"]["properties"]["scan"].is_object());
+        assert!(schema["inputSchema"]["properties"]["page"].is_object());
+    }
 }
 
 /// Makes sure that `md5: null` is the same as no `md5`.

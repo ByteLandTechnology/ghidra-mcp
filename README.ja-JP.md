@@ -510,6 +510,29 @@ ipc_handshake_timeout_sec = 5
 この操作は名前と名前空間だけを変更し、関数シグネチャとデータ型は保持します。
 関数、シンボル、呼び出しの結果は、プログラムを変更せずに `demangled_name` も返します。
 
+文字列を一覧表示または絞り込むには、`ghidra_listing` の `string.list` を使います。
+
+```json
+{
+  "operation": "string.list",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": { "filter": { "regex": "https?://", "include_candidates": true } }
+}
+```
+
+既定では、定義済み文字列とそのエンコーディングを生のバイト列なしで返します。
+`include_candidates` を `true` に設定すると、未定義の初期化済みバイトも走査します。
+
+`??` バイトワイルドカードで初期化済みメモリを検索するには、`ghidra_memory` の `find` を使います。
+
+```json
+{
+  "operation": "find",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": { "filter": { "pattern": "48 8B ?? ??" } }
+}
+```
+
 操作を初めて呼び出す前に、ドメインと操作名を指定して `ghidra_help` を呼び出します。
 返される `inputSchema` は、ツールのトップレベル引数ではなく `params` の内容を説明します。
 呼び出す前に必須フィールドとその入れ子構造を確認します。

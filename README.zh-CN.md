@@ -508,6 +508,29 @@ ipc_handshake_timeout_sec = 5
 该操作只修改名称和命名空间，保留函数签名和数据类型。
 函数、符号与调用结果还会提供 `demangled_name`，且不修改程序。
 
+要列出或筛选字符串，使用 `ghidra_listing` 的 `string.list`：
+
+```json
+{
+  "operation": "string.list",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": { "filter": { "regex": "https?://", "include_candidates": true } }
+}
+```
+
+默认情况下，该操作返回已定义字符串及其编码，不包含原始字节。
+将 `include_candidates` 设为 `true` 也会扫描未定义的已初始化字节。
+
+要使用 `??` 字节通配符搜索已初始化内存，使用 `ghidra_memory` 的 `find`：
+
+```json
+{
+  "operation": "find",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": { "filter": { "pattern": "48 8B ?? ??" } }
+}
+```
+
 首次调用某个操作前，使用领域和操作名调用 `ghidra_help`。
 返回的 `inputSchema` 描述 `params` 的内容，而不是工具的顶层参数。
 调用前请检查必填字段及其嵌套结构。
