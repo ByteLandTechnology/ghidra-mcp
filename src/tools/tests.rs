@@ -508,3 +508,128 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     .await
     .expect("shutdown starts after the reply");
 }
+
+/// Makes sure that `params` accepts `null` and a JSON object string.
+#[tokio::test]
+async fn params_accepts_null_and_json_object_string() {
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let (_, null_request) = prepare(
+        "ghidra_session",
+        object(json!({ "operation": "list", "params": null })),
+    )
+    .expect("null params");
+    assert_eq!(null_request.params, json!({}));
+
+    let (_, string_request) = prepare(
+        "ghidra_upload",
+        object(json!({
+            "operation": "prepare",
+            "md5": md5,
+            "params": "{\"fileName\":\"sample.bin\",\"size\":64}"
+        })),
+    )
+    .expect("JSON object string params");
+    assert_eq!(
+        string_request.params,
+        json!({ "fileName": "sample.bin", "size": 64 })
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let (_, result) = super::call(
+        &daemon,
+        "ghidra_daemon",
+        object(json!({ "operation": "shutdown", "params": "{\"force\":true}" })),
+    )
+    .await
+    .expect("local call with JSON object string params");
+    assert_eq!(result["sessions"], json!([]));
+}
+
+/// Makes sure that `params` refuses non-object values and non-object JSON text.
+#[test]
+fn params_refuses_non_object_values_and_text() {
+    let cases = [
+        json!([1, 2]),
+        json!(42),
+        json!(true),
+        json!("[1, 2]"),
+        json!("123"),
+        json!("\"hello\""),
+        json!("true"),
+        json!("null"),
+        json!("{bad json"),
+    ];
+    for params in cases {
+        let error = prepare(
+            "ghidra_session",
+            object(json!({ "operation": "list", "params": params })),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("params {params} must fail"));
+        match error.downcast_ref::<DomainError>() {
+            Some(domain @ DomainError::InvalidArgument { reason, .. }) => {
+                assert_eq!(domain.rpc_code(), crate::error::RPC_CODE_INVALID_ARGUMENT);
+                assert!(reason.contains("invalid_type"), "{params}: {reason}");
+            }
+            other => panic!("unexpected error for {params}: {other:?}"),
+        }
+    }
+}
+
+/// Makes sure that unknown parameters list sorted valid parameters and `ghidra_help`.
+#[test]
+fn unknown_parameter_lists_valid_parameters_and_help() {
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let upload_error = prepare(
+        "ghidra_upload",
+        object(json!({
+            "operation": "prepare",
+            "md5": md5,
+            "params": { "fileName": "sample.bin", "size": 1, "extra": true }
+        })),
+    )
+    .err()
+    .expect("unknown upload parameter");
+    let upload_reason = reason(&upload_error);
+    assert!(
+        upload_reason.contains("does not accept parameter `extra`"),
+        "{upload_reason}"
+    );
+    assert!(
+        upload_reason.contains("Valid parameters: `fileName`, `size`."),
+        "{upload_reason}"
+    );
+    assert!(upload_reason.contains("ghidra_help"), "{upload_reason}");
+
+    let empty_error = prepare(
+        "ghidra_session",
+        object(json!({ "operation": "list", "params": { "extra": 1 } })),
+    )
+    .err()
+    .expect("unknown parameter on empty schema");
+    let empty_reason = reason(&empty_error);
+    assert!(
+        empty_reason.contains("Valid parameters: none."),
+        "{empty_reason}"
+    );
+    assert!(empty_reason.contains("ghidra_help"), "{empty_reason}");
+}
+
+/// Makes sure that `DomainError::from_bridge` forwards address `target` and spaces.
+#[test]
+fn bridge_address_error_preserves_target_and_spaces() {
+    let rpc_error = crate::model::RpcError {
+        code: "invalid_request".to_string(),
+        message: "unable to parse address: bad (valid spaces: [EXTERNAL, ram])".to_string(),
+        target: Some("/selector/address".to_string()),
+    };
+    let domain = DomainError::from_bridge(Some(400), &rpc_error);
+    assert_eq!(
+        domain,
+        DomainError::InvalidArgument {
+            param: "/selector/address".to_string(),
+            reason: "unable to parse address: bad (valid spaces: [EXTERNAL, ram])".to_string(),
+        }
+    );
+}

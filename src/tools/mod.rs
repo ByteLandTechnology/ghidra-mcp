@@ -34,8 +34,8 @@ use crate::upload::UploadService;
 use anyhow::Result;
 use catalog::{Operation, Route, HELP_TOOL};
 use futures::future::BoxFuture;
-use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::de::{DeserializeOwned, Error as _};
+use serde::{Deserialize, Deserializer};
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -113,8 +113,49 @@ struct ToolCall {
     #[serde(default, deserialize_with = "deserialize_optional_md5")]
     md5: Option<String>,
     /// The parameters of the operation.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_params")]
     params: Map<String, Value>,
+}
+
+/// Deserializes `params` from an object, `null`, or a JSON object string.
+/// Use it with `#[serde(default)]`.
+///
+/// # Errors
+///
+/// Fails if the value is not `null`, an object, or a JSON string of an object.
+fn deserialize_params<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Map<String, Value>, D::Error> {
+    match Value::deserialize(deserializer)? {
+        Value::Null => Ok(Map::new()),
+        Value::Object(map) => Ok(map),
+        Value::String(raw) => match serde_json::from_str::<Value>(&raw) {
+            Ok(Value::Object(map)) => Ok(map),
+            Ok(other) => Err(D::Error::custom(format!(
+                "invalid_type: params JSON string must decode to an object, got {}",
+                value_type_name(&other)
+            ))),
+            Err(_) => Err(D::Error::custom(
+                "invalid_type: params string is not valid JSON",
+            )),
+        },
+        other => Err(D::Error::custom(format!(
+            "invalid_type: params must be an object, got {}",
+            value_type_name(&other)
+        ))),
+    }
+}
+
+/// Returns the JSON type name of `value` for type error messages.
+fn value_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 /// Runs one tool call.
