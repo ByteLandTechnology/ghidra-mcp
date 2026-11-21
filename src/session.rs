@@ -139,7 +139,9 @@ pub async fn call(
     ensure_connected(state, md5).await?;
     let envelope = bridge::request(state, md5, method, params, state.config.timeouts.rpc).await?;
     if let Some(err) = &envelope.error {
-        return Err(DomainError::from_bridge(envelope.status, err).into());
+        return Err(
+            DomainError::from_bridge(envelope.status, err, envelope.error_data.as_ref()).into(),
+        );
     }
     Ok(envelope)
 }

@@ -19,6 +19,9 @@ pub const RPC_CODE_SESSION_LOCK_TIMEOUT: i32 = -32001;
 /// Implementation-defined error code for absent binaries, sessions, or jobs.
 pub const RPC_CODE_MISSING_TARGET: i32 = -32002;
 
+/// Implementation-defined error code for ambiguous targets or state conflicts.
+pub const RPC_CODE_CONFLICT: i32 = -32003;
+
 /// Implementation-defined error code for disconnected sessions or daemon shutdown.
 pub const RPC_CODE_DISCONNECTED: i32 = -32000;
 
@@ -53,6 +56,19 @@ pub enum DomainError {
         target: String,
         /// Explanation of why the target is unavailable.
         reason: String,
+    },
+
+    /// A target is ambiguous, or the session state prevents the operation.
+    #[error("conflict (`{code}`): {reason}")]
+    Conflict {
+        /// Error code string from the bridge.
+        code: String,
+        /// Parameter or field path where the conflict occurred.
+        target: Option<String>,
+        /// Description of the conflict.
+        reason: String,
+        /// Candidate definitions that match an ambiguous bare name.
+        candidates: Vec<String>,
     },
 
     /// The session has no active bridge agent connection.
@@ -107,9 +123,9 @@ pub enum DomainError {
 }
 
 impl DomainError {
-    /// Classifies a bridge error by its status and code.
+    /// Classifies a bridge error by its status, code, and structured error data.
     #[must_use]
-    pub fn from_bridge(status: Option<i32>, error: &RpcError) -> Self {
+    pub fn from_bridge(status: Option<i32>, error: &RpcError, error_data: Option<&Value>) -> Self {
         if error.code.eq_ignore_ascii_case("bridge_disconnected")
             || error.code.eq_ignore_ascii_case("disconnected")
             || (status == Some(502) && error.message.contains("disconnect"))
@@ -134,6 +150,25 @@ impl DomainError {
                 error.target.as_deref().unwrap_or("resource"),
                 &error.message,
             ),
+            (Some(409), _) | (_, "conflict" | "ambiguous_symbol" | "ambiguous_data_type") => {
+                let candidates = error_data
+                    .and_then(|data| data.pointer("/details/candidates"))
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Self::Conflict {
+                    code: error.code.clone(),
+                    target: error.target.clone(),
+                    reason: error.message.clone(),
+                    candidates,
+                }
+            }
             _ => Self::Internal {
                 message: error.message.clone(),
             },
@@ -187,6 +222,7 @@ impl DomainError {
             | Self::AgentTimeout { .. }
             | Self::RequestInFlight { .. } => RPC_CODE_SESSION_LOCK_TIMEOUT,
             Self::MissingTarget { .. } => RPC_CODE_MISSING_TARGET,
+            Self::Conflict { .. } => RPC_CODE_CONFLICT,
             Self::Disconnected { .. } | Self::ShuttingDown => RPC_CODE_DISCONNECTED,
             Self::TransactionFailed { .. }
             | Self::BridgeInternal { .. }
@@ -201,6 +237,7 @@ impl DomainError {
             Self::InvalidArgument { .. } => "invalid_argument",
             Self::SessionLockTimeout { .. } => "session_lock_timeout",
             Self::MissingTarget { .. } => "missing_target",
+            Self::Conflict { .. } => "conflict",
             Self::Disconnected { .. } => "disconnected",
             Self::AgentTimeout { .. } => "agent_timeout",
             Self::RequestInFlight { .. } => "request_in_flight",
@@ -224,6 +261,23 @@ impl DomainError {
             } => Some(json!({ "md5": md5, "timeout_seconds": timeout_seconds })),
             Self::MissingTarget { target, reason } => {
                 Some(json!({ "target": target, "reason": reason }))
+            }
+            Self::Conflict {
+                code,
+                target,
+                reason,
+                candidates,
+            } => {
+                let mut details = serde_json::Map::new();
+                details.insert("code".to_string(), json!(code));
+                if let Some(target) = target {
+                    details.insert("target".to_string(), json!(target));
+                }
+                details.insert("reason".to_string(), json!(reason));
+                if !candidates.is_empty() {
+                    details.insert("candidates".to_string(), json!(candidates));
+                }
+                Some(Value::Object(details))
             }
             Self::Disconnected { md5 } | Self::RequestInFlight { md5 } => {
                 Some(json!({ "md5": md5 }))
