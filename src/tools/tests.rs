@@ -51,14 +51,11 @@ fn bridge_domains_match_the_bridge_mcp_server() {
         serde_json::from_str(include_str!("../../bridge/docs/mcp-tools.json")).expect("contract");
     let bridge_tools = contract["tools"].as_array().expect("bridge tools");
     let mut expected = operations_by_tool(bridge_tools);
-    // The daemon hides `shutdown`: `ghidra_session close` stops the bridge.
-    let bridge = expected.get_mut("ghidra_bridge").expect("ghidra_bridge");
-    let count = bridge.len();
-    bridge.retain(|operation| operation != "shutdown");
+    // The daemon hides `shutdown` because `ghidra_session_write close` stops the bridge.
     assert_eq!(
-        bridge.len() + 1,
-        count,
-        "the bridge has no shutdown operation"
+        expected.remove("ghidra_bridge_write"),
+        Some(vec!["shutdown".to_string()]),
+        "the bridge contract puts shutdown in ghidra_bridge_write"
     );
     let actual = operations_by_tool(&tool_definitions());
 
@@ -74,20 +71,22 @@ fn bridge_domains_match_the_bridge_mcp_server() {
         local,
         BTreeSet::from([
             "ghidra_daemon",
+            "ghidra_daemon_write",
             "ghidra_job",
             "ghidra_session",
+            "ghidra_session_write",
             "ghidra_upload"
         ])
     );
 }
 
 /// Makes sure that the help tool is first, and that each domain tool has the
-/// correct required arguments and annotations.
+/// correct required arguments and parameter schemas.
 #[test]
-fn tool_definitions_have_routes_and_annotations() {
+fn tool_definitions_have_routes_and_schemas() {
     let tools = tool_definitions();
     assert_eq!(tools[0]["name"], "ghidra_help");
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 31);
     let tool = |name: &str| {
         tools
             .iter()
@@ -99,7 +98,15 @@ fn tool_definitions_have_routes_and_annotations() {
         json!(["operation"])
     );
     assert_eq!(
+        tool("ghidra_session_write")["inputSchema"]["required"],
+        json!(["operation"])
+    );
+    assert_eq!(
         tool("ghidra_function")["inputSchema"]["required"],
+        json!(["operation", "md5"])
+    );
+    assert_eq!(
+        tool("ghidra_function_write")["inputSchema"]["required"],
         json!(["operation", "md5"])
     );
     assert_eq!(
@@ -107,31 +114,113 @@ fn tool_definitions_have_routes_and_annotations() {
         json!(["operation", "md5"])
     );
     assert_eq!(
-        tool("ghidra_decompilation")["annotations"]["readOnlyHint"],
-        true
+        tool("ghidra_analysis_write")["inputSchema"]["required"],
+        json!(["operation", "md5"])
     );
     assert_eq!(
-        tool("ghidra_memory")["annotations"]["destructiveHint"],
-        true
+        tool("ghidra_batch")["inputSchema"]["properties"]["operation"]["enum"],
+        json!(["query"])
     );
-    assert_eq!(tool("ghidra_job")["annotations"]["readOnlyHint"], true);
     assert_eq!(
-        tool("ghidra_session")["annotations"]["destructiveHint"],
-        true
-    );
-
-    assert_eq!(
-        tool("ghidra_daemon")["annotations"]["destructiveHint"],
-        true
+        tool("ghidra_batch_write")["inputSchema"]["properties"]["operation"]["enum"],
+        json!(["execute"])
     );
     assert!(tool("ghidra_daemon")["inputSchema"]["properties"]
+        .get("md5")
+        .is_none());
+    assert!(tool("ghidra_daemon_write")["inputSchema"]["properties"]
         .get("md5")
         .is_none());
 
     let session = &tool("ghidra_session")["inputSchema"]["properties"];
     assert!(session["md5"].is_object());
+    let session_write = &tool("ghidra_session_write")["inputSchema"]["properties"];
+    assert!(session_write["md5"].is_object());
     let job = &tool("ghidra_job")["inputSchema"]["properties"];
     assert!(job.get("md5").is_none());
+}
+
+/// Makes sure that each MCP tool publishes accurate read-only and destructive
+/// hint annotations.
+#[test]
+fn tool_definitions_have_accurate_annotations() {
+    let tools = tool_definitions();
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("no tool {name}"))
+    };
+    for read_tool in [
+        "ghidra_help",
+        "ghidra_session",
+        "ghidra_job",
+        "ghidra_daemon",
+        "ghidra_bridge",
+        "ghidra_program",
+        "ghidra_address",
+        "ghidra_memory",
+        "ghidra_listing",
+        "ghidra_global_variable",
+        "ghidra_function",
+        "ghidra_analysis",
+        "ghidra_decompilation",
+        "ghidra_symbol",
+        "ghidra_reference",
+        "ghidra_comment",
+        "ghidra_data_type",
+        "ghidra_batch",
+    ] {
+        assert_eq!(
+            tool(read_tool)["annotations"]["readOnlyHint"],
+            true,
+            "{read_tool} readOnlyHint"
+        );
+        assert_eq!(
+            tool(read_tool)["annotations"]["destructiveHint"],
+            false,
+            "{read_tool} destructiveHint"
+        );
+    }
+    for non_destructive_write in [
+        "ghidra_upload",
+        "ghidra_program_write",
+        "ghidra_analysis_write",
+    ] {
+        assert_eq!(
+            tool(non_destructive_write)["annotations"]["readOnlyHint"],
+            false,
+            "{non_destructive_write} readOnlyHint"
+        );
+        assert_eq!(
+            tool(non_destructive_write)["annotations"]["destructiveHint"],
+            false,
+            "{non_destructive_write} destructiveHint"
+        );
+    }
+    for destructive_write in [
+        "ghidra_session_write",
+        "ghidra_daemon_write",
+        "ghidra_memory_write",
+        "ghidra_listing_write",
+        "ghidra_global_variable_write",
+        "ghidra_function_write",
+        "ghidra_symbol_write",
+        "ghidra_comment_write",
+        "ghidra_data_type_write",
+        "ghidra_batch_write",
+    ] {
+        assert_eq!(
+            tool(destructive_write)["annotations"]["readOnlyHint"],
+            false,
+            "{destructive_write} readOnlyHint"
+        );
+        assert_eq!(
+            tool(destructive_write)["annotations"]["destructiveHint"],
+            true,
+            "{destructive_write} destructiveHint"
+        );
+    }
 }
 
 /// Makes sure that each domain tool tells the client how to get its parameters.
@@ -190,9 +279,9 @@ fn session_md5_is_never_a_parameter() {
             .map(|operation| operation.md5)
             .expect("operation")
     };
-    assert!(rule("session", "open") == Md5Rule::Optional);
+    assert!(rule("session_write", "open") == Md5Rule::Optional);
     assert!(rule("session", "get") == Md5Rule::Required);
-    assert!(rule("session", "close") == Md5Rule::Required);
+    assert!(rule("session_write", "close") == Md5Rule::Required);
     assert!(rule("session", "list") == Md5Rule::Absent);
     assert!(rule("upload", "prepare") == Md5Rule::Required);
     assert!(rule("job", "wait") == Md5Rule::Absent);
@@ -230,11 +319,11 @@ fn valid_function_name(name: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
-/// Makes sure that `analysis start` is local, has the bridge parameters, and takes `md5`.
+/// Makes sure that `analysis_write start` is local, has the bridge parameters, and takes `md5`.
 #[test]
 fn local_operation_extends_its_bridge_method() {
     let prepared = prepare(
-        "ghidra_analysis",
+        "ghidra_analysis_write",
         object(json!({
             "operation": "start",
             "md5": "0123456789ABCDEF0123456789ABCDEF",
@@ -248,7 +337,7 @@ fn local_operation_extends_its_bridge_method() {
         request.md5.as_deref(),
         Some("0123456789abcdef0123456789abcdef")
     );
-    assert_eq!(request.label, "ghidra_analysis start");
+    assert_eq!(request.label, "ghidra_analysis_write start");
 }
 
 /// Makes sure that a bridge operation goes to its bridge method.
@@ -361,6 +450,28 @@ fn prepare_refuses_invalid_calls() {
         let reason = reason(&error);
         assert!(reason.contains(expected), "{tool} {arguments}: {reason}");
     }
+
+    for (tool, operation) in [
+        ("ghidra_session", "open"),
+        ("ghidra_session", "close"),
+        ("ghidra_daemon", "shutdown"),
+        ("ghidra_bridge", "shutdown"),
+        ("ghidra_program", "save"),
+        ("ghidra_analysis", "start"),
+        ("ghidra_function", "create"),
+        ("ghidra_memory", "write"),
+        ("ghidra_batch", "execute"),
+    ] {
+        let error = prepare(tool, object(json!({ "operation": operation, "md5": md5 })))
+            .err()
+            .unwrap_or_else(|| panic!("{tool} {operation} must fail on read-only tool"));
+        let domain_err = error.downcast_ref::<DomainError>().expect("domain error");
+        assert_eq!(
+            domain_err.rpc_code(),
+            crate::error::RPC_CODE_INVALID_ARGUMENT,
+            "{tool} {operation} must fail with -32602"
+        );
+    }
 }
 
 /// Makes sure that `ghidra_help` lists domains, lists operations, and shows one schema.
@@ -368,7 +479,7 @@ fn prepare_refuses_invalid_calls() {
 fn help_has_three_levels() {
     let (_, domains) = help::run(Map::new()).expect("domains");
     let domains = domains["domains"].as_array().expect("domain list");
-    assert_eq!(domains.len(), 18);
+    assert_eq!(domains.len(), 30);
     assert_eq!(domains[0], "ghidra_session");
 
     let (_, memory) = help::run(object(json!({ "domain": "memory" }))).expect("operations");
@@ -383,7 +494,7 @@ fn help_has_three_levels() {
     assert_eq!(block_list["effects"]["read_only"], true);
 
     let (_, open) = help::run(object(
-        json!({ "domain": "ghidra_session", "operation": "open" }),
+        json!({ "domain": "ghidra_session_write", "operation": "open" }),
     ))
     .expect("operation");
     assert_eq!(open["md5"], "optional");
@@ -391,8 +502,10 @@ fn help_has_three_levels() {
     assert_eq!(open["effects"]["read_only"], false);
     assert!(open["inputSchema"]["properties"]["path"].is_object());
 
-    let (_, write) =
-        help::run(object(json!({ "domain": "memory", "operation": "write" }))).expect("operation");
+    let (_, write) = help::run(object(
+        json!({ "domain": "memory_write", "operation": "write" }),
+    ))
+    .expect("operation");
     assert_eq!(
         write["effects"],
         json!({
@@ -406,7 +519,7 @@ fn help_has_three_levels() {
     );
 
     let (_, start) = help::run(object(
-        json!({ "domain": "analysis", "operation": "start" }),
+        json!({ "domain": "analysis_write", "operation": "start" }),
     ))
     .expect("operation");
     let properties = &start["inputSchema"]["properties"];
@@ -479,7 +592,7 @@ async fn job_list_and_daemon_status_show_jobs() {
     assert_eq!(status["jobs"][0]["id"], job.id);
 }
 
-/// Makes sure that `ghidra_daemon shutdown` refuses live work without `force`.
+/// Makes sure that `ghidra_daemon_write shutdown` refuses live work without `force`.
 #[tokio::test]
 async fn daemon_shutdown_needs_force_for_live_work() {
     let root = tempfile::tempdir().unwrap();
@@ -490,7 +603,7 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     let shutdown = |force: bool| {
         super::call(
             &daemon,
-            "ghidra_daemon",
+            "ghidra_daemon_write",
             object(json!({ "operation": "shutdown", "params": { "force": force } })),
         )
     };

@@ -32,31 +32,53 @@ pub(super) const HELP_TOOL: &str = "ghidra_help";
 const DOMAINS: &[(&str, &str)] = &[
     (
         "session",
-        "to open, list, examine, and close the binary sessions of the daemon",
+        "to list and examine the binary sessions of the daemon",
+    ),
+    (
+        "session_write",
+        "to open and close the binary sessions of the daemon",
     ),
     (
         "upload",
         "to send a binary from a remote client to the daemon",
     ),
     ("job", "to examine background jobs and to wait for them"),
-    ("daemon", "to examine the shared daemon and to stop it"),
+    ("daemon", "to examine the shared daemon"),
+    ("daemon_write", "to stop the shared daemon"),
     ("bridge", "for the Ghidra bridge of a session"),
-    ("program", "for program data"),
+    ("bridge_write", "to stop the Ghidra bridge of a session"),
+    ("program", "to read program data"),
+    ("program_write", "to save program data"),
     ("address", "for address data"),
-    ("memory", "for memory data"),
+    ("memory", "to read and search memory data"),
+    ("memory_write", "to change memory data"),
     (
         "listing",
-        "for code units, instructions, and flow overrides",
+        "to read code units, instructions, and flow overrides",
     ),
-    ("global_variable", "for global variable data"),
-    ("function", "for function data"),
-    ("analysis", "for auto-analysis"),
+    (
+        "listing_write",
+        "to change code units, instructions, and flow overrides",
+    ),
+    ("global_variable", "to read global variable data"),
+    ("global_variable_write", "to change global variable data"),
+    ("function", "to read function data"),
+    ("function_write", "to change function data"),
+    ("analysis", "to read auto-analysis status"),
+    ("analysis_write", "to start auto-analysis"),
     ("decompilation", "for decompilation data"),
-    ("symbol", "for symbol data"),
+    ("symbol", "to read symbol data"),
+    ("symbol_write", "to change symbol data"),
     ("reference", "for reference data"),
-    ("comment", "for comment data"),
-    ("data_type", "for data type data"),
-    ("batch", "for batch data"),
+    ("comment", "to read comment data"),
+    ("comment_write", "to change comment data"),
+    ("data_type", "to read data type data"),
+    ("data_type_write", "to change data type data"),
+    ("batch", "to run read-only batch queries"),
+    (
+        "batch_write",
+        "to run batch operations that change the program",
+    ),
 ];
 
 /// The catalog. The daemon makes it one time, at its first use.
@@ -131,6 +153,23 @@ impl Domain {
             let tool = self.tool();
             DomainError::missing_target(name, format!("unknown operation of {tool}: {name}")).into()
         })
+    }
+
+    /// Returns `true` if each operation of this domain is read-only.
+    pub fn is_read_only(&self) -> bool {
+        self.all(|operation| operation.effects.read_only)
+    }
+
+    /// Returns `true` if `name` is a write or lifecycle operation of this domain.
+    pub fn is_write_operation(&self, name: &str) -> bool {
+        if self.name == "bridge" && name == "shutdown" {
+            return true;
+        }
+        let write_domain = format!("{}_write", self.name);
+        CATALOG
+            .iter()
+            .find(|domain| domain.name == write_domain)
+            .is_some_and(|domain| domain.operation(name).is_some())
     }
 
     /// Returns `true` if each operation obeys `predicate`.
@@ -262,8 +301,8 @@ fn bridge_target(method: &str) -> Option<(&'static str, String)> {
     let target = match prefix {
         // The bridge MCP server also does not show the contract.
         "interface" => return None,
-        // `ghidra_session close` stops the bridge with the lifecycle lock and
-        // records the new session status. A direct stop does not.
+        // `ghidra_session_write close` stops the bridge with the lifecycle lock
+        // and records the new session status. A direct stop does not.
         "session" if operation == "shutdown" => return None,
         "session" => ("bridge", operation.to_string()),
         "program_language" => ("program", format!("language.{operation}")),
@@ -368,8 +407,14 @@ fn build() -> Vec<Domain> {
         {
             continue;
         }
-        let Some((domain, name)) = bridge_target(method) else {
+        let Some((base_domain, name)) = bridge_target(method) else {
             continue;
+        };
+        let effects = bridge_effects(method, contract);
+        let target_domain = if effects.read_only {
+            base_domain.to_string()
+        } else {
+            format!("{base_domain}_write")
         };
         let operation = Operation {
             name,
@@ -379,10 +424,10 @@ fn build() -> Vec<Domain> {
                 .to_string(),
             schema: contract["input_schema"].clone(),
             md5: Md5Rule::Required,
-            effects: bridge_effects(method, contract),
+            effects,
             route: Route::Bridge(method.clone()),
         };
-        add(domain, operation);
+        add(&target_domain, operation);
     }
     for (tool, sequence) in bridge_tool_operations() {
         let Some(domain) = domains.iter_mut().find(|domain| domain.tool() == tool) else {

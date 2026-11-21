@@ -206,10 +206,10 @@ claude mcp get ghidra-mcp
 
 ## First analysis procedure
 
-The daemon shows `ghidra_help` and one MCP tool for each domain.
+The daemon shows `ghidra_help`, read-only domain tools, and `_write` domain tools.
 Each domain tool takes an `operation` and its `params`.
 An operation that names one session also takes the `md5` of that session.
-This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
+This document writes an operation as the tool name and the operation name, for example `ghidra_session_write open`.
 
 Before the first call to an operation, call `ghidra_help` with its domain and operation.
 For example, call `ghidra_help` with:
@@ -225,7 +225,7 @@ The MD5 has exactly 32 hexadecimal characters.
 
 ### 1. Open a binary session
 
-Open a local binary file with `ghidra_session`:
+Open a local binary file with `ghidra_session_write`:
 
 ```json
 {
@@ -249,7 +249,7 @@ The `status` field shows `ready` when the session is ready.
 
 ### 2. Start background analysis
 
-Start auto-analysis on the opened binary with `ghidra_analysis`:
+Start auto-analysis on the opened binary with `ghidra_analysis_write`:
 
 ```json
 {
@@ -316,7 +316,7 @@ The bridge returns structured C pseudocode, signatures, and local variables.
 
 ### 5. Save changes and close
 
-Save program changes to the Ghidra project with `ghidra_program`:
+Save program changes to the Ghidra project with `ghidra_program_write`:
 
 ```json
 {
@@ -325,7 +325,7 @@ Save program changes to the Ghidra project with `ghidra_program`:
 }
 ```
 
-Close the active session with `ghidra_session`:
+Close the active session with `ghidra_session_write`:
 
 ```json
 {

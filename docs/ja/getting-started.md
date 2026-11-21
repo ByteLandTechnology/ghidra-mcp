@@ -205,10 +205,10 @@ claude mcp get ghidra-mcp
 
 ## 初回解析手順
 
-デーモンは `ghidra_help` と、ドメインごとに 1 つの MCP ツールを提供します。
+デーモンは `ghidra_help`、読み取り専用のドメインツール、および `_write` ドメインツールを提供します。
 各ドメインツールは `operation` とその `params` を受け取ります。
 1 つのセッションを指定する操作は、そのセッションの `md5` も受け取ります。
-このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。
+このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session_write open`）。
 
 操作を初めて呼び出す前に、そのドメインと操作名を指定して `ghidra_help` を呼び出します。
 例えば、次の引数で `ghidra_help` を呼び出します：
@@ -223,7 +223,7 @@ claude mcp get ghidra-mcp
 
 ### 1. バイナリセッションを開く
 
-`ghidra_session` でローカルのバイナリファイルを開きます：
+`ghidra_session_write` でローカルのバイナリファイルを開きます：
 
 ```json
 {
@@ -247,7 +247,7 @@ claude mcp get ghidra-mcp
 
 ### 2. バックグラウンド解析を開始する
 
-`ghidra_analysis` で開いたバイナリの自動解析を開始します：
+`ghidra_analysis_write` で開いたバイナリの自動解析を開始します：
 
 ```json
 {
@@ -314,7 +314,7 @@ claude mcp get ghidra-mcp
 
 ### 5. 変更の保存と終了
 
-`ghidra_program` でプログラムの変更を Ghidra プロジェクトに保存します：
+`ghidra_program_write` でプログラムの変更を Ghidra プロジェクトに保存します：
 
 ```json
 {
@@ -323,7 +323,7 @@ claude mcp get ghidra-mcp
 }
 ```
 
-`ghidra_session` でアクティブなセッションを閉じます：
+`ghidra_session_write` でアクティブなセッションを閉じます：
 
 ```json
 {

@@ -219,12 +219,15 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
                 .canonicalize()
                 .with_context(|| format!("cannot find {}", path.display()))?;
             let params = json!({ "path": path.display().to_string(), "wait": wait });
-            (call("ghidra_session", "open", None, params).await?, json)
+            (
+                call("ghidra_session_write", "open", None, params).await?,
+                json,
+            )
         }
         SessionCommand::Close { md5, force, json } => {
             let params = json!({ "force": force });
             (
-                call("ghidra_session", "close", Some(&md5), params).await?,
+                call("ghidra_session_write", "close", Some(&md5), params).await?,
                 json,
             )
         }

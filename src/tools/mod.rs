@@ -47,13 +47,13 @@ pub struct Daemon {
     pub state: Arc<McpState>,
     /// The upload credentials, for `ghidra_upload prepare`.
     pub uploads: Arc<UploadService>,
-    /// The process data and the shutdown trigger, for `ghidra_daemon`.
+    /// The process data and the shutdown trigger, for `ghidra_daemon` and `ghidra_daemon_write`.
     pub control: Control,
 }
 
 /// The process data of the daemon, and the trigger that stops it.
 pub struct Control {
-    /// `ghidra_daemon shutdown` cancels this token. Then the daemon stops.
+    /// `ghidra_daemon_write shutdown` cancels this token. Then the daemon stops.
     pub shutdown: CancellationToken,
     /// The time when the daemon started.
     pub started_at: SystemTime,
@@ -156,6 +156,16 @@ fn prepare(tool: &str, arguments: Map<String, Value>) -> Result<(&'static Operat
         params,
     } = parse(tool, Value::Object(arguments))?;
     let label = format!("{tool} {operation}");
+    if domain.is_read_only() && domain.is_write_operation(&operation) {
+        return Err(DomainError::invalid_argument(
+            "operation",
+            format!(
+                "unknown operation of {tool}: {operation}; \
+                 write operations are not permitted on a read-only tool"
+            ),
+        )
+        .into());
+    }
     let operation = domain.require_operation(&operation)?;
     operation.check_md5(&label, md5.as_deref())?;
     operation.validate(&label, &params)?;

@@ -11,8 +11,8 @@
 //!
 //! It also serves MCP on a local socket for the stdio proxy and the CLI (see
 //! [`ipc`]). One daemon runs for each runtime directory. A file lock enforces
-//! this rule. The daemon runs until it gets a stop signal or `ghidra_daemon
-//! shutdown`. Then it stops all Ghidra processes.
+//! this rule. The daemon runs until it gets a stop signal or
+//! `ghidra_daemon_write shutdown`. Then it stops all Ghidra processes.
 
 mod ipc {
     //! The local endpoint of the daemon, its lifetime lock and its detached start.
@@ -566,8 +566,8 @@ use tokio_util::sync::CancellationToken;
 /// The time for the servers to complete their connections during shutdown.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Runs the daemon on `address` until a stop signal, `ghidra_daemon shutdown`
-/// or a server failure.
+/// Runs the daemon on `address` until a stop signal,
+/// `ghidra_daemon_write shutdown`, or a server failure.
 /// Returns immediately if another daemon has the lock.
 ///
 /// # Errors
@@ -648,7 +648,7 @@ pub async fn run(address: SocketAddr) -> Result<()> {
     let result = tokio::select! {
         signal = shutdown_signal() => signal,
         () = shutdown.cancelled() => {
-            crate::process::log_daemon("ghidra-mcp daemon stops: ghidra_daemon shutdown");
+            crate::process::log_daemon("ghidra-mcp daemon stops: ghidra_daemon_write shutdown");
             Ok(())
         }
         Some(joined) = servers.join_next() => {

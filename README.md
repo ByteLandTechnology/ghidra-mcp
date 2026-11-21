@@ -260,7 +260,7 @@ To stop it, add `--force`.
 If no daemon runs, `daemon status` exits with status 3, and `daemon stop` is successful.
 
 These commands write text. For scripts, add `--json`.
-MCP clients can also use `ghidra_daemon shutdown`. Then the daemon stops for all clients.
+MCP clients can also use `ghidra_daemon_write shutdown`. Then the daemon stops for all clients.
 
 ### Command-line tool
 
@@ -322,7 +322,7 @@ Use this procedure when the client is not on the daemon host.
    - HTTP `200`: the session is ready.
    - HTTP `202`: the session starts. Use `ghidra_job wait` with the returned `jobId`.
 
-You do not need a separate `ghidra_session open` call.
+You do not need a separate `ghidra_session_write open` call.
 
 > [!NOTE]
 > - The upload goes directly to disk. It can be larger than the MCP request limit. The daemon accepts HTTP chunked transfer.
@@ -330,7 +330,7 @@ You do not need a separate `ghidra_session open` call.
 >   This limit does not apply to an active upload.
 > - The request uses the credential when it starts. After an upload fails, get a new credential.
 > - The daemon examines the size and the MD5 before it saves the binary. A failed upload leaves no file and no session.
-> - If Ghidra does not start, the binary stays saved. Use `ghidra_session open` with the MD5 to retry.
+> - If Ghidra does not start, the binary stays saved. Use `ghidra_session_write open` with the MD5 to retry.
 > - A reverse proxy must send both `/mcp` and `/upload` to the daemon, with the same prefix.
 
 The server uses `Forwarded` host and protocol values first, then `X-Forwarded-Host` and
@@ -362,16 +362,16 @@ The status must be `Status: ✓ Connected`.
 Use this procedure in an agent:
 
 1. Open the binary:
-   - For a binary that the daemon saved before, call `ghidra_session` with `{"operation":"open","md5":"..."}`.
-   - For a file on the daemon host, call `ghidra_session` with `{"operation":"open","params":{"path":"..."}}`. The daemon calculates the MD5 and saves the binary.
+   - For a binary that the daemon saved before, call `ghidra_session_write` with `{"operation":"open","md5":"..."}`.
+   - For a file on the daemon host, call `ghidra_session_write` with `{"operation":"open","params":{"path":"..."}}`. The daemon calculates the MD5 and saves the binary.
    - For a file on a remote client, upload it (see [Upload a binary from a remote client](#upload-a-binary-from-a-remote-client)).
 2. If the session starts, call `ghidra_job` with `{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}`.
    You can use `ghidra_job get` to monitor the job.
 3. Confirm the ready status with `ghidra_session get`.
-4. Start the analysis: call `ghidra_analysis` with `{"operation":"start","md5":"..."}`.
+4. Start the analysis: call `ghidra_analysis_write` with `{"operation":"start","md5":"..."}`.
 5. Monitor the analysis job with `ghidra_job get` or `ghidra_job wait`.
-6. Use the domain tools of the bridge, for example `ghidra_program get`, `ghidra_function list` and `ghidra_data_type create`.
-7. Save the analysis and the changes with `ghidra_program save`. The session stays open.
+6. Use the domain tools of the bridge, for example `ghidra_program get`, `ghidra_function list` and `ghidra_data_type_write create`.
+7. Save the analysis and the changes with `ghidra_program_write save`. The session stays open.
 8. Get approval from the user before you use an operation that changes the program.
 
 A session summary contains only `md5`, `fileName`, `status` and `connected`.
@@ -411,7 +411,7 @@ ipc_handshake_timeout_sec = 5
 | `ghidra.analyze_headless` | The path of `analyzeHeadless`. |
 | `analysis.max_cpu` | The value of `analyzeHeadless -max-cpu`. |
 | `timeouts.process_spawn_timeout_sec` | The time to start the Ghidra process. |
-| `timeouts.analysis_import_timeout_sec` | The time to import a binary. It is also the default wait for `ghidra_analysis start`. |
+| `timeouts.analysis_import_timeout_sec` | The time to import a binary. It is also the default wait for `ghidra_analysis_write start`. |
 | `timeouts.bridge_connect_timeout_sec` | A part of the total time to start a session. |
 | `timeouts.agent_ready_timeout_sec` | The time for the bridge to complete its handshake. |
 | `timeouts.bridge_disconnect_grace_sec` | The time for a process to stop by itself after its bridge disconnects or its session closes. |
@@ -428,10 +428,10 @@ ipc_handshake_timeout_sec = 5
 
 ## The MCP tools
 
-`tools/list` shows 19 MCP tools: `ghidra_help` and one tool for each domain.
+`tools/list` shows 31 MCP tools: `ghidra_help`, read-only domain tools, and `_write` domain tools.
 The bridge domain tools use the domain and operation names of the bridge MCP server.
 The daemon also has local operations and does not expose the bridge shutdown operation.
-This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
+This document writes an operation as the tool name and the operation name, for example `ghidra_session_write open`.
 
 A domain tool has these arguments:
 
@@ -441,26 +441,30 @@ A domain tool has these arguments:
 
 | Tool | Operations | Runs in |
 | --- | --- | --- |
-| `ghidra_session` | `open`, `list`, `get`, `close` | The daemon. |
+| `ghidra_session` | `list`, `get` | The daemon. |
+| `ghidra_session_write` | `open`, `close` | The daemon. |
 | `ghidra_upload` | `prepare` | The daemon. |
-| `ghidra_job` | `list`, `get`, `wait` | The daemon. |
-| `ghidra_daemon` | `status`, `shutdown` | The daemon. |
-| `ghidra_analysis` | `start`, `get` | `start`: the daemon, then the bridge. `get`: the bridge. |
-| `ghidra_bridge`, `ghidra_program`, `ghidra_address`, `ghidra_memory`, `ghidra_listing`, `ghidra_global_variable`, `ghidra_function`, `ghidra_decompilation`, `ghidra_symbol`, `ghidra_reference`, `ghidra_comment`, `ghidra_data_type`, `ghidra_batch` | The bridge methods of the domain. | The bridge of the session. |
+| `ghidra_job` | `get`, `wait`, `list` | The daemon. |
+| `ghidra_daemon` | `status` | The daemon. |
+| `ghidra_daemon_write` | `shutdown` | The daemon. |
+| `ghidra_analysis` | `get` | The bridge. |
+| `ghidra_analysis_write` | `start` | The daemon, then the bridge. |
+| `ghidra_bridge`, `ghidra_program`, `ghidra_address`, `ghidra_memory`, `ghidra_listing`, `ghidra_global_variable`, `ghidra_function`, `ghidra_decompilation`, `ghidra_symbol`, `ghidra_reference`, `ghidra_comment`, `ghidra_data_type`, `ghidra_batch` | Read-only bridge methods of the domain. | The bridge of the session. |
+| `ghidra_program_write`, `ghidra_memory_write`, `ghidra_listing_write`, `ghidra_global_variable_write`, `ghidra_function_write`, `ghidra_symbol_write`, `ghidra_comment_write`, `ghidra_data_type_write`, `ghidra_batch_write` | Write bridge methods of the domain. | The bridge of the session. |
 
 The bridge contract `bridge/docs/asyncapi.yaml` gives the bridge methods, their schemas and their `read_only` effects.
 The daemon sends only the methods in this contract.
-It does not show `interface.get` and `session.shutdown`. To stop a session, use `ghidra_session close`.
+It does not show `interface.get` and `session.shutdown`. To stop a session, use `ghidra_session_write close`.
 The parameters use the objects of the bridge, for example `selector`, `filter`, `page`, `patch` and `resource`.
 
-Examples for `ghidra_function get` and `ghidra_comment upsert`:
+Examples for `ghidra_function get` and `ghidra_comment_write upsert`:
 
 ```json
 {"operation":"get","md5":"0123456789abcdef0123456789abcdef","params":{"selector":{"entry":"ram:00100000"}}}
 {"operation":"upsert","md5":"0123456789abcdef0123456789abcdef","params":{"resource":{"address":"ram:00100000","type":"eol","text":"checked"}}}
 ```
 
-To create a function, use `ghidra_function` with its entry address:
+To create a function, use `ghidra_function_write` with its entry address:
 
 ```json
 {
@@ -509,7 +513,7 @@ Each token has zero-based UTF-16 columns and the address that the Ghidra GUI sel
 Set `include_comments` to show all comment types and to return the repeatable comments.
 If `comments_complete` is `false`, the comment list is not complete.
 
-To apply C++ names to all mangled primary symbols, use `ghidra_symbol`:
+To apply C++ names to all mangled primary symbols, use `ghidra_symbol_write`:
 
 ```json
 { "operation": "demangle", "md5": "0123456789abcdef0123456789abcdef", "params": {} }
@@ -529,8 +533,8 @@ The `ghidra_help` tool describes all tools:
 - `{"domain":"function","operation":"list"}` shows the full parameter schema, the md5 rule and the effects of one operation. The effects are the same as in the bridge contract, for example `read_only`, `mutates_program` and `destructive`.
 
 If the Ghidra process does not start, the session goes to `error` and its launch job goes to `failed`.
-With `wait=false`, `ghidra_session open` returns immediately. Use `ghidra_session get` and `ghidra_job get` to see the result.
-With `wait=true`, `ghidra_session open` waits and returns the error.
+With `wait=false`, `ghidra_session_write open` returns immediately. Use `ghidra_session get` and `ghidra_job get` to see the result.
+With `wait=true`, `ghidra_session_write open` waits and returns the error.
 
 The MD5 hash identifies each session.
 The daemon manages session states through a finite state machine:
@@ -609,7 +613,7 @@ On all platforms:
 
 - One daemon runs for each runtime directory. A file lock enforces this rule. There is no PID file.
 - Each runtime directory uses one persistent home. To change `GHIDRA_MCP_HOME`, stop the daemon and clear the runtime directory first. The projects in the old home stay available.
-- You can delete the runtime directory when the daemon does not run. Then `ghidra_session open` with the MD5 opens the saved project again.
+- You can delete the runtime directory when the daemon does not run. Then `ghidra_session_write open` with the MD5 opens the saved project again.
 - The daemon opens a project again when `project.gpr` and `project.rep` exist. Ghidra replays its recovery journal.
 - The daemon does not change a project directory that it does not recognize. It shows an error.
 - The daemon bounds all log files (`daemon.log`, `stdout.log`, `stderr.log`) to 10 MiB.

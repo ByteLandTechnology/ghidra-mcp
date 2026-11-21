@@ -204,10 +204,10 @@ claude mcp get ghidra-mcp
 
 ## 首次分析过程
 
-守护进程提供 `ghidra_help`，并为每个领域提供一个 MCP 工具。
+守护进程提供 `ghidra_help`、只读领域工具与 `_write` 领域工具。
 每个领域工具接受一个 `operation` 及其 `params`。
 指定一个会话的操作还接受该会话的 `md5`。
-本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
+本文用工具名加操作名表示一个操作，例如 `ghidra_session_write open`。
 
 首次调用某个操作前，使用其领域和操作名调用 `ghidra_help`。
 例如，使用以下参数调用 `ghidra_help`：
@@ -222,7 +222,7 @@ claude mcp get ghidra-mcp
 
 ### 1. 打开二进制会话
 
-使用 `ghidra_session` 打开本地二进制文件：
+使用 `ghidra_session_write` 打开本地二进制文件：
 
 ```json
 {
@@ -246,7 +246,7 @@ claude mcp get ghidra-mcp
 
 ### 2. 启动后台分析
 
-使用 `ghidra_analysis` 在打开的二进制文件上启动自动分析：
+使用 `ghidra_analysis_write` 在打开的二进制文件上启动自动分析：
 
 ```json
 {
@@ -313,7 +313,7 @@ claude mcp get ghidra-mcp
 
 ### 5. 保存更改与关闭
 
-使用 `ghidra_program` 将程序更改保存到 Ghidra 项目中：
+使用 `ghidra_program_write` 将程序更改保存到 Ghidra 项目中：
 
 ```json
 {
@@ -322,7 +322,7 @@ claude mcp get ghidra-mcp
 }
 ```
 
-使用 `ghidra_session` 关闭活动会话：
+使用 `ghidra_session_write` 关闭活动会话：
 
 ```json
 {
