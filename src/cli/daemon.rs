@@ -26,6 +26,9 @@ const NOT_RUNNING: u8 = 3;
 /// The error text of a daemon from before `ghidra_daemon`.
 const OLD_DAEMON: &str = "unknown tool: ghidra_daemon";
 
+/// The error text of a daemon from before `ghidra_daemon_write`.
+const OLD_DAEMON_WRITE: &str = "unknown tool: ghidra_daemon_write";
+
 /// The time between two reads of the log for `daemon logs --follow`.
 const FOLLOW_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -97,16 +100,26 @@ pub async fn run(command: DaemonCommand) -> Result<ExitCode> {
     }
 }
 
-/// Calls a `ghidra_daemon` operation through a connection that is open.
-async fn call(manager: &ProxyConnectionManager, operation: &str, params: Value) -> Result<Value> {
+/// Calls a daemon tool operation through a connection that is open.
+async fn call_tool(
+    manager: &ProxyConnectionManager,
+    tool: &str,
+    operation: &str,
+    params: Value,
+) -> Result<Value> {
     let Value::Object(params) = params else {
         unreachable!("the caller gives a JSON object");
     };
     let mut arguments = Map::new();
     arguments.insert("operation".into(), operation.into());
     arguments.insert("params".into(), Value::Object(params));
-    let result = manager.call_tool("ghidra_daemon".into(), arguments).await?;
+    let result = manager.call_tool(tool.to_string(), arguments).await?;
     output::tool_value(result)
+}
+
+/// Calls a `ghidra_daemon` operation through a connection that is open.
+async fn call(manager: &ProxyConnectionManager, operation: &str, params: Value) -> Result<Value> {
+    call_tool(manager, "ghidra_daemon", operation, params).await
 }
 
 /// Runs `daemon start`.
@@ -133,7 +146,13 @@ async fn stop(force: bool) -> Result<ExitCode> {
         out!("Daemon: not running");
         return Ok(ExitCode::SUCCESS);
     }
-    let result = call(&manager, "shutdown", json!({ "force": force })).await;
+    let params = json!({ "force": force });
+    let mut result = call_tool(&manager, "ghidra_daemon_write", "shutdown", params.clone()).await;
+    if let Err(ref error) = result {
+        if error.to_string().contains(OLD_DAEMON_WRITE) {
+            result = call(&manager, "shutdown", params).await;
+        }
+    }
     if let Err(error) = result {
         if error.to_string().contains(OLD_DAEMON) {
             return stop_old_daemon(&manager).await;

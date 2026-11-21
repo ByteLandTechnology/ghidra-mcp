@@ -82,14 +82,14 @@ To read the API documentation of each module and item, use `cargo doc --document
 
 ![Tool Call Sequence](img/tool_call.svg)
 
-The daemon shows `ghidra_help` and one MCP tool for each domain, for example `ghidra_function`.
+The daemon shows `ghidra_help`, read-only domain tools such as `ghidra_function`, and write domain tools such as `ghidra_function_write`.
 The bridge domain tools use the domain and operation names of the bridge MCP server.
 The daemon also has local operations and does not expose the bridge shutdown operation.
 
 A call has an `operation` and its `params`. An operation that names one session also has the `md5` of that session, never in `params`.
 `ghidra_help` shows the `params` schema, md5 rule (`required`, `optional` or `absent`) and effects of each operation.
 The domain tool descriptions tell clients to get this schema before the first call to an operation.
-This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
+This document writes an operation as the tool name and the operation name, for example `ghidra_session_write open`.
 
 `tools::call` finds the domain and the operation in the catalog (`tools/catalog.rs`).
 It checks the required top-level `params` fields and rejects unexpected top-level fields when the schema does not permit them.
@@ -108,13 +108,13 @@ The bridge distinguishes database transaction failures (HTTP 500 `transaction_fa
 
 ### Open a binary
 
-`ghidra_session open` accepts a `path` on the daemon host, or the `md5` of a binary that the daemon saved before.
+`ghidra_session_write open` accepts a `path` on the daemon host, or the `md5` of a binary that the daemon saved before.
 For a path, the daemon calculates the MD5 and copies the file into the persistent home.
 Then later calls need only the MD5.
 The daemon uses a connected session again, or joins a launch in progress, or starts a new launch.
 [Session lifecycle](#session-lifecycle) describes the launch.
 
-`ghidra_session open` returns the launch job immediately. If the client sets `wait`, it waits for the job.
+`ghidra_session_write open` returns the launch job immediately. If the client sets `wait`, it waits for the job.
 
 ### Upload a binary
 
@@ -127,8 +127,8 @@ The daemon does not stop an active upload.
 
 ### Shutdown
 
-These events stop the daemon: Ctrl-C, `SIGTERM`, `SIGHUP`, the equivalent Windows console events, and `ghidra_daemon shutdown`.
-`ghidra-mcp daemon stop` uses `ghidra_daemon shutdown`.
+These events stop the daemon: Ctrl-C, `SIGTERM`, `SIGHUP`, the equivalent Windows console events, and `ghidra_daemon_write shutdown`.
+`ghidra-mcp daemon stop` uses `ghidra_daemon_write shutdown`.
 The daemon then does these steps:
 
 1. It refuses new work.

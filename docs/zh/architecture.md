@@ -80,13 +80,13 @@
 
 ![工具调用流程](../img/tool_call.svg)
 
-守护进程提供 `ghidra_help`，并为每个领域提供一个 MCP 工具，例如 `ghidra_function`。
+守护进程提供 `ghidra_help`、只读领域工具（例如 `ghidra_function`）和写入领域工具（例如 `ghidra_function_write`）。
 桥接领域工具使用桥接 MCP 服务器的领域名和操作名。
 守护进程还提供本地操作，但不提供桥接的 shutdown 操作。
 一次调用包含 `operation` 和它的 `params`。指定一个会话的操作还包含该会话的 `md5`，它从不放在 `params` 中。
 `ghidra_help` 显示每个操作的 `params` 模式、md5 规则（`required`、`optional` 或 `absent`）和效果。
 领域工具的描述提示客户端在首次调用操作前获取其模式。
-本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
+本文用工具名加操作名表示一个操作，例如 `ghidra_session_write open`。
 
 `tools::call` 在目录（`tools/catalog.rs`）中查找领域和操作。
 它检查 `params` 中的顶层必填字段，并在模式不允许额外字段时拒绝意外的顶层字段。
@@ -105,12 +105,12 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 
 ### 打开二进制文件
 
-`ghidra_session open` 接受守护进程主机上的 `path`，或守护进程以前保存过的二进制文件的 `md5`。
+`ghidra_session_write open` 接受守护进程主机上的 `path`，或守护进程以前保存过的二进制文件的 `md5`。
 对于路径，守护进程计算 MD5，并把文件复制到持久主目录。
 之后的调用只需要 MD5。
 守护进程重用已连接的会话，或加入正在进行的启动，或开始新的启动。
 [会话生命周期](#会话生命周期)描述启动过程。
-`ghidra_session open` 立即返回启动作业。如果客户端设置了 `wait`，它会等待该作业。
+`ghidra_session_write open` 立即返回启动作业。如果客户端设置了 `wait`，它会等待该作业。
 
 ### 上传二进制文件
 
@@ -123,8 +123,8 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 
 ### 关闭
 
-以下事件会停止守护进程：Ctrl-C、`SIGTERM`、`SIGHUP`、对应的 Windows 控制台事件，以及 `ghidra_daemon shutdown`。
-`ghidra-mcp daemon stop` 使用 `ghidra_daemon shutdown`。
+以下事件会停止守护进程：Ctrl-C、`SIGTERM`、`SIGHUP`、对应的 Windows 控制台事件，以及 `ghidra_daemon_write shutdown`。
+`ghidra-mcp daemon stop` 使用 `ghidra_daemon_write shutdown`。
 随后守护进程执行以下步骤：
 
 1. 拒绝新的工作。

@@ -72,7 +72,7 @@ fn no_params() -> Value {
 /// All local operations, in the sequence of `ghidra_help`.
 pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
     LocalOperation {
-        domain: "session",
+        domain: "session_write",
         name: "open",
         description: concat!(
             "Open or reuse a binary session without auto-analysis. Set md5 to load an active ",
@@ -147,7 +147,7 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         },
     },
     LocalOperation {
-        domain: "session",
+        domain: "session_write",
         name: "close",
         description: "Close an active session.",
         schema: || {
@@ -308,7 +308,7 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         run: |daemon, _| Box::pin(async move { Ok(daemon_status(daemon)) }),
     },
     LocalOperation {
-        domain: "daemon",
+        domain: "daemon_write",
         name: "shutdown",
         description: concat!(
             "Stop the shared daemon for all clients. The daemon closes all sessions first. ",
@@ -336,7 +336,7 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         run: |daemon, request| Box::pin(async move { shutdown_daemon(daemon, request) }),
     },
     LocalOperation {
-        domain: "analysis",
+        domain: "analysis_write",
         name: "start",
         description: concat!(
             "Start auto-analysis for a current ready session. Returns at once by default. ",
@@ -362,7 +362,7 @@ fn millis_or(millis: Option<u64>, default: Duration) -> Duration {
     millis.map_or(default, Duration::from_millis)
 }
 
-/// The parameters of `ghidra_session open`. The call has `path` or `md5`, not both.
+/// The parameters of `ghidra_session_write open`. The call has `path` or `md5`, not both.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenArgs {
@@ -375,7 +375,7 @@ struct OpenArgs {
     timeout_ms: Option<u64>,
 }
 
-/// The parameters of `ghidra_analysis start`.
+/// The parameters of `ghidra_analysis_write start`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AnalysisArgs {
@@ -389,7 +389,7 @@ struct AnalysisArgs {
     params: Map<String, Value>,
 }
 
-/// The parameters of `ghidra_session close`.
+/// The parameters of `ghidra_session_write close`.
 #[derive(Deserialize)]
 struct CloseArgs {
     /// Kill the process. Do not tell the bridge to save and stop.
@@ -407,7 +407,7 @@ struct JobArgs {
     timeout_ms: Option<u64>,
 }
 
-/// The parameters of `ghidra_daemon shutdown`.
+/// The parameters of `ghidra_daemon_write shutdown`.
 #[derive(Deserialize)]
 struct ShutdownArgs {
     /// Stop the daemon also if a session is live or a job runs.
@@ -473,11 +473,11 @@ fn daemon_status(daemon: &Daemon) -> Output {
     )
 }
 
-/// The time between the reply of `ghidra_daemon shutdown` and the start of the shutdown.
+/// The time between the reply of `ghidra_daemon_write shutdown` and the start of the shutdown.
 /// Then the reply gets to the client before the daemon closes the connections.
 const SHUTDOWN_DELAY: Duration = Duration::from_millis(200);
 
-/// Runs `ghidra_daemon shutdown`.
+/// Runs `ghidra_daemon_write shutdown`.
 fn shutdown_daemon(daemon: &Daemon, request: Request) -> Result<Output> {
     let ShutdownArgs { force } = parse(&request.label, request.params)?;
     let (sessions, jobs) = live_work(daemon);
@@ -504,7 +504,7 @@ fn shutdown_daemon(daemon: &Daemon, request: Request) -> Result<Output> {
     ))
 }
 
-/// Runs `ghidra_session open`: imports a file on the daemon host, or opens a saved binary.
+/// Runs `ghidra_session_write open`: imports a file on the daemon host, or opens a saved binary.
 async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
     let args: OpenArgs = parse(&request.label, request.params)?;
     let state = &daemon.state;
@@ -536,18 +536,18 @@ async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
         (None, Some(md5)) => session::open(state, md5, None, wait).await,
         (None, None) => Err(DomainError::invalid_argument(
             "path/md5",
-            "`ghidra_session open` requires either params.path or md5",
+            "`ghidra_session_write open` requires either params.path or md5",
         )
         .into()),
         (Some(_), Some(_)) => Err(DomainError::invalid_argument(
             "path/md5",
-            "`ghidra_session open` accepts either params.path or md5, not both",
+            "`ghidra_session_write open` accepts either params.path or md5, not both",
         )
         .into()),
     }
 }
 
-/// Runs `ghidra_analysis start`.
+/// Runs `ghidra_analysis_write start`.
 async fn start_analysis(daemon: &Daemon, request: Request) -> Result<Output> {
     let md5 = request.session();
     let args: AnalysisArgs = parse(&request.label, request.params)?;

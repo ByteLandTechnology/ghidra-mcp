@@ -80,13 +80,13 @@ Unix では、ローカルソケットは Unix ドメインソケットです。
 
 ![ツール呼び出しの流れ](../img/tool_call.svg)
 
-デーモンは `ghidra_help` と、ドメインごとに 1 つの MCP ツール（例：`ghidra_function`）を提供します。
+デーモンは `ghidra_help`、読み取り専用のドメインツール（例：`ghidra_function`）、および書き込みドメインツール（例：`ghidra_function_write`）を提供します。
 ブリッジのドメインツールは、ブリッジ MCP サーバーのドメイン名と操作名を使用します。
 デーモンにはローカル操作もありますが、ブリッジの shutdown 操作は公開しません。
 呼び出しには `operation` とその `params` が含まれます。1 つのセッションを指定する操作には、そのセッションの `md5` も含まれます。`md5` は `params` に入れません。
 `ghidra_help` は、各操作の `params` スキーマ、md5 ルール（`required`、`optional`、`absent`）、効果を表示します。
 ドメインツールの説明は、操作を初めて呼び出す前にスキーマを取得するようクライアントに指示します。
-このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。
+このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session_write open`）。
 
 `tools::call` はカタログ（`tools/catalog.rs`）でドメインと操作を探します。
 `params` のトップレベルの必須フィールドを確認し、スキーマが許可しない追加のトップレベルフィールドを拒否します。
@@ -105,12 +105,12 @@ MCP ハンドラーはエラーを型付けされた `DomainError` と JSON-RPC 
 
 ### バイナリを開く
 
-`ghidra_session open` は、デーモンホスト上の `path`、またはデーモンが以前に保存したバイナリの `md5` を受け付けます。
+`ghidra_session_write open` は、デーモンホスト上の `path`、またはデーモンが以前に保存したバイナリの `md5` を受け付けます。
 パスの場合、デーモンは MD5 を計算し、ファイルを永続ホームにコピーします。
 その後の呼び出しには MD5 だけが必要です。
 デーモンは、接続済みのセッションを再利用するか、進行中の起動に参加するか、新しい起動を開始します。
 起動については[セッションのライフサイクル](#セッションのライフサイクル)で説明します。
-`ghidra_session open` は起動ジョブをすぐに返します。クライアントが `wait` を設定した場合は、ジョブを待ちます。
+`ghidra_session_write open` は起動ジョブをすぐに返します。クライアントが `wait` を設定した場合は、ジョブを待ちます。
 
 ### バイナリのアップロード
 
@@ -123,8 +123,8 @@ MCP ハンドラーはエラーを型付けされた `DomainError` と JSON-RPC 
 
 ### シャットダウン
 
-次のイベントでデーモンは停止します：Ctrl-C、`SIGTERM`、`SIGHUP`、対応する Windows コンソールイベント、および `ghidra_daemon shutdown`。
-`ghidra-mcp daemon stop` は `ghidra_daemon shutdown` を使用します。
+次のイベントでデーモンは停止します：Ctrl-C、`SIGTERM`、`SIGHUP`、対応する Windows コンソールイベント、および `ghidra_daemon_write shutdown`。
+`ghidra-mcp daemon stop` は `ghidra_daemon_write shutdown` を使用します。
 その後、デーモンは次の手順を実行します：
 
 1. 新しい作業を拒否します。
