@@ -267,6 +267,7 @@ fn bridge_target(method: &str) -> Option<(&'static str, String)> {
         "session" if operation == "shutdown" => return None,
         "session" => ("bridge", operation.to_string()),
         "program_language" => ("program", format!("language.{operation}")),
+        "import" | "export" | "entry_point" => ("program", format!("{prefix}.{operation}")),
         "address_space" => ("address", format!("space.{operation}")),
         "memory_block" => ("memory", format!("block.{operation}")),
         "code_unit" | "data_unit" | "instruction" | "flow_override" => {
