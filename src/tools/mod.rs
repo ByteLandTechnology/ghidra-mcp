@@ -23,6 +23,7 @@
 mod catalog;
 mod help;
 mod local;
+mod schema;
 
 pub use catalog::tool_definitions;
 

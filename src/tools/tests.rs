@@ -201,20 +201,86 @@ fn session_md5_is_never_a_parameter() {
 /// Makes sure that Gemini can use each public tool as a function declaration.
 #[test]
 fn public_tool_contract_is_gemini_compatible() {
-    for tool in tool_definitions() {
+    let tools = tool_definitions();
+    assert_eq!(tools.len(), 19);
+    for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
         assert!(valid_function_name(name), "tool name {name}");
 
         let schema = &tool["inputSchema"];
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"].is_object());
-        for unsupported in ["oneOf", "anyOf", "allOf", "$ref", "additionalProperties"] {
+        assert_no_unsupported_schema_keys(name, schema);
+        assert!(tool.get("outputSchema").is_none());
+
+        if name != "ghidra_help" {
+            let params = &schema["properties"]["params"];
+            assert_eq!(params["type"], "object", "{name} params type");
+            let param_props = params["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} params.properties must be an object"));
             assert!(
-                schema.get(unsupported).is_none(),
-                "{name} contains {unsupported}"
+                !param_props.is_empty(),
+                "{name} must publish non-empty params.properties"
             );
         }
-        assert!(tool.get("outputSchema").is_none());
+    }
+
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|item| item["name"] == name)
+            .unwrap_or_else(|| panic!("no tool {name}"))
+    };
+    assert!(tool("ghidra_listing")["description"]
+        .as_str()
+        .expect("listing description")
+        .contains("data units"));
+    assert_eq!(
+        tool("ghidra_upload")["inputSchema"]["properties"]["params"]["required"],
+        json!(["fileName", "size"])
+    );
+    assert_eq!(
+        tool("ghidra_decompilation")["inputSchema"]["properties"]["params"]["required"],
+        json!(["selector"])
+    );
+    assert_eq!(
+        tool("ghidra_reference")["inputSchema"]["properties"]["params"]["required"],
+        json!(["filter"])
+    );
+    assert_eq!(
+        tool("ghidra_batch")["inputSchema"]["properties"]["params"]["required"],
+        json!(["items"])
+    );
+}
+
+/// Examines a schema tree to verify that unsupported provider keys never appear.
+fn assert_no_unsupported_schema_keys(name: &str, value: &Value) {
+    match value {
+        Value::Object(map) => {
+            for unsupported in [
+                "oneOf",
+                "anyOf",
+                "allOf",
+                "$ref",
+                "$defs",
+                "additionalProperties",
+            ] {
+                assert!(
+                    map.get(unsupported).is_none(),
+                    "{name} contains {unsupported}"
+                );
+            }
+            for child in map.values() {
+                assert_no_unsupported_schema_keys(name, child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                assert_no_unsupported_schema_keys(name, item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -373,14 +439,22 @@ fn help_has_three_levels() {
 
     let (_, memory) = help::run(object(json!({ "domain": "memory" }))).expect("operations");
     assert_eq!(memory["domain"], "ghidra_memory");
-    let block_list = memory["operations"]
-        .as_array()
-        .expect("operations")
+    let memory_operations = memory["operations"].as_array().expect("operations");
+    assert_ne!(memory_operations.len(), 0);
+    for entry in memory_operations {
+        assert!(entry["description"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()));
+        assert!(entry["effects"].is_object());
+        assert_eq!(entry["inputSchema"]["type"], "object");
+    }
+    let block_list = memory_operations
         .iter()
         .find(|operation| operation["name"] == "block.list")
         .expect("block.list");
     assert_eq!(block_list["md5"], "required");
     assert_eq!(block_list["effects"]["read_only"], true);
+    assert!(block_list["inputSchema"]["properties"].is_object());
 
     let (_, open) = help::run(object(
         json!({ "domain": "ghidra_session", "operation": "open" }),
