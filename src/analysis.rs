@@ -168,7 +168,12 @@ fn record_progress(state: &McpState, job_id: &str, snapshot: &Value) {
 /// function returns its message as an error.
 fn rpc_result(envelope: RpcEnvelope) -> Result<Value> {
     if let Some(error) = envelope.error {
-        return Err(DomainError::from_bridge(envelope.status, &error).into());
+        return Err(DomainError::from_bridge(
+            envelope.status,
+            &error,
+            envelope.error_data.as_ref(),
+        )
+        .into());
     }
     envelope.result.ok_or_else(|| {
         DomainError::Internal {

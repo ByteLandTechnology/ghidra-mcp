@@ -508,3 +508,92 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     .await
     .expect("shutdown starts after the reply");
 }
+
+/// Makes sure that `ghidra_memory search` and the enriched bridge schemas are in `ghidra_help`.
+#[test]
+fn help_exposes_memory_search_and_enriched_bridge_primitives() {
+    let (_, memory_search) = help::run(object(
+        json!({ "domain": "ghidra_memory", "operation": "search" }),
+    ))
+    .expect("memory search help");
+    assert_eq!(memory_search["effects"]["read_only"], true);
+    assert_eq!(memory_search["md5"], "required");
+    let search_props = &memory_search["inputSchema"]["properties"];
+    let search_modes = search_props["filter"]["oneOf"].as_array().expect("oneOf");
+    assert_eq!(search_modes.len(), 3);
+    assert!(search_modes[0]["properties"]["pattern"].is_object());
+    assert!(search_modes[1]["properties"]["bytes"].is_object());
+    assert!(search_modes[2]["properties"]["text"].is_object());
+    assert!(search_props["scan"]["properties"]["range"].is_object());
+
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let (op, _) = prepare(
+        "ghidra_memory",
+        object(json!({
+            "operation": "search",
+            "md5": md5,
+            "params": {
+                "filter": { "pattern": "48 8b ??" },
+                "scan": { "timeout_ms": 1000 }
+            }
+        })),
+    )
+    .expect("prepare memory search");
+    assert!(matches!(&op.route, Route::Bridge(method) if method == "memory.search"));
+
+    let (_, data_list) = help::run(object(
+        json!({ "domain": "listing", "operation": "data_unit.list" }),
+    ))
+    .expect("data_unit.list help");
+    let data_filter = &data_list["inputSchema"]["properties"]["filter"]["properties"];
+    assert!(data_filter["string_only"].is_object());
+    assert!(data_filter["data_type"].is_object());
+    assert!(data_filter["value_contains"].is_object());
+
+    let (_, instr_list) = help::run(object(
+        json!({ "domain": "listing", "operation": "instruction.list" }),
+    ))
+    .expect("instruction.list help");
+    let instr_filter = &instr_list["inputSchema"]["properties"]["filter"]["properties"];
+    assert!(instr_filter["mnemonic"].is_object());
+    assert!(instr_filter["flow_type"].is_object());
+    assert!(instr_filter["function"].is_object());
+
+    let (_, fn_get) =
+        help::run(object(json!({ "domain": "function", "operation": "get" }))).expect("fn get");
+    let fn_modes = fn_get["inputSchema"]["properties"]["selector"]["oneOf"]
+        .as_array()
+        .expect("selector oneOf");
+    assert_eq!(fn_modes.len(), 4);
+
+    let (_, dt_get) = help::run(object(json!({ "domain": "data_type", "operation": "get" })))
+        .expect("data_type get");
+    let dt_modes = dt_get["inputSchema"]["properties"]["selector"]["oneOf"]
+        .as_array()
+        .expect("data_type selector oneOf");
+    assert_eq!(dt_modes.len(), 2);
+}
+
+/// Makes sure that HTTP 409 conflicts from the bridge preserve candidate details.
+#[test]
+fn bridge_conflicts_keep_candidate_details() {
+    let rpc_err = crate::model::RpcError {
+        code: "ambiguous_symbol".to_string(),
+        message: "ambiguous function symbol: init".to_string(),
+        target: Some("/selector/name".to_string()),
+    };
+    let raw_data = json!({
+        "status": 409,
+        "code": "ambiguous_symbol",
+        "details": {
+            "candidates": ["A::init @ ram:00100000", "B::init @ ram:00100200"]
+        }
+    });
+    let err = DomainError::from_bridge(Some(409), &rpc_err, Some(&raw_data));
+    let envelope = err.to_envelope();
+    assert_eq!(envelope["response"]["error"]["data"]["type"], "conflict");
+    assert_eq!(
+        envelope["response"]["error"]["data"]["details"]["candidates"],
+        json!(["A::init @ ram:00100000", "B::init @ ram:00100200"])
+    );
+}
