@@ -154,14 +154,13 @@ impl DomainError {
                 let candidates = error_data
                     .and_then(|data| data.pointer("/details/candidates"))
                     .and_then(Value::as_array)
-                    .map(|items| {
+                    .map_or_default(|items| {
                         items
                             .iter()
                             .filter_map(Value::as_str)
                             .map(str::to_string)
                             .collect()
-                    })
-                    .unwrap_or_default();
+                    });
                 Self::Conflict {
                     code: error.code.clone(),
                     target: error.target.clone(),
