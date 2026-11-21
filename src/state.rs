@@ -650,6 +650,37 @@ impl McpState {
             }
         }
     }
+
+    /// Waits for a job to leave [`JobStatus::Running`] and returns its record,
+    /// whether the job completed or failed.
+    ///
+    /// # Errors
+    ///
+    /// Fails for an unknown job or if `timeout` expires first.
+    pub async fn wait_job_settled(&self, job_id: &str, timeout: Duration) -> Result<JobRecord> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let job = self.job(job_id)?;
+            if job.status != JobStatus::Running {
+                return Ok(job);
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                let md5 = self
+                    .job(job_id)
+                    .ok()
+                    .and_then(|j| j.session_id)
+                    .unwrap_or_else(|| job_id.to_string());
+                return Err(DomainError::AgentTimeout {
+                    md5,
+                    timeout_seconds: Some(timeout.as_secs()),
+                }
+                .into());
+            }
+        }
+    }
 }
 
 /// Loads the runtime snapshots. After a restart, no bridge has a connection.

@@ -296,6 +296,36 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         },
     },
     LocalOperation {
+        domain: "job",
+        name: "cancel",
+        description: concat!(
+            "Cancel a start-analysis background job. Returns at once by default. ",
+            "Set wait=true to wait until the job stops."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "jobId": { "type": "string" },
+                    "wait": { "type": "boolean", "default": false },
+                    "timeoutMs": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["jobId"],
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Absent,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: false,
+            destructive: false,
+            idempotent: true,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| Box::pin(cancel_job(daemon, request)),
+    },
+    LocalOperation {
         domain: "daemon",
         name: "status",
         description: concat!(
@@ -404,6 +434,19 @@ struct JobArgs {
     /// The job.
     job_id: String,
     /// The maximum wait of `ghidra_job wait`, instead of the launch timeout.
+    timeout_ms: Option<u64>,
+}
+
+/// The parameters of `ghidra_job cancel`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CancelJobArgs {
+    /// The job.
+    job_id: String,
+    /// Wait until the job stops.
+    #[serde(default)]
+    wait: bool,
+    /// The maximum wait, instead of the launch timeout.
     timeout_ms: Option<u64>,
 }
 
@@ -560,6 +603,22 @@ async fn start_analysis(daemon: &Daemon, request: Request) -> Result<Output> {
         format!("Analysis completed for session {md5}")
     } else {
         format!("Analysis started for session {md5}")
+    };
+    Ok((text, json!({ "job": job })))
+}
+
+/// Runs `ghidra_job cancel`.
+async fn cancel_job(daemon: &Daemon, request: Request) -> Result<Output> {
+    let args: CancelJobArgs = parse(&request.label, request.params)?;
+    let state = &daemon.state;
+    let wait = args
+        .wait
+        .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
+    let job = analysis::cancel_job(state, &args.job_id, wait).await?;
+    let text = if job.status == JobStatus::Running {
+        format!("Requested cancellation of job {}", job.id)
+    } else {
+        format!("Job {} stopped", job.id)
     };
     Ok((text, json!({ "job": job })))
 }

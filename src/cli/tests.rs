@@ -70,6 +70,15 @@ fn management_commands_parse() {
             ..
         }))
     ));
+    let cli = parse(&["job", "cancel", "id", "--wait", "--timeout-ms", "10"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Job(JobCommand::Cancel {
+            wait: true,
+            timeout_ms: Some(10),
+            ..
+        }))
+    ));
     assert!(parse(&["paths", "--json"]).is_ok());
     assert!(parse(&["config", "check"]).is_ok());
     assert!(parse(&["call", "ghidra_help", "[]"]).is_err());

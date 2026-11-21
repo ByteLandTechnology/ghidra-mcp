@@ -114,7 +114,9 @@ fn tool_definitions_have_routes_and_annotations() {
         tool("ghidra_memory")["annotations"]["destructiveHint"],
         true
     );
-    assert_eq!(tool("ghidra_job")["annotations"]["readOnlyHint"], true);
+    assert_eq!(tool("ghidra_job")["annotations"]["readOnlyHint"], false);
+    assert_eq!(tool("ghidra_job")["annotations"]["destructiveHint"], false);
+    assert_eq!(tool("ghidra_job")["annotations"]["idempotentHint"], true);
     assert_eq!(
         tool("ghidra_session")["annotations"]["destructiveHint"],
         true
@@ -196,6 +198,8 @@ fn session_md5_is_never_a_parameter() {
     assert!(rule("session", "list") == Md5Rule::Absent);
     assert!(rule("upload", "prepare") == Md5Rule::Required);
     assert!(rule("job", "wait") == Md5Rule::Absent);
+    assert!(rule("job", "cancel") == Md5Rule::Absent);
+    assert!(rule("analysis", "cancel") == Md5Rule::Required);
 }
 
 /// Makes sure that Gemini can use each public tool as a function declaration.
@@ -265,6 +269,17 @@ fn bridge_operation_uses_its_bridge_method() {
         Route::Local(_) => panic!("ghidra_bridge get must go to the bridge"),
     }
     assert_eq!(request.params, json!({}));
+
+    let (cancel_op, cancel_req) = prepare(
+        "ghidra_analysis",
+        object(json!({ "operation": "cancel", "md5": "0123456789abcdef0123456789abcdef" })),
+    )
+    .expect("valid analysis cancel call");
+    match &cancel_op.route {
+        Route::Bridge(method) => assert_eq!(method, "analysis.cancel"),
+        Route::Local(_) => panic!("ghidra_analysis cancel must go to the bridge"),
+    }
+    assert_eq!(cancel_req.params, json!({}));
 }
 
 /// Makes sure that `md5: null` is the same as no `md5`.
@@ -507,4 +522,156 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     )
     .await
     .expect("shutdown starts after the reply");
+}
+
+/// Makes sure that `ghidra_job cancel` refuses launch jobs and returns finished analysis jobs.
+#[tokio::test]
+async fn job_cancel_refuses_launch_jobs_and_returns_finished_analysis_jobs() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let md5 = "0123456789abcdef0123456789abcdef";
+
+    for kind in [
+        crate::model::job_kind::ANALYZE_BINARY,
+        crate::model::job_kind::RECOVER_SESSION_BRIDGE,
+    ] {
+        let launch_job = daemon.state.insert_job(kind, Some(md5.into()));
+        let error = super::call(
+            &daemon,
+            "ghidra_job",
+            object(json!({ "operation": "cancel", "params": { "jobId": launch_job.id } })),
+        )
+        .await
+        .unwrap_err();
+        let message = reason(&error);
+        assert!(message.contains("ghidra_session close"), "{message}");
+    }
+
+    let completed = daemon
+        .state
+        .insert_job(crate::model::job_kind::START_ANALYSIS, Some(md5.into()));
+    daemon.state.finish_job(
+        &completed.id,
+        Ok(json!({ "analysis": { "status": "completed" } })),
+    );
+    let (_, done) = super::call(
+        &daemon,
+        "ghidra_job",
+        object(json!({
+            "operation": "cancel",
+            "params": { "jobId": completed.id, "wait": true }
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(done["job"]["status"], "completed");
+
+    let failed = daemon
+        .state
+        .insert_job(crate::model::job_kind::START_ANALYSIS, Some(md5.into()));
+    daemon
+        .state
+        .finish_job(&failed.id, Err(DomainError::transaction_failed("boom")));
+    let (_, done_failed) = super::call(
+        &daemon,
+        "ghidra_job",
+        object(json!({
+            "operation": "cancel",
+            "params": { "jobId": failed.id, "wait": true }
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(done_failed["job"]["status"], "failed");
+    assert!(done_failed["job"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("boom"));
+}
+
+/// Makes sure that `ghidra_job cancel` stops a live analysis job and keeps the bridge error.
+#[tokio::test]
+async fn job_cancel_stops_live_analysis_and_propagates_error() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let mut record = crate::model::SessionRecord::launching(md5.into(), "bin".into(), "t".into());
+    record.mark_ready();
+    daemon.state.put_session(&record).unwrap();
+
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let conn_id = "conn-1".to_string();
+    assert!(daemon.state.attach_bridge(
+        md5,
+        crate::state::ConnectionHandle {
+            conn_id: conn_id.clone(),
+            sender,
+        }
+    ));
+
+    let state = daemon.state.clone();
+    let responder = tokio::spawn(async move {
+        let mut cancelled = false;
+        while let Some(axum::extract::ws::Message::Text(frame)) = receiver.recv().await {
+            let rpc: Value = serde_json::from_str(&frame).unwrap();
+            let id = rpc["id"].as_str().unwrap().to_string();
+            let method = rpc["method"].as_str().unwrap();
+            let snapshot = match method {
+                "analysis.start" => json!({ "status": "running", "progress": 10 }),
+                "analysis.cancel" => {
+                    cancelled = true;
+                    json!({ "status": "running", "progress": 25 })
+                }
+                "analysis.get" if cancelled => json!({
+                    "status": "cancelled",
+                    "progress": 25,
+                    "error": "analysis cancelled: cancelled by user"
+                }),
+                "analysis.get" => json!({ "status": "running", "progress": 15 }),
+                other => panic!("unexpected method {other}"),
+            };
+            let mut envelope = crate::model::RpcEnvelope::response(id.clone(), md5.into(), 200);
+            envelope.result = Some(snapshot);
+            state.deliver_response(md5, &conn_id, &id, envelope);
+        }
+    });
+
+    let (_, started) = super::call(
+        &daemon,
+        "ghidra_analysis",
+        object(json!({ "operation": "start", "md5": md5, "params": {} })),
+    )
+    .await
+    .unwrap();
+    let job_id = started["job"]["id"].as_str().unwrap().to_string();
+
+    let (_, first) = super::call(
+        &daemon,
+        "ghidra_job",
+        object(json!({
+            "operation": "cancel",
+            "params": { "jobId": job_id, "wait": true, "timeoutMs": 5000 }
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first["job"]["status"], "failed");
+    assert!(first["job"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("analysis cancelled: cancelled by user"));
+
+    let (_, second) = super::call(
+        &daemon,
+        "ghidra_job",
+        object(json!({
+            "operation": "cancel",
+            "params": { "jobId": job_id, "wait": true }
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(second["job"]["status"], "failed");
+    assert_eq!(second["job"]["error"], first["job"]["error"]);
+    responder.abort();
 }
