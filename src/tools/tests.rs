@@ -508,3 +508,40 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     .await
     .expect("shutdown starts after the reply");
 }
+
+/// Checks that the catalog publishes the code-unit, instruction, and memory write schemas.
+#[test]
+fn listing_and_memory_mutation_schemas_are_published() {
+    let (_, listing_domain) = help::run(object(json!({ "domain": "listing" }))).expect("listing");
+    let ops = listing_domain["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .map(|entry| entry["name"].as_str().expect("operation name"))
+        .collect::<Vec<_>>();
+    for required in [
+        "code_unit.clear",
+        "instruction.assemble",
+        "instruction.disassemble",
+    ] {
+        assert!(ops.contains(&required), "missing {required} in {ops:?}");
+    }
+
+    let (_, assemble) = help::run(object(json!({
+        "domain": "listing",
+        "operation": "instruction.assemble"
+    })))
+    .expect("instruction.assemble");
+    assert_eq!(assemble["md5"], "required");
+    assert_eq!(assemble["effects"]["mutates_program"], true);
+    assert!(assemble["inputSchema"]["properties"]["pad_nop"].is_object());
+
+    let (_, memory_write) = help::run(object(json!({
+        "domain": "memory",
+        "operation": "write"
+    })))
+    .expect("memory.write");
+    let patch_props = &memory_write["inputSchema"]["properties"]["patch"]["properties"];
+    assert!(patch_props["clear_existing"].is_object());
+    assert!(patch_props["disassemble"].is_object());
+}
