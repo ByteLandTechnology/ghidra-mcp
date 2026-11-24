@@ -9,7 +9,7 @@ use super::catalog::{Effects, Md5Rule};
 use super::{parse, Daemon, Handler, Output, Request};
 use crate::error::DomainError;
 use crate::model::{JobStatus, SessionRecord};
-use crate::{analysis, session};
+use crate::{analysis, graph, session};
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -354,6 +354,42 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         md5: Md5Rule::Required,
         basis: Basis::Extends("analysis.start"),
         run: |daemon, request| Box::pin(start_analysis(daemon, request)),
+    },
+    LocalOperation {
+        domain: "graph",
+        name: "callgraph",
+        description: concat!(
+            "Build a bounded caller and callee graph around a function. ",
+            "Provide entry or address."
+        ),
+        schema: graph::callgraph_schema,
+        md5: Md5Rule::Required,
+        basis: Basis::Own(READ),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                let params = parse(&request.label, request.params)?;
+                graph::run_callgraph(&daemon.state, &md5, &request.label, params).await
+            })
+        },
+    },
+    LocalOperation {
+        domain: "graph",
+        name: "basic_blocks",
+        description: concat!(
+            "Build the control-flow basic blocks and branch edges of a function. ",
+            "Provide entry or address."
+        ),
+        schema: graph::basic_blocks_schema,
+        md5: Md5Rule::Required,
+        basis: Basis::Own(READ),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                let params = parse(&request.label, request.params)?;
+                graph::run_basic_blocks(&daemon.state, &md5, &request.label, params).await
+            })
+        },
     },
 ];
 

@@ -62,6 +62,7 @@ Unix では、ローカルソケットは Unix ドメインソケットです。
 | `tools` | MCP ツール：ドメインカタログ、ローカル操作、呼び出しの検証、`ghidra_help`。 |
 | `session` | セッションのオープン、起動、待機、再起動、呼び出し、クローズ。 |
 | `analysis` | バックグラウンドジョブとしての自動解析。 |
+| `graph` | `batch.execute` による範囲付きコールグラフと制御フロー基本ブロック。 |
 | `project` | 保存済みのバイナリと Ghidra プロジェクトの準備。 |
 | `bridge` | ブリッジ契約、埋め込まれたランタイム、WebSocket、単一のリクエスト。 |
 | `jsonrpc` | ブリッジ WebSocket の厳格な JSON-RPC 2.0 コーデック。 |

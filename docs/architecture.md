@@ -64,6 +64,7 @@ A module uses only the modules in the layers below it:
 | `tools` | The MCP tools: the domain catalog, the local operations, the call validation and `ghidra_help`. |
 | `session` | Open, launch, wait, relaunch, call and close for sessions. |
 | `analysis` | Auto-analysis as a background job. |
+| `graph` | Bounded call graphs and control-flow basic blocks through `batch.execute`. |
 | `project` | Saved binaries and the preparation of Ghidra projects. |
 | `bridge` | The bridge contract, the embedded runtime, the WebSocket and single requests. |
 | `jsonrpc` | The strict JSON-RPC 2.0 codec of the bridge WebSocket. |

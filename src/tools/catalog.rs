@@ -40,6 +40,7 @@ const DOMAINS: &[(&str, &str)] = &[
     ),
     ("job", "to examine background jobs and to wait for them"),
     ("daemon", "to examine the shared daemon and to stop it"),
+    ("graph", "for call graphs and control-flow basic blocks"),
     ("bridge", "for the Ghidra bridge of a session"),
     ("program", "for program data"),
     ("address", "for address data"),

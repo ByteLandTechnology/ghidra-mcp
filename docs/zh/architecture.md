@@ -62,6 +62,7 @@
 | `tools` | MCP 工具：领域目录、本地操作、调用验证和 `ghidra_help`。 |
 | `session` | 会话的打开、启动、等待、重新启动、调用和关闭。 |
 | `analysis` | 作为后台作业的自动分析。 |
+| `graph` | 通过 `batch.execute` 构建有界调用图与控制流基本块。 |
 | `project` | 已保存的二进制文件和 Ghidra 项目的准备。 |
 | `bridge` | 桥接契约、嵌入的运行时、WebSocket 和单个请求。 |
 | `jsonrpc` | 桥接 WebSocket 的严格 JSON-RPC 2.0 编解码器。 |

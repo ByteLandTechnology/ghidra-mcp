@@ -74,6 +74,7 @@ fn bridge_domains_match_the_bridge_mcp_server() {
         local,
         BTreeSet::from([
             "ghidra_daemon",
+            "ghidra_graph",
             "ghidra_job",
             "ghidra_session",
             "ghidra_upload"
@@ -87,7 +88,7 @@ fn bridge_domains_match_the_bridge_mcp_server() {
 fn tool_definitions_have_routes_and_annotations() {
     let tools = tool_definitions();
     assert_eq!(tools[0]["name"], "ghidra_help");
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 20);
     let tool = |name: &str| {
         tools
             .iter()
@@ -106,6 +107,16 @@ fn tool_definitions_have_routes_and_annotations() {
         tool("ghidra_analysis")["inputSchema"]["required"],
         json!(["operation", "md5"])
     );
+    assert_eq!(
+        tool("ghidra_graph")["inputSchema"]["required"],
+        json!(["operation", "md5"])
+    );
+    assert_eq!(tool("ghidra_graph")["annotations"]["readOnlyHint"], true);
+    assert_eq!(
+        tool("ghidra_graph")["annotations"]["destructiveHint"],
+        false
+    );
+    assert_eq!(tool("ghidra_graph")["annotations"]["idempotentHint"], true);
     assert_eq!(
         tool("ghidra_decompilation")["annotations"]["readOnlyHint"],
         true
@@ -196,6 +207,8 @@ fn session_md5_is_never_a_parameter() {
     assert!(rule("session", "list") == Md5Rule::Absent);
     assert!(rule("upload", "prepare") == Md5Rule::Required);
     assert!(rule("job", "wait") == Md5Rule::Absent);
+    assert!(rule("graph", "callgraph") == Md5Rule::Required);
+    assert!(rule("graph", "basic_blocks") == Md5Rule::Required);
 }
 
 /// Makes sure that Gemini can use each public tool as a function declaration.
@@ -368,7 +381,7 @@ fn prepare_refuses_invalid_calls() {
 fn help_has_three_levels() {
     let (_, domains) = help::run(Map::new()).expect("domains");
     let domains = domains["domains"].as_array().expect("domain list");
-    assert_eq!(domains.len(), 18);
+    assert_eq!(domains.len(), 19);
     assert_eq!(domains[0], "ghidra_session");
 
     let (_, memory) = help::run(object(json!({ "domain": "memory" }))).expect("operations");
