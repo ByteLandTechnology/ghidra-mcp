@@ -708,10 +708,9 @@ fn bridge_address_error_preserves_target_and_spaces() {
     );
 }
 
-/// Makes sure that `ghidra_data_type parse_c` and the C type and prototype schemas
-/// are available through `ghidra_help` and `prepare`.
+/// Makes sure that `ghidra_data_type parse_c` schema and call preparation work.
 #[test]
-fn c_parser_and_atomic_prototype_schemas_are_available() {
+fn data_type_parse_c_schema_and_call_preparation_work() {
     let md5 = "0123456789abcdef0123456789abcdef";
     let (_, parse_help) = help::run(object(json!({
         "domain": "ghidra_data_type",
@@ -720,8 +719,13 @@ fn c_parser_and_atomic_prototype_schemas_are_available() {
     .expect("parse_c help");
     assert_eq!(parse_help["md5"], "required");
     assert_eq!(parse_help["effects"]["mutates_program"], true);
+    assert_eq!(parse_help["effects"]["idempotent"], false);
     assert_eq!(parse_help["inputSchema"]["required"], json!(["source"]));
     assert!(parse_help["inputSchema"]["properties"]["category_path"].is_object());
+    assert_eq!(
+        parse_help["inputSchema"]["properties"]["conflict_mode"]["enum"],
+        json!(["keep", "rename", "replace"])
+    );
 
     let (parse_op, parse_req) = prepare(
         "ghidra_data_type",
@@ -731,6 +735,7 @@ fn c_parser_and_atomic_prototype_schemas_are_available() {
             "params": {
                 "source": "struct Node { const char *name; };",
                 "category_path": "/parsed",
+                "conflict_mode": "keep",
             },
         })),
     )
@@ -740,7 +745,13 @@ fn c_parser_and_atomic_prototype_schemas_are_available() {
         Route::Bridge(method) if method == "data_type.parse_c"
     ));
     assert_eq!(parse_req.params["category_path"], "/parsed");
+    assert_eq!(parse_req.params["conflict_mode"], "keep");
+}
 
+/// Makes sure that C type strings and atomic prototype fields work on `ghidra_function`.
+#[test]
+fn atomic_prototype_and_c_type_schemas_are_available() {
+    let md5 = "0123456789abcdef0123456789abcdef";
     let (_, patch_help) = help::run(object(json!({
         "domain": "ghidra_function",
         "operation": "patch",
@@ -753,8 +764,9 @@ fn c_parser_and_atomic_prototype_schemas_are_available() {
         .as_array()
         .expect("data_type_reference oneOf");
     assert_eq!(dt_ref_variants.len(), 5);
-    assert_eq!(dt_ref_variants[0]["type"], "string");
-    assert_eq!(dt_ref_variants[0]["minLength"], 1);
+    assert!(dt_ref_variants
+        .iter()
+        .any(|item| item == &json!({ "type": "string", "minLength": 1 })));
 
     let (_, sig_req) = prepare(
         "ghidra_function",
