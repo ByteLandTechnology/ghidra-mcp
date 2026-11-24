@@ -520,6 +520,20 @@ pub fn resolve_checkpoint(
     if let Some(target_id) = id {
         validate_checkpoint_id(target_id)?;
     }
+    let normalized_name = match name {
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(DomainError::invalid_argument(
+                    "name",
+                    "checkpoint name must not be empty",
+                )
+                .into());
+            }
+            Some(trimmed)
+        }
+        None => None,
+    };
     let items = list_checkpoints(paths, md5)?;
     if let Some(target_id) = id {
         return items
@@ -533,7 +547,7 @@ pub fn resolve_checkpoint(
                 .into()
             });
     }
-    if let Some(target_name) = name.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(target_name) = normalized_name {
         return items
             .into_iter()
             .find(|item| item.name.as_deref() == Some(target_name))
@@ -550,6 +564,51 @@ pub fn resolve_checkpoint(
     })
 }
 
+/// Restores an interrupted `.ghidra-old-*` backup if `ghidra/` is absent.
+fn recover_interrupted_swap(project_dir: &Path, ghidra_root: &Path) -> Result<()> {
+    if ghidra_root.exists() {
+        return Ok(());
+    }
+    let entries = match fs::read_dir(project_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(DomainError::Internal {
+                message: format!(
+                    "listing project directory: {}",
+                    sanitize_error_path(&err, project_dir)
+                ),
+            }
+            .into());
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|err| DomainError::Internal {
+            message: format!(
+                "reading project directory entry: {}",
+                sanitize_error_path(&err, project_dir)
+            ),
+        })?;
+        let candidate = entry.path();
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(GHIDRA_OLD_PREFIX))
+            && candidate.is_dir()
+        {
+            fs::rename(&candidate, ghidra_root).map_err(|err| DomainError::Internal {
+                message: format!(
+                    "recovering interrupted Ghidra project backup: {}",
+                    sanitize_error_path(&err, ghidra_root)
+                ),
+            })?;
+            sync_directory(project_dir)?;
+            break;
+        }
+    }
+    Ok(())
+}
+
 /// Atomically replaces `projects/<md5>/ghidra/` with a synchronized copy of checkpoint `id`
 /// under exclusive `binary.lock`.
 pub fn restore_checkpoint(paths: &McpPaths, md5: &str, id: &str) -> Result<CheckpointSummary> {
@@ -563,6 +622,8 @@ pub fn restore_checkpoint(paths: &McpPaths, md5: &str, id: &str) -> Result<Check
         );
     }
     let _lock = lock_binary(&project_dir, true)?;
+    let ghidra_root = paths.ghidra_project_root(&md5);
+    recover_interrupted_swap(&project_dir, &ghidra_root)?;
     let snapshot_dir = paths.checkpoints_dir(&md5).join(id);
     let summary = read_single_checkpoint(&snapshot_dir, id, &md5).ok_or_else(|| {
         DomainError::missing_target(
@@ -580,7 +641,6 @@ pub fn restore_checkpoint(paths: &McpPaths, md5: &str, id: &str) -> Result<Check
         return Err(err);
     }
 
-    let ghidra_root = paths.ghidra_project_root(&md5);
     let backup_dir = project_dir.join(format!("{GHIDRA_OLD_PREFIX}{}", Uuid::new_v4().simple()));
     let had_existing = ghidra_root.exists();
     if had_existing {

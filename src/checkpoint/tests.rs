@@ -140,7 +140,16 @@ fn resolve_and_restore_replace_ghidra_tree_atomically() {
         resolve_checkpoint(&paths, TEST_MD5, None, Some("Before rename")).expect("by name");
     assert_eq!(by_name.id, first.checkpoint.id);
     assert!(resolve_checkpoint(&paths, TEST_MD5, Some("a"), Some("b")).is_err());
+    assert!(resolve_checkpoint(&paths, TEST_MD5, None, Some("   ")).is_err());
     assert!(validate_checkpoint_id("../bad").is_err());
+
+    // Simulate an interrupted swap where `ghidra/` moved to `.ghidra-old-*` and the target ID
+    // does not exist: `restore_checkpoint` must put `.ghidra-old-*` back at `ghidra/`.
+    let interrupted = paths.project_dir(TEST_MD5).join(".ghidra-old-interrupted");
+    fs::rename(&ghidra_dir, &interrupted).expect("simulate interrupted swap");
+    assert!(restore_checkpoint(&paths, TEST_MD5, "missing-id").is_err());
+    assert!(ghidra_dir.join("project.gpr").is_file());
+    assert!(!interrupted.exists());
 
     let restored =
         restore_checkpoint(&paths, TEST_MD5, &first.checkpoint.id).expect("restore first");
