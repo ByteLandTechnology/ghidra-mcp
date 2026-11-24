@@ -791,20 +791,20 @@ fn format_instruction(instr: &Value) -> BlockInstruction {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let operands = instr
-        .get("operands")
-        .and_then(Value::as_array)
-        .map(|ops| {
-            ops.iter()
-                .filter_map(|op| match op {
-                    Value::String(s) => Some(s.clone()),
-                    Value::Number(n) => Some(n.to_string()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
+    let operands =
+        instr
+            .get("operands")
+            .and_then(Value::as_array)
+            .map_or_else(String::new, |ops| {
+                ops.iter()
+                    .filter_map(|op| match op {
+                        Value::String(s) => Some(s.clone()),
+                        Value::Number(n) => Some(n.to_string()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
     let text = format!("{mnemonic} {operands}").trim().to_string();
     BlockInstruction {
         address,
