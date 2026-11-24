@@ -60,7 +60,8 @@ pub(super) fn run(arguments: Map<String, Value>) -> Result<Output> {
                     "name": operation.name,
                     "description": operation.description,
                     "md5": operation.md5,
-                    "effects": operation.effects
+                    "effects": operation.effects,
+                    "inputSchema": operation.schema
                 })
             })
             .collect();
