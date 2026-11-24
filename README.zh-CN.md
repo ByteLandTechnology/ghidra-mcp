@@ -519,7 +519,7 @@ ipc_handshake_timeout_sec = 5
 `ghidra_help` 工具描述所有工具：
 
 - `{}` 列出领域工具。
-- `{"domain":"function"}` 列出一个领域的操作。
+- `{"domain":"function"}` 列出一个领域的操作，并包含每个操作的描述、md5 规则、效果和 `inputSchema`。
 - `{"domain":"function","operation":"list"}` 显示一个操作的完整参数模式、md5 规则和效果。效果与桥接契约相同，例如 `read_only`、`mutates_program` 和 `destructive`。
 
 如果 Ghidra 进程没有启动，会话进入 `error` 状态，它的启动作业进入 `failed` 状态。

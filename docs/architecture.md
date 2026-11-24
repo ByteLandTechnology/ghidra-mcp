@@ -283,7 +283,8 @@ Do not make it available to other hosts.
 
 - **Listeners.** The daemon accepts only loopback addresses.
   A request to `/mcp` or `/upload` must have the Host of the listener.
-  `/mcp` accepts any valid HTTP or HTTPS Origin and returns CORS headers.
+  `/mcp` accepts only an HTTP or HTTPS Origin on loopback or the listener.
+  It returns `Access-Control-Allow-Origin` only for a permitted Origin.
   `/upload` accepts only the Origin of the listener.
 - **Local socket.** On Unix, the socket is in the private runtime directory.
   On Windows, it is a named pipe with a random name. Its access list lets only its owner connect, and it refuses remote clients.

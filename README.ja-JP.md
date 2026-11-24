@@ -521,7 +521,7 @@ ipc_handshake_timeout_sec = 5
 `ghidra_help` ツールは、すべてのツールを説明します：
 
 - `{}` は、ドメインツールを一覧表示します。
-- `{"domain":"function"}` は、1 つのドメインの操作を一覧表示します。
+- `{"domain":"function"}` は、1 つのドメインの操作と、各操作の説明、md5 ルール、効果、`inputSchema` を一覧表示します。
 - `{"domain":"function","operation":"list"}` は、1 つの操作の完全なパラメータスキーマ、md5 ルール、効果を表示します。効果はブリッジ契約と同じです（例：`read_only`、`mutates_program`、`destructive`）。
 
 Ghidra プロセスが起動しなかった場合、セッションは `error` に、その起動ジョブは `failed` になります。

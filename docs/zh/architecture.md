@@ -275,7 +275,8 @@ MCP 工具定义、操作模式、帮助输出和响应格式都是公共契约�
 
 - **监听器。** 守护进程只接受回环地址。
   对 `/mcp` 或 `/upload` 的请求必须带有监听器的 Host。
-  `/mcp` 接受任意有效的 HTTP 或 HTTPS Origin，并返回 CORS 请求头。
+  `/mcp` 只接受回环地址或监听器的 HTTP 或 HTTPS Origin。
+  它只对受许可的 Origin 返回 `Access-Control-Allow-Origin`。
   `/upload` 只接受监听器的 Origin。
 - **本地套接字。** 在 Unix 上，套接字位于私有的运行时目录中。
   在 Windows 上，它是一个随机命名的命名管道。它的访问列表只允许所有者连接，并拒绝远程客户端。
