@@ -43,6 +43,9 @@ const GHIDRA_EXIT_DEADLINE: Duration = Duration::from_mins(2);
 /// The name of the Ghidra project in the `ghidra/` directory of each binary.
 const GHIDRA_PROJECT_NAME: &str = "project";
 
+/// The minimum time for a request that builds the Sleigh assembler.
+const ASSEMBLER_RPC_TIMEOUT: Duration = Duration::from_mins(2);
+
 /// Opens a saved binary, or imports `input`. If a session for the MD5 exists, it uses that session.
 pub async fn open(
     state: &Arc<McpState>,
@@ -137,11 +140,28 @@ pub async fn call(
     params: Value,
 ) -> Result<RpcEnvelope> {
     ensure_connected(state, md5).await?;
-    let envelope = bridge::request(state, md5, method, params, state.config.timeouts.rpc).await?;
+    let timeout = rpc_timeout(state.config.timeouts.rpc, method, &params);
+    let envelope = bridge::request(state, md5, method, params, timeout).await?;
     if let Some(err) = &envelope.error {
         return Err(DomainError::from_bridge(envelope.status, err).into());
     }
     Ok(envelope)
+}
+
+/// Returns the request time limit for a bridge method.
+fn rpc_timeout(default: Duration, method: &str, params: &Value) -> Duration {
+    let uses_assembler = method == "instruction.assemble"
+        || (method == "batch.execute"
+            && params["items"].as_array().is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item["method"].as_str() == Some("instruction.assemble"))
+            }));
+    if uses_assembler {
+        default.max(ASSEMBLER_RPC_TIMEOUT)
+    } else {
+        default
+    }
 }
 
 /// Makes sure that the session has a bridge connection. It waits for a launch
@@ -445,4 +465,41 @@ pub async fn close(state: &McpState, md5: &str, force: bool) -> Result<()> {
     }
     state.set_launch_job(md5, None);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rpc_timeout, ASSEMBLER_RPC_TIMEOUT};
+    use serde_json::json;
+    use std::time::Duration;
+
+    #[test]
+    fn assembler_requests_use_at_least_the_assembler_timeout() {
+        let default = Duration::from_secs(30);
+        assert_eq!(rpc_timeout(default, "program.get", &json!({})), default);
+        assert_eq!(
+            rpc_timeout(default, "instruction.assemble", &json!({})),
+            ASSEMBLER_RPC_TIMEOUT
+        );
+        assert_eq!(
+            rpc_timeout(Duration::from_mins(5), "instruction.assemble", &json!({})),
+            Duration::from_mins(5)
+        );
+        assert_eq!(
+            rpc_timeout(
+                default,
+                "batch.execute",
+                &json!({ "items": [{ "id": "1", "method": "code_unit.clear" }] })
+            ),
+            default
+        );
+        assert_eq!(
+            rpc_timeout(
+                default,
+                "batch.execute",
+                &json!({ "items": [{ "id": "1", "method": "instruction.assemble" }] })
+            ),
+            ASSEMBLER_RPC_TIMEOUT
+        );
+    }
 }

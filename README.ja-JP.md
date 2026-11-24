@@ -510,6 +510,40 @@ ipc_handshake_timeout_sec = 5
 この操作は名前と名前空間だけを変更し、関数シグネチャとデータ型は保持します。
 関数、シンボル、呼び出しの結果は、プログラムを変更せずに `demangled_name` も返します。
 
+Sleigh 命令のアセンブル、未定義バイトの逆アセンブル、またはコードユニットのクリアには、`ghidra_listing` を使います。
+
+```json
+{
+  "operation": "instruction.assemble",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "selector": { "address": "ram:00100000" },
+    "instructions": ["XOR EAX, EAX", "RET"],
+    "pad_nop": true
+  }
+}
+{
+  "operation": "instruction.disassemble",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "selector": { "kind": "range", "start": "ram:00100000", "end": "ram:0010000f" },
+    "follow_flow": true
+  }
+}
+{
+  "operation": "code_unit.clear",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "selector": { "kind": "address", "address": "ram:00100000" }
+  }
+}
+```
+
+`instruction.assemble` は、アセンブルしたバイトと重なるコードユニットをクリアします。
+`pad_nop` を `true` に設定すると、残った命令バイトを `NOP` 命令で埋めます。
+`code_unit.clear` は定義済みの命令とデータを削除し、ラベルとバイトは保持します。
+`ghidra_memory` `write` では、`clear_existing` を `true` に設定すると書き込み前に重なるコードユニットをクリアし、`disassemble` を `true` に設定すると書き込んだバイトを逆アセンブルします。
+
 操作を初めて呼び出す前に、ドメインと操作名を指定して `ghidra_help` を呼び出します。
 返される `inputSchema` は、ツールのトップレベル引数ではなく `params` の内容を説明します。
 呼び出す前に必須フィールドとその入れ子構造を確認します。
