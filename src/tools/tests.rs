@@ -201,20 +201,86 @@ fn session_md5_is_never_a_parameter() {
 /// Makes sure that Gemini can use each public tool as a function declaration.
 #[test]
 fn public_tool_contract_is_gemini_compatible() {
-    for tool in tool_definitions() {
+    let tools = tool_definitions();
+    assert_eq!(tools.len(), 19);
+    for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
         assert!(valid_function_name(name), "tool name {name}");
 
         let schema = &tool["inputSchema"];
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"].is_object());
-        for unsupported in ["oneOf", "anyOf", "allOf", "$ref", "additionalProperties"] {
+        assert_no_unsupported_schema_keys(name, schema);
+        assert!(tool.get("outputSchema").is_none());
+
+        if name != "ghidra_help" {
+            let params = &schema["properties"]["params"];
+            assert_eq!(params["type"], "object", "{name} params type");
+            let param_props = params["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} params.properties must be an object"));
             assert!(
-                schema.get(unsupported).is_none(),
-                "{name} contains {unsupported}"
+                !param_props.is_empty(),
+                "{name} must publish non-empty params.properties"
             );
         }
-        assert!(tool.get("outputSchema").is_none());
+    }
+
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|item| item["name"] == name)
+            .unwrap_or_else(|| panic!("no tool {name}"))
+    };
+    assert!(tool("ghidra_listing")["description"]
+        .as_str()
+        .expect("listing description")
+        .contains("data units"));
+    assert_eq!(
+        tool("ghidra_upload")["inputSchema"]["properties"]["params"]["required"],
+        json!(["fileName", "size"])
+    );
+    assert_eq!(
+        tool("ghidra_decompilation")["inputSchema"]["properties"]["params"]["required"],
+        json!(["selector"])
+    );
+    assert_eq!(
+        tool("ghidra_reference")["inputSchema"]["properties"]["params"]["required"],
+        json!(["filter"])
+    );
+    assert_eq!(
+        tool("ghidra_batch")["inputSchema"]["properties"]["params"]["required"],
+        json!(["items"])
+    );
+}
+
+/// Examines a schema tree to verify that unsupported provider keys never appear.
+fn assert_no_unsupported_schema_keys(name: &str, value: &Value) {
+    match value {
+        Value::Object(map) => {
+            for unsupported in [
+                "oneOf",
+                "anyOf",
+                "allOf",
+                "$ref",
+                "$defs",
+                "additionalProperties",
+            ] {
+                assert!(
+                    map.get(unsupported).is_none(),
+                    "{name} contains {unsupported}"
+                );
+            }
+            for child in map.values() {
+                assert_no_unsupported_schema_keys(name, child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                assert_no_unsupported_schema_keys(name, item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -373,14 +439,22 @@ fn help_has_three_levels() {
 
     let (_, memory) = help::run(object(json!({ "domain": "memory" }))).expect("operations");
     assert_eq!(memory["domain"], "ghidra_memory");
-    let block_list = memory["operations"]
-        .as_array()
-        .expect("operations")
+    let memory_operations = memory["operations"].as_array().expect("operations");
+    assert_ne!(memory_operations.len(), 0);
+    for entry in memory_operations {
+        assert!(entry["description"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()));
+        assert!(entry["effects"].is_object());
+        assert_eq!(entry["inputSchema"]["type"], "object");
+    }
+    let block_list = memory_operations
         .iter()
         .find(|operation| operation["name"] == "block.list")
         .expect("block.list");
     assert_eq!(block_list["md5"], "required");
     assert_eq!(block_list["effects"]["read_only"], true);
+    assert!(block_list["inputSchema"]["properties"].is_object());
 
     let (_, open) = help::run(object(
         json!({ "domain": "ghidra_session", "operation": "open" }),
@@ -609,4 +683,132 @@ async fn validates_import_flags_and_gpr_options() {
         .unwrap_err();
         assert!(reason(&err).contains(expected), "{params}: {err:#}");
     }
+}
+
+/// Makes sure that `params` accepts `null` and a JSON object string.
+#[tokio::test]
+async fn params_accepts_null_and_json_object_string() {
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let (_, null_request) = prepare(
+        "ghidra_session",
+        object(json!({ "operation": "list", "params": null })),
+    )
+    .expect("null params");
+    assert_eq!(null_request.params, json!({}));
+
+    let (_, string_request) = prepare(
+        "ghidra_upload",
+        object(json!({
+            "operation": "prepare",
+            "md5": md5,
+            "params": "{\"fileName\":\"sample.bin\",\"size\":64}"
+        })),
+    )
+    .expect("JSON object string params");
+    assert_eq!(
+        string_request.params,
+        json!({ "fileName": "sample.bin", "size": 64 })
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let (_, result) = super::call(
+        &daemon,
+        "ghidra_daemon",
+        object(json!({ "operation": "shutdown", "params": "{\"force\":true}" })),
+    )
+    .await
+    .expect("local call with JSON object string params");
+    assert_eq!(result["sessions"], json!([]));
+}
+
+/// Makes sure that `params` refuses non-object values and non-object JSON text.
+#[test]
+fn params_refuses_non_object_values_and_text() {
+    let cases = [
+        json!([1, 2]),
+        json!(42),
+        json!(true),
+        json!("[1, 2]"),
+        json!("123"),
+        json!("\"hello\""),
+        json!("true"),
+        json!("null"),
+        json!("{bad json"),
+    ];
+    for params in cases {
+        let error = prepare(
+            "ghidra_session",
+            object(json!({ "operation": "list", "params": params })),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("params {params} must fail"));
+        match error.downcast_ref::<DomainError>() {
+            Some(domain @ DomainError::InvalidArgument { reason, .. }) => {
+                assert_eq!(domain.rpc_code(), crate::error::RPC_CODE_INVALID_ARGUMENT);
+                assert!(reason.contains("invalid_type"), "{params}: {reason}");
+            }
+            other => panic!("unexpected error for {params}: {other:?}"),
+        }
+    }
+}
+
+/// Makes sure that unknown parameters list sorted valid parameters and `ghidra_help`.
+#[test]
+fn unknown_parameter_lists_valid_parameters_and_help() {
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let upload_error = prepare(
+        "ghidra_upload",
+        object(json!({
+            "operation": "prepare",
+            "md5": md5,
+            "params": { "fileName": "sample.bin", "size": 1, "extra": true }
+        })),
+    )
+    .err()
+    .expect("unknown upload parameter");
+    let upload_reason = reason(&upload_error);
+    assert!(
+        upload_reason.contains("does not accept parameter `extra`"),
+        "{upload_reason}"
+    );
+    assert!(
+        upload_reason.contains(concat!(
+            "Valid parameters: `baseAddress`, `compilerSpec`, `fileName`, ",
+            "`loader`, `processor`, `reimport`, `size`."
+        )),
+        "{upload_reason}"
+    );
+    assert!(upload_reason.contains("ghidra_help"), "{upload_reason}");
+
+    let empty_error = prepare(
+        "ghidra_session",
+        object(json!({ "operation": "list", "params": { "extra": 1 } })),
+    )
+    .err()
+    .expect("unknown parameter on empty schema");
+    let empty_reason = reason(&empty_error);
+    assert!(
+        empty_reason.contains("Valid parameters: none."),
+        "{empty_reason}"
+    );
+    assert!(empty_reason.contains("ghidra_help"), "{empty_reason}");
+}
+
+/// Makes sure that `DomainError::from_bridge` forwards address `target` and spaces.
+#[test]
+fn bridge_address_error_preserves_target_and_spaces() {
+    let rpc_error = crate::model::RpcError {
+        code: "invalid_request".to_string(),
+        message: "unable to parse address: bad (valid spaces: [EXTERNAL, ram])".to_string(),
+        target: Some("/selector/address".to_string()),
+    };
+    let domain = DomainError::from_bridge(Some(400), &rpc_error);
+    assert_eq!(
+        domain,
+        DomainError::InvalidArgument {
+            param: "/selector/address".to_string(),
+            reason: "unable to parse address: bad (valid spaces: [EXTERNAL, ram])".to_string(),
+        }
+    );
 }
