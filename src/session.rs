@@ -22,13 +22,20 @@
 
 use crate::bridge;
 use crate::error::DomainError;
+use crate::import::{hex_encode, is_gpr_path, OpenOptions};
 use crate::java_path::java_path;
 use crate::model::{job_kind, JobRecord, JobStatus, RpcEnvelope, SessionRecord, SessionStatus};
 use crate::process::{append_java_tool_option, spawn_log_forwarder, ManagedChild};
-use crate::project::{persist_binary, prepare_project, PreparedProject};
+use crate::project::{
+    attached_program_name, check_gpr_not_locked, is_attached_gpr_session, is_reimport_pending,
+    persist_attached_gpr, persist_binary_with_options, prepare_project,
+    reset_binary_ghidra_project, resolve_gpr_path, sanitize_text_paths,
+    update_attached_program_name, update_binary_import_options, LaunchMode, PreparedProject,
+};
 use crate::state::McpState;
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -40,68 +47,216 @@ use tokio::time::Instant;
 /// process stays when the daemon stops without a chance to stop it.
 const GHIDRA_EXIT_DEADLINE: Duration = Duration::from_mins(2);
 
-/// The name of the Ghidra project in the `ghidra/` directory of each binary.
-const GHIDRA_PROJECT_NAME: &str = "project";
+/// Marker prefix emitted by `OpenSavedProject.java` and `ImportBinary.java` on open errors.
+const OPEN_ERROR_MARKER: &str = "GHIDRA_MCP_OPEN_ERROR: ";
 
-/// Opens a saved binary, or imports `input`. If a session for the MD5 exists, it uses that session.
-pub async fn open(
+/// Opens a local binary or `.gpr` project, or reopens a saved session by `md5`.
+pub async fn open_with_options(
     state: &Arc<McpState>,
-    md5: String,
+    md5: Option<String>,
     input: Option<&Path>,
+    options: OpenOptions,
     wait: Option<Duration>,
 ) -> Result<(String, Value)> {
     if state.is_shutting_down() {
         return Err(DomainError::ShuttingDown.into());
     }
-    if let Some(path) = input {
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| {
-                DomainError::invalid_argument("path", "binary filename must be valid UTF-8")
-            })?
-            .to_string();
-        let paths = state.paths.clone();
-        let source = path.to_path_buf();
-        let md5_clone = md5.clone();
-        tokio::task::spawn_blocking(move || {
-            persist_binary(&paths, &source, &md5_clone, &file_name)
-        })
-        .await
-        .map_err(|err| DomainError::Internal {
-            message: format!("binary persistence task failed: {err}"),
-        })??;
+    let (md5, program_switched) = match (input, md5) {
+        (Some(path), None) if is_gpr_path(path) => prepare_gpr_open(state, path, &options).await?,
+        (Some(path), None) => (prepare_binary_open(state, path, &options).await?, false),
+        (None, Some(md5)) => {
+            let switched = prepare_md5_open(state, &md5, &options).await?;
+            (md5, switched)
+        }
+        (None, None) => {
+            return Err(DomainError::invalid_argument(
+                "path/md5",
+                "`ghidra_session open` requires either params.path or md5",
+            )
+            .into());
+        }
+        (Some(_), Some(_)) => {
+            return Err(DomainError::invalid_argument(
+                "path/md5",
+                "`ghidra_session open` accepts either params.path or md5, not both",
+            )
+            .into());
+        }
+    };
+
+    finish_open(state, md5, options.reimport, program_switched, wait).await
+}
+
+/// Validates and persists metadata for a local `.gpr` session open.
+async fn prepare_gpr_open(
+    state: &Arc<McpState>,
+    path: &Path,
+    options: &OpenOptions,
+) -> Result<(String, bool)> {
+    options.validate_for_target(true)?;
+    let source = path.to_path_buf();
+    let paths = state.paths.clone();
+    let state_ref = state.clone();
+    let requested_program = options.program_name.clone();
+    tokio::task::spawn_blocking(move || -> Result<(String, bool)> {
+        let gpr = resolve_gpr_path(&source)?;
+        let current_session = state_ref.find_session(&gpr.md5);
+        let daemon_owns = current_session
+            .as_ref()
+            .is_some_and(|session| session.ws_connected || session.status.is_launching());
+        if !daemon_owns {
+            check_gpr_not_locked(&gpr)?;
+        }
+        let prev_program = attached_program_name(&paths, &gpr.md5)?;
+        let switched = requested_program
+            .as_ref()
+            .is_some_and(|wanted| prev_program.as_ref() != Some(wanted));
+        persist_attached_gpr(&paths, &gpr, requested_program.as_deref())?;
+        Ok((gpr.md5, switched))
+    })
+    .await
+    .map_err(|err| DomainError::Internal {
+        message: format!("project attachment task failed: {err}"),
+    })?
+}
+
+/// Validates and persists a local binary file and its import flags.
+async fn prepare_binary_open(
+    state: &Arc<McpState>,
+    path: &Path,
+    options: &OpenOptions,
+) -> Result<String> {
+    options.validate_for_target(false)?;
+    let canonical = path.canonicalize().map_err(|err| {
+        DomainError::missing_target("path", format!("target path cannot be resolved: {err}"))
+    })?;
+    if !canonical.is_file() {
+        return Err(DomainError::missing_target("path", "target path is not a file").into());
     }
+    let file_name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            DomainError::invalid_argument("path", "binary filename must be valid UTF-8")
+        })?
+        .to_string();
+    let paths = state.paths.clone();
+    let import_opts = options.import.clone();
+    let reimport = options.reimport;
+    tokio::task::spawn_blocking(move || -> Result<String> {
+        let computed = crate::ghidra::file_md5(&canonical)?;
+        persist_binary_with_options(
+            &paths,
+            &canonical,
+            &computed,
+            &file_name,
+            &import_opts,
+            reimport,
+        )?;
+        Ok(computed)
+    })
+    .await
+    .map_err(|err| DomainError::Internal {
+        message: format!("binary persistence task failed: {err}"),
+    })?
+}
+
+/// Validates and updates metadata for an `md5` session open.
+async fn prepare_md5_open(state: &Arc<McpState>, md5: &str, options: &OpenOptions) -> Result<bool> {
+    let paths = state.paths.clone();
+    let state_ref = state.clone();
+    let opts = options.clone();
+    let md5_clone = md5.to_string();
+    tokio::task::spawn_blocking(move || -> Result<bool> {
+        if is_attached_gpr_session(&paths, &md5_clone)? {
+            opts.reject_binary_flags_on_gpr()?;
+            let current = state_ref.find_session(&md5_clone);
+            let daemon_owns = current
+                .as_ref()
+                .is_some_and(|item| item.ws_connected || item.status.is_launching());
+            let prev = attached_program_name(&paths, &md5_clone)?;
+            let switched = opts
+                .program_name
+                .as_ref()
+                .is_some_and(|wanted| prev.as_ref() != Some(wanted));
+            update_attached_program_name(
+                &paths,
+                &md5_clone,
+                opts.program_name.as_deref(),
+                daemon_owns,
+            )?;
+            Ok(switched)
+        } else {
+            opts.validate_for_target(false)?;
+            update_binary_import_options(&paths, &md5_clone, &opts.import, opts.reimport)?;
+            Ok(false)
+        }
+    })
+    .await
+    .map_err(|err| DomainError::Internal {
+        message: format!("session metadata task failed: {err}"),
+    })?
+}
+
+/// Runs the lifecycle-locked launch or reuse phase for `md5`.
+async fn finish_open(
+    state: &Arc<McpState>,
+    md5: String,
+    reimport_requested: bool,
+    program_switched: bool,
+    wait: Option<Duration>,
+) -> Result<(String, Value)> {
     let (created, job_id) = {
         let _guard = state.lifecycle_lock.lock().await;
         if state.is_shutting_down() {
             return Err(DomainError::ShuttingDown.into());
         }
+        let force_reimport = reimport_requested || is_reimport_pending(&state.paths, &md5)?;
+        let force_relaunch = force_reimport || program_switched;
         let existing = state.find_session(&md5);
-        if let Some(session) = existing.as_ref().filter(|session| session.ws_connected) {
-            return Ok((
-                format!("Reused session {md5}"),
-                json!({"created": false, "reused": true, "session": session.summary()}),
-            ));
-        }
-        let launching_job = existing
-            .as_ref()
-            .filter(|session| session.status.is_launching())
-            .and_then(|_| state.launch_job(&md5));
-        // Join a launch that is in progress. Do not start a second launch.
-        if let Some(job_id) = launching_job {
-            (false, job_id)
-        } else {
-            let kind = if existing.is_some() {
-                job_kind::RECOVER_SESSION_BRIDGE
-            } else {
-                job_kind::ANALYZE_BINARY
-            };
-            let (prepared, job_id) = begin_launch(state, &md5, kind).await?;
+
+        if force_relaunch {
+            stop_existing_for_relaunch(state, &md5, !force_reimport).await;
+            if force_reimport {
+                let paths = state.paths.clone();
+                let md5_clone = md5.clone();
+                tokio::task::spawn_blocking(move || {
+                    reset_binary_ghidra_project(&paths, &md5_clone)
+                })
+                .await
+                .map_err(|err| DomainError::Internal {
+                    message: format!("project reset task failed: {err}"),
+                })??;
+            }
+            let (prepared, job_id) = begin_launch(state, &md5, job_kind::ANALYZE_BINARY).await?;
             tokio::spawn(launch_and_wait(state.clone(), prepared, job_id.clone()));
-            (existing.is_none(), job_id)
+            (existing.is_none() || force_reimport, job_id)
+        } else {
+            if let Some(session) = existing.as_ref().filter(|session| session.ws_connected) {
+                return Ok((
+                    format!("Reused session {md5}"),
+                    json!({"created": false, "reused": true, "session": session.summary()}),
+                ));
+            }
+            let launching_job = existing
+                .as_ref()
+                .filter(|session| session.status.is_launching())
+                .and_then(|_| state.launch_job(&md5));
+            if let Some(job_id) = launching_job {
+                (false, job_id)
+            } else {
+                let kind = if existing.is_some() {
+                    job_kind::RECOVER_SESSION_BRIDGE
+                } else {
+                    job_kind::ANALYZE_BINARY
+                };
+                let (prepared, job_id) = begin_launch(state, &md5, kind).await?;
+                tokio::spawn(launch_and_wait(state.clone(), prepared, job_id.clone()));
+                (existing.is_none(), job_id)
+            }
         }
     };
+
     let job = state.await_job(&job_id, wait).await?;
     if job.status == JobStatus::Failed {
         return Err(DomainError::Internal {
@@ -129,6 +284,34 @@ pub async fn open(
     ))
 }
 
+/// Stops an active process for `md5`. The caller must hold `lifecycle_lock`.
+async fn stop_existing_for_relaunch(state: &McpState, md5: &str, save_first: bool) {
+    if save_first
+        && state
+            .find_session(md5)
+            .is_some_and(|item| item.ws_connected)
+    {
+        let _ = bridge::request(
+            state,
+            md5,
+            "session.shutdown",
+            json!({}),
+            Duration::from_secs(5),
+        )
+        .await;
+        state
+            .stop_process(md5, state.config.timeouts.bridge_disconnect_grace)
+            .await;
+    } else {
+        state.stop_process(md5, Duration::ZERO).await;
+    }
+    state.detach_bridge(md5, "session relaunching");
+    if let Some(job_id) = state.launch_job(md5) {
+        state.fail_job_error(&job_id, DomainError::disconnected(md5));
+    }
+    state.set_launch_job(md5, None);
+}
+
 /// Calls a bridge method. First, it connects the bridge of the session, or relaunches it.
 pub async fn call(
     state: &Arc<McpState>,
@@ -144,8 +327,7 @@ pub async fn call(
     Ok(envelope)
 }
 
-/// Makes sure that the session has a bridge connection. It waits for a launch
-/// that is in progress, or relaunches a disconnected or stale session.
+/// Makes sure that the session has a bridge connection.
 pub async fn ensure_connected(state: &Arc<McpState>, md5: &str) -> Result<()> {
     let session = state.session(md5)?;
     if session.ws_connected {
@@ -198,6 +380,9 @@ async fn begin_launch(
     md5: &str,
     kind: &'static str,
 ) -> Result<(PreparedProject, String)> {
+    // Stop any previous JVM first so an attached .gpr project releases its own lock.
+    state.detach_bridge(md5, "bridge restarting");
+    state.stop_process(md5, Duration::ZERO).await;
     let paths = state.paths.clone();
     let binary_md5 = md5.to_string();
     let prepared = tokio::task::spawn_blocking(move || prepare_project(&paths, &binary_md5))
@@ -205,10 +390,6 @@ async fn begin_launch(
         .map_err(|err| DomainError::Internal {
             message: format!("project preparation task failed: {err}"),
         })??;
-    // A disconnected bridge can leave its JVM alive. Stop that process before
-    // you replace the session and its authentication token.
-    state.detach_bridge(md5, "bridge restarting");
-    state.stop_process(md5, Duration::ZERO).await;
     state.put_session(&prepared.session_record())?;
     let job = state.insert_job(kind, Some(md5.to_string()));
     state.set_launch_job(md5, Some(job.id.clone()));
@@ -222,15 +403,22 @@ async fn launch_and_wait(
     job_id: String,
 ) -> Result<()> {
     let md5 = prepared.md5.clone();
+    let fresh_import = prepared.is_fresh_binary_import();
     let result = match launch_process(&state, prepared).await {
         Ok(()) => wait_ready(&state, &md5, &job_id, state.config.launch_timeout())
             .await
             .map(drop),
         Err(err) => Err(err),
     };
+    if result.is_err() && fresh_import {
+        // Remove an empty or partial internal project after a failed initial import.
+        let paths = state.paths.clone();
+        let md5_cleanup = md5.clone();
+        let _ =
+            tokio::task::spawn_blocking(move || reset_binary_ghidra_project(&paths, &md5_cleanup))
+                .await;
+    }
     let outcome = result.map_err(|err| {
-        // The anyhow chain keeps private details. The daemon log gets the chain.
-        // The public typed error does not.
         crate::process::record_daemon_error(&format!("session {md5} launch failed: {err:#}"));
         DomainError::from_error(&err)
     });
@@ -240,8 +428,7 @@ async fn launch_and_wait(
     outcome.map_err(Into::into)
 }
 
-/// Starts Ghidra and records the process. Does nothing if a newer launch
-/// replaced this one or the shutdown started.
+/// Starts Ghidra and records the process.
 async fn launch_process(state: &Arc<McpState>, prepared: PreparedProject) -> Result<()> {
     let _guard = state.lifecycle_lock.lock().await;
     let md5 = prepared.md5.clone();
@@ -273,8 +460,7 @@ async fn launch_process(state: &Arc<McpState>, prepared: PreparedProject) -> Res
     state.update_session(&md5, SessionRecord::mark_starting)
 }
 
-/// Makes the `analyzeHeadless` command line and environment, and starts the
-/// process. Its output goes to the logs of the session. This function blocks.
+/// Builds the `analyzeHeadless` command line and starts the process.
 fn spawn_ghidra(state: &McpState, prepared: &PreparedProject) -> Result<ManagedChild> {
     state.paths.ensure_layout()?;
     let analyze_headless = java_path(&crate::ghidra::analyze_headless(&state.config)?)?;
@@ -282,30 +468,21 @@ fn spawn_ghidra(state: &McpState, prepared: &PreparedProject) -> Result<ManagedC
     let jar = bridge::install_runtime(runtime_dir)?;
 
     let mut command = Command::new(analyze_headless);
-    // On Unix, keep the visible project alias. On Windows, give usual paths to the
-    // batch launcher and to Java, not canonical \\?\ paths.
     command
         .arg(java_path(&prepared.ghidra_launch_root)?)
-        .arg(GHIDRA_PROJECT_NAME);
-    let script = if prepared.existing_project {
-        // With no -process or -import, headless runs the script before it opens a
-        // program. The opener enables recovery and saves it before it starts Bridge.
-        command.arg("-noanalysis");
-        bridge::SAVED_PROJECT_SCRIPT_NAME
-    } else {
-        command
-            .arg("-import")
-            .arg(java_path(&prepared.input_path)?)
-            .args(["-overwrite", "-noanalysis"]);
-        bridge::BRIDGE_SCRIPT_NAME
-    };
+        .arg(&prepared.ghidra_project_name);
+    let (script, extra_script_args) = configure_launch_mode(&mut command, &prepared.launch_mode)?;
     command
         .arg("-max-cpu")
         .arg(state.config.analysis.max_cpu.to_string())
         .arg("-scriptPath")
         .arg(java_path(runtime_dir)?)
         .arg("-postScript")
-        .arg(script)
+        .arg(script);
+    for arg in &extra_script_args {
+        command.arg(arg);
+    }
+    command
         .arg(format!("ws_url={}", state.bridge_ws_url))
         .arg(format!("session_id={}", prepared.md5))
         .arg(format!("token={}", prepared.agent_token))
@@ -351,8 +528,56 @@ fn spawn_ghidra(state: &McpState, prepared: &PreparedProject) -> Result<ManagedC
     Ok(child)
 }
 
-/// Waits until the bridge is ready, and then completes the launch job. A
-/// launch failure, an early process stop and a timeout are errors.
+/// Appends mode-specific flags to `command` and returns `(post_script, extra_script_args)`.
+fn configure_launch_mode(
+    command: &mut Command,
+    launch_mode: &LaunchMode,
+) -> Result<(&'static str, Vec<String>)> {
+    let mut extra = Vec::new();
+    let script = match launch_mode {
+        LaunchMode::OpenSaved {
+            attached_gpr,
+            program_name,
+            backup_dir,
+        } => {
+            command.arg("-noanalysis");
+            extra.push(format!("backup_dir={}", java_path(backup_dir)?.display()));
+            if *attached_gpr {
+                extra.push("attached_gpr=true".to_string());
+            }
+            if let Some(name) = program_name {
+                extra.push(format!("program_name_hex={}", hex_encode(name)));
+            }
+            bridge::SAVED_PROJECT_SCRIPT_NAME
+        }
+        LaunchMode::ImportBinary {
+            input_path,
+            options,
+        } => {
+            command
+                .arg("-import")
+                .arg(java_path(input_path)?)
+                .args(["-overwrite", "-noanalysis"]);
+            if let Some(processor) = &options.processor {
+                command.arg("-processor").arg(processor);
+            }
+            if let Some(compiler_spec) = &options.compiler_spec {
+                command.arg("-cspec").arg(compiler_spec);
+            }
+            if let Some(loader) = options.effective_loader(input_path) {
+                command.arg("-loader").arg(loader);
+            }
+            if let Some(base_address) = &options.base_address {
+                command.arg("-loader-baseAddr").arg(base_address);
+                extra.push(format!("base_address={base_address}"));
+            }
+            bridge::IMPORT_BINARY_SCRIPT_NAME
+        }
+    };
+    Ok((script, extra))
+}
+
+/// Waits until the bridge is ready, and then completes the launch job.
 async fn wait_ready(
     state: &McpState,
     md5: &str,
@@ -392,6 +617,12 @@ async fn wait_ready(
             .into());
         }
         if let Some(status) = state.poll_process_exit(md5)? {
+            drop(guard);
+            // Give log forwarder threads a brief moment to flush the final stderr lines.
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            if let Some(diagnostic) = extract_headless_open_error(state, md5) {
+                return Err(DomainError::invalid_argument("open", diagnostic).into());
+            }
             return Err(DomainError::Internal {
                 message: format!(
                     "analyzeHeadless exited before ghidra.ready for session {md5} with \
@@ -411,10 +642,35 @@ async fn wait_ready(
             .into());
         }
         drop(guard);
-        // Wake at least once each second to find a process that stopped.
         let wake = deadline.min(Instant::now() + Duration::from_secs(1));
         let _ = tokio::time::timeout_at(wake, state.notify.notified()).await;
     }
+}
+
+/// Extracts a sanitized user-actionable open or import error from session logs.
+fn extract_headless_open_error(state: &McpState, md5: &str) -> Option<String> {
+    for log_path in [state.paths.stderr_log(md5), state.paths.stdout_log(md5)] {
+        let Ok(contents) = fs::read_to_string(log_path) else {
+            continue;
+        };
+        for line in contents.lines().rev() {
+            if let Some((_, detail)) = line.split_once(OPEN_ERROR_MARKER) {
+                let cleaned = detail.trim().trim_end_matches(" (GhidraScript)").trim();
+                return Some(sanitize_text_paths(cleaned));
+            }
+            if let Some((_, detail)) = line.split_once("InvalidInputException:") {
+                let cleaned = detail.trim().trim_end_matches(" (GhidraScript)").trim();
+                return Some(sanitize_text_paths(cleaned));
+            }
+            if line.contains("LockException") || line.contains("Unable to lock project") {
+                return Some(
+                    "Ghidra project is locked by another process; close it in Ghidra GUI first"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    None
 }
 
 /// Closes a session through its bridge. If `force` is `true`, it kills the process.
@@ -422,8 +678,6 @@ pub async fn close(state: &McpState, md5: &str, force: bool) -> Result<()> {
     let _guard = state.lifecycle_lock.lock().await;
     let session = state.session(md5)?;
     if !force && session.ws_connected {
-        // Let the bridge save the program. Then give its process time to stop.
-        // A close never relaunches a bridge. For this reason, this code does not use `call`.
         let shutdown = bridge::request(
             state,
             md5,

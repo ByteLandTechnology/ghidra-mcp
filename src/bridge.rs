@@ -38,6 +38,8 @@ use uuid::Uuid;
 pub const AGENT_WS_PATH: &str = "/ws/agent";
 /// The file name of the Ghidra post-script that loads the bridge JAR.
 pub const BRIDGE_SCRIPT_NAME: &str = "Bridge.java";
+/// The post-script that finalizes firmware base addresses after import.
+pub const IMPORT_BINARY_SCRIPT_NAME: &str = "ImportBinary.java";
 /// The post-script that safely opens a saved program before it loads the bridge.
 pub const SAVED_PROJECT_SCRIPT_NAME: &str = "OpenSavedProject.java";
 /// The file name of the bridge JAR in the runtime directory.
@@ -47,6 +49,8 @@ const EMBEDDED_BRIDGE_JAR: &[u8] =
     include_bytes!("../bridge/build/ghidra-script/ghidra-bridge.jar");
 /// The bridge post-script. `cargo xtask` makes it, and the executable contains it.
 const EMBEDDED_BRIDGE_SCRIPT: &str = include_str!("../bridge/build/ghidra-script/Bridge.java");
+/// The post-script that finalizes binary imports. The executable contains it.
+const EMBEDDED_IMPORT_BINARY_SCRIPT: &str = include_str!("../java/ImportBinary.java");
 /// The post-script that opens a saved project. The executable contains it.
 const EMBEDDED_SAVED_PROJECT_SCRIPT: &str = include_str!("../java/OpenSavedProject.java");
 
@@ -77,6 +81,7 @@ pub fn install_runtime(dir: &Path) -> Result<PathBuf> {
     }
     for (name, source) in [
         (BRIDGE_SCRIPT_NAME, EMBEDDED_BRIDGE_SCRIPT),
+        (IMPORT_BINARY_SCRIPT_NAME, EMBEDDED_IMPORT_BINARY_SCRIPT),
         (SAVED_PROJECT_SCRIPT_NAME, EMBEDDED_SAVED_PROJECT_SCRIPT),
     ] {
         let script = dir.join(name);

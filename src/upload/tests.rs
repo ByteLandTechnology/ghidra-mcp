@@ -207,3 +207,27 @@ async fn returns_absolute_upload_urls_over_legacy_sse() {
         check_result(&response, &format!("https://{host}/ghidra/upload"));
     }
 }
+
+/// Checks that `ghidra_upload prepare` accepts valid firmware import flags.
+#[tokio::test]
+async fn accepts_firmware_import_flags_in_prepare() {
+    let (_root, server) = test_server();
+    let arguments = json!({
+        "operation": "prepare",
+        "md5": "0123456789abcdef0123456789abcdef",
+        "params": {
+            "fileName": "firmware.srec",
+            "size": 256,
+            "processor": "ARM:LE:32:Cortex",
+            "compilerSpec": "default",
+            "loader": "MotorolaHexLoader",
+            "baseAddress": "0x08000000",
+            "reimport": true
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let result = server.call("ghidra_upload".into(), arguments).await;
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+}
