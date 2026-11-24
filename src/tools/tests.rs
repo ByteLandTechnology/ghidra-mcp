@@ -508,3 +508,100 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     .await
     .expect("shutdown starts after the reply");
 }
+
+/// Makes sure that `ghidra_data_type parse_c` and the C type and prototype schemas
+/// are available through `ghidra_help` and `prepare`.
+#[test]
+fn c_parser_and_atomic_prototype_schemas_are_available() {
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let (_, parse_help) = help::run(object(json!({
+        "domain": "ghidra_data_type",
+        "operation": "parse_c",
+    })))
+    .expect("parse_c help");
+    assert_eq!(parse_help["md5"], "required");
+    assert_eq!(parse_help["effects"]["mutates_program"], true);
+    assert_eq!(parse_help["inputSchema"]["required"], json!(["source"]));
+    assert!(parse_help["inputSchema"]["properties"]["category_path"].is_object());
+
+    let (parse_op, parse_req) = prepare(
+        "ghidra_data_type",
+        object(json!({
+            "operation": "parse_c",
+            "md5": md5,
+            "params": {
+                "source": "struct Node { const char *name; };",
+                "category_path": "/parsed",
+            },
+        })),
+    )
+    .expect("valid parse_c call");
+    assert!(matches!(
+        &parse_op.route,
+        Route::Bridge(method) if method == "data_type.parse_c"
+    ));
+    assert_eq!(parse_req.params["category_path"], "/parsed");
+
+    let (_, patch_help) = help::run(object(json!({
+        "domain": "ghidra_function",
+        "operation": "patch",
+    })))
+    .expect("function patch help");
+    let patch_props = &patch_help["inputSchema"]["properties"]["patch"]["properties"];
+    assert!(patch_props["signature"].is_object());
+    assert!(patch_props["parameters"].is_object());
+    let dt_ref_variants = patch_help["inputSchema"]["$defs"]["data_type_reference"]["oneOf"]
+        .as_array()
+        .expect("data_type_reference oneOf");
+    assert_eq!(dt_ref_variants.len(), 5);
+    assert_eq!(dt_ref_variants[0]["type"], "string");
+    assert_eq!(dt_ref_variants[0]["minLength"], 1);
+
+    let (_, sig_req) = prepare(
+        "ghidra_function",
+        object(json!({
+            "operation": "patch",
+            "md5": md5,
+            "params": {
+                "selector": { "entry": "0x401000" },
+                "patch": { "signature": "int process(const char *buf, void (*cb)(int))" },
+            },
+        })),
+    )
+    .expect("valid signature patch");
+    assert_eq!(
+        sig_req.params["patch"]["signature"],
+        "int process(const char *buf, void (*cb)(int))"
+    );
+
+    let (_, params_req) = prepare(
+        "ghidra_function",
+        object(json!({
+            "operation": "patch",
+            "md5": md5,
+            "params": {
+                "selector": { "entry": "0x401000" },
+                "patch": {
+                    "return_type": "const char *",
+                    "parameters": [
+                        {
+                            "name": "matrix",
+                            "data_type": "int (*)[4]",
+                            "storage": { "kind": "register", "register": "RDI" },
+                        },
+                        {
+                            "name": "count",
+                            "data_type": { "kind": "named", "name": "/uint" },
+                        },
+                    ],
+                },
+            },
+        })),
+    )
+    .expect("valid parameters patch");
+    assert_eq!(params_req.params["patch"]["return_type"], "const char *");
+    assert_eq!(
+        params_req.params["patch"]["parameters"][0]["data_type"],
+        "int (*)[4]"
+    );
+}
