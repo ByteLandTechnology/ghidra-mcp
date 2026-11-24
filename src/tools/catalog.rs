@@ -13,6 +13,7 @@
 //! MD5 of that session in `md5`, never in `params`.
 
 use super::local::{Basis, LocalOperation, LOCAL_OPERATIONS};
+use super::schema::params_schema;
 use super::Handler;
 use crate::error::DomainError;
 use anyhow::Result;
@@ -46,7 +47,7 @@ const DOMAINS: &[(&str, &str)] = &[
     ("memory", "for memory data"),
     (
         "listing",
-        "for code units, instructions, and flow overrides",
+        "for code units, data units, instructions, and flow overrides",
     ),
     ("global_variable", "for global variable data"),
     ("function", "for function data"),
@@ -151,10 +152,8 @@ impl Domain {
             .map(|operation| operation.name.as_str())
             .collect();
         let mut description = format!(
-            "Use this tool {}. Select an operation: {}. Before your first call to an operation, \
-             call \
-             {HELP_TOOL} with domain=\"{}\" and the operation name. Read its inputSchema for \
-             the required fields, types, and nested objects in params. Do not guess fields.",
+            "Use this tool {}. Select an operation: {}. Call {HELP_TOOL} with domain=\"{}\" \
+             for the inputSchema and effects of each operation, and do not guess fields.",
             self.purpose,
             names.join(", "),
             self.tool()
@@ -185,16 +184,7 @@ impl Domain {
                 description.push_str(" shows the md5 rule of each operation.");
             }
         }
-        properties.insert(
-            "params".into(),
-            json!({
-                "type": "object",
-                "description": concat!(
-                    "The parameters for the selected operation. If you do not have its schema, ",
-                    "call ghidra_help with the domain and operation before you set parameters."
-                )
-            }),
-        );
+        properties.insert("params".into(), params_schema(self.name, &self.operations));
         json!({
             "name": self.tool(),
             "description": description,
@@ -441,9 +431,9 @@ pub fn tool_definitions() -> Vec<Value> {
     let mut tools = vec![json!({
         "name": HELP_TOOL,
         "description": concat!(
-            "Get the domain tools, the operations of one domain, or the parameter schema, ",
-            "the md5 rule and the effects of one operation. Before the first call to an ",
-            "operation, set domain to its tool name and operation to its name. The returned ",
+            "Get the domain tools, the operations and schemas of one domain, or one operation. ",
+            "Set domain to get the description, md5 rule, effects, and inputSchema of each ",
+            "operation in a domain. Add operation to get one operation. The returned ",
             "inputSchema describes params, not the top-level tool arguments. Pass no ",
             "arguments to list the domain tools."
         ),
