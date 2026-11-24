@@ -269,10 +269,11 @@ fn bridge_target(method: &str) -> Option<(&'static str, String)> {
         "program_language" => ("program", format!("language.{operation}")),
         "address_space" => ("address", format!("space.{operation}")),
         "memory_block" => ("memory", format!("block.{operation}")),
-        "code_unit" | "data_unit" | "instruction" | "flow_override" => {
+        "code_unit" | "data_unit" | "instruction" | "flow_override" | "basic_block" => {
             ("listing", format!("{prefix}.{operation}"))
         }
         "function_call" => ("function", format!("call.{operation}")),
+        "function_call_graph" => ("function", format!("call_graph.{operation}")),
         "function_parameter" => ("function", format!("parameter.{operation}")),
         "function_local_variable" => ("function", format!("local_variable.{operation}")),
         "data_type_category" => ("data_type", format!("category.{operation}")),

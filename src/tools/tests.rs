@@ -254,9 +254,10 @@ fn local_operation_extends_its_bridge_method() {
 /// Makes sure that a bridge operation goes to its bridge method.
 #[test]
 fn bridge_operation_uses_its_bridge_method() {
+    let md5 = "0123456789abcdef0123456789abcdef";
     let prepared = prepare(
         "ghidra_bridge",
-        object(json!({ "operation": "get", "md5": "0123456789abcdef0123456789abcdef" })),
+        object(json!({ "operation": "get", "md5": md5 })),
     )
     .expect("valid call");
     let (operation, request) = prepared;
@@ -265,6 +266,38 @@ fn bridge_operation_uses_its_bridge_method() {
         Route::Local(_) => panic!("ghidra_bridge get must go to the bridge"),
     }
     assert_eq!(request.params, json!({}));
+
+    let (graph_op, _) = prepare(
+        "ghidra_function",
+        object(json!({
+            "operation": "call_graph.get",
+            "md5": md5,
+            "params": { "selector": { "entry": "0x101000" } }
+        })),
+    )
+    .expect("valid call_graph.get call");
+    match &graph_op.route {
+        Route::Bridge(method) => assert_eq!(method, "function_call_graph.get"),
+        Route::Local(_) => panic!("call_graph.get must go to the bridge"),
+    }
+
+    let (block_op, _) = prepare(
+        "ghidra_listing",
+        object(json!({
+            "operation": "basic_block.list",
+            "md5": md5,
+            "params": {
+                "filter": {
+                    "selector": { "kind": "function", "entry": "0x101000" }
+                }
+            }
+        })),
+    )
+    .expect("valid basic_block.list call");
+    match &block_op.route {
+        Route::Bridge(method) => assert_eq!(method, "basic_block.list"),
+        Route::Local(_) => panic!("basic_block.list must go to the bridge"),
+    }
 }
 
 /// Makes sure that `md5: null` is the same as no `md5`.
