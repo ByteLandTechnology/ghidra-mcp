@@ -129,6 +129,9 @@ pub async fn open(
     ))
 }
 
+/// The minimum RPC timeout for Sleigh assembly, because cold grammar setup is slow.
+const ASSEMBLY_RPC_FLOOR: Duration = Duration::from_mins(2);
+
 /// Calls a bridge method. First, it connects the bridge of the session, or relaunches it.
 pub async fn call(
     state: &Arc<McpState>,
@@ -137,7 +140,12 @@ pub async fn call(
     params: Value,
 ) -> Result<RpcEnvelope> {
     ensure_connected(state, md5).await?;
-    let envelope = bridge::request(state, md5, method, params, state.config.timeouts.rpc).await?;
+    let timeout = if matches!(method, "instruction.assemble" | "batch.execute") {
+        state.config.timeouts.rpc.max(ASSEMBLY_RPC_FLOOR)
+    } else {
+        state.config.timeouts.rpc
+    };
+    let envelope = bridge::request(state, md5, method, params, timeout).await?;
     if let Some(err) = &envelope.error {
         return Err(DomainError::from_bridge(envelope.status, err).into());
     }
