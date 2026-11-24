@@ -121,6 +121,13 @@ impl McpPaths {
     /// # Errors
     ///
     /// Fails if the daemon cannot canonicalize `project_parent` or create the symbolic link.
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::unused_self,
+            reason = "Unix places the alias in the runtime directory; both platforms share the API"
+        )
+    )]
     pub fn ensure_gpr_launch_alias(&self, md5: &str, project_parent: &Path) -> Result<PathBuf> {
         let canonical_parent = fs::canonicalize(project_parent)?;
         #[cfg(unix)]

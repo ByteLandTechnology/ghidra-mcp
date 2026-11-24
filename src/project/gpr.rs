@@ -195,15 +195,15 @@ fn has_active_os_lock(path: &Path) -> bool {
         };
         let fd = file.as_raw_fd();
         let mut lock = libc::flock {
-            l_type: i16::try_from(libc::F_WRLCK).unwrap_or(0),
-            l_whence: i16::try_from(libc::SEEK_SET).unwrap_or(0),
+            l_type: i16::try_from(i64::from(libc::F_WRLCK)).unwrap_or(0),
+            l_whence: i16::try_from(i64::from(libc::SEEK_SET)).unwrap_or(0),
             l_start: 0,
             l_len: 0,
             l_pid: 0,
         };
         // SAFETY: `fd` is a valid open descriptor and `lock` is an initialized `flock` struct.
         let status = unsafe { libc::fcntl(fd, libc::F_GETLK, &mut lock) };
-        if status == 0 && i32::from(lock.l_type) != libc::F_UNLCK {
+        if status == 0 && i64::from(lock.l_type) != i64::from(libc::F_UNLCK) {
             return true;
         }
         // Check BSD `flock` locks without a wait or any disk change.
