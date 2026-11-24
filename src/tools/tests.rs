@@ -508,3 +508,79 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     .await
     .expect("shutdown starts after the reply");
 }
+
+/// Makes sure that `ghidra_function` and `ghidra_data_type` expose the C string schemas.
+#[test]
+fn function_and_data_type_tools_expose_c_schemas() {
+    let md5 = "0123456789abcdef0123456789abcdef";
+
+    let (_, fn_patch_help) = help::run(object(
+        json!({ "domain": "ghidra_function", "operation": "patch" }),
+    ))
+    .expect("function patch help");
+    let patch_props = &fn_patch_help["inputSchema"]["properties"]["patch"]["properties"];
+    assert!(patch_props["parameters"].is_object());
+    assert!(patch_props["signature"].is_object());
+    let dt_variants = fn_patch_help["inputSchema"]["$defs"]["data_type_reference"]["oneOf"]
+        .as_array()
+        .expect("data_type_reference oneOf");
+    assert!(dt_variants
+        .iter()
+        .any(|variant| variant["type"] == "string"));
+
+    for operation in ["create", "upsert"] {
+        let (_, dt_help) = help::run(object(
+            json!({ "domain": "ghidra_data_type", "operation": operation }),
+        ))
+        .expect("data_type help");
+        let props = &dt_help["inputSchema"]["properties"];
+        assert!(props["declaration"].is_object());
+        assert!(props["category_path"].is_object());
+    }
+
+    prepare(
+        "ghidra_function",
+        object(json!({
+            "operation": "patch",
+            "md5": md5,
+            "params": {
+                "selector": { "entry": "0x1000" },
+                "patch": {
+                    "return_type": "const char *",
+                    "parameters": [
+                        { "name": "cb", "data_type": "void (*)(int)" }
+                    ]
+                }
+            }
+        })),
+    )
+    .expect("function patch with C types");
+
+    prepare(
+        "ghidra_function",
+        object(json!({
+            "operation": "patch",
+            "md5": md5,
+            "params": {
+                "selector": { "entry": "0x1000" },
+                "patch": { "signature": "int work(const char *buf, unsigned int len)" }
+            }
+        })),
+    )
+    .expect("function patch with C signature");
+
+    for operation in ["create", "upsert"] {
+        prepare(
+            "ghidra_data_type",
+            object(json!({
+                "operation": operation,
+                "md5": md5,
+                "params": {
+                    "category_path": "/net",
+                    "declaration": "struct Packet { int id; unsigned int flags; };"
+                }
+            })),
+        )
+        .expect("data_type C declaration");
+    }
+}
