@@ -559,7 +559,7 @@ Check the required fields and their nested structure before the call.
 The `ghidra_help` tool describes all tools:
 
 - `{}` lists the domain tools.
-- `{"domain":"function"}` lists the operations of one domain.
+- `{"domain":"function"}` lists the operations of one domain with each operation description, md5 rule, effects, and `inputSchema`.
 - `{"domain":"function","operation":"list"}` shows the full parameter schema, the md5 rule and the effects of one operation. The effects are the same as in the bridge contract, for example `read_only`, `mutates_program` and `destructive`.
 
 If the Ghidra process does not start, the session goes to `error` and its launch job goes to `failed`.
