@@ -60,9 +60,10 @@ Unix では、ローカルソケットは Unix ドメインソケットです。
 | `mcp_http` | Streamable HTTP、旧式 SSE セッション、CORS、HTTP 互換性。 |
 | `upload` | アップロード資格情報と `POST /upload` エンドポイント。 |
 | `tools` | MCP ツール：ドメインカタログ、ローカル操作、呼び出しの検証、`ghidra_help`。 |
-| `session` | セッションのオープン、起動、待機、再起動、呼び出し、クローズ。 |
+| `session` | セッションのオープン、起動、待機、再起動、呼び出し、チェックポイント、リセット、削除、クローズ。 |
+| `checkpoint` | `project.gpr` と `project.rep/` の同期スナップショット、保持上限、アトミックな復元。 |
 | `analysis` | バックグラウンドジョブとしての自動解析。 |
-| `project` | 保存済みのバイナリと Ghidra プロジェクトの準備。 |
+| `project` | 保存済みのバイナリ、プロジェクトのリセット、プロジェクトの削除、Ghidra プロジェクトの準備。 |
 | `bridge` | ブリッジ契約、埋め込まれたランタイム、WebSocket、単一のリクエスト。 |
 | `jsonrpc` | ブリッジ WebSocket の厳格な JSON-RPC 2.0 コーデック。 |
 | `state` | 共有状態：セッションごとに 1 つのエントリと、ジョブ。 |
@@ -226,7 +227,7 @@ MCP ハンドラーはエラーを型付けされた `DomainError` と JSON-RPC 
 
 | 場所 | 内容 | 寿命 |
 |---|---|---|
-| **永続ホーム**（`GHIDRA_MCP_HOME`、デフォルトは `~/.ghidra-mcp` または `%LOCALAPPDATA%\ghidra-mcp`） | `config.toml`、および `binary`、`binary.json`、`binary.lock`、`ghidra/` の Ghidra プロジェクト、`recovery-backups/` のクラッシュ復旧バックアップを含む `projects/<md5>/`。 | 保持されます。 |
+| **永続ホーム**（`GHIDRA_MCP_HOME`、デフォルトは `~/.ghidra-mcp` または `%LOCALAPPDATA%\ghidra-mcp`） | `config.toml`、および `binary`、`binary.json`、`binary.lock`、`ghidra/` の Ghidra プロジェクト、`checkpoints/` のスナップショット、`recovery-backups/` のクラッシュ復旧バックアップを含む `projects/<md5>/`。 | 保持されます。 |
 | **ランタイムディレクトリ**（システムのランタイムディレクトリまたは一時ディレクトリにある `ghidra-mcp-<uid>`、または `%LOCALAPPDATA%\ghidra-mcp\run`） | `daemon.lock`、`daemon.log`、`daemon.sock`（Unix）、`server.json`、`sessions/<md5>/session.json`、`logs/<md5>/`、`tmp/`、ブリッジファイル、および Unix では `projects` リンク。 | 削除できます。 |
 
 公開処理は、公開先のディレクトリにファイルを一時保存します。

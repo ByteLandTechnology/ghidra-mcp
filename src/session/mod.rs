@@ -35,6 +35,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 
+mod checkpoints;
+
+pub use checkpoints::{checkpoint_create, checkpoint_list, checkpoint_restore, delete, reset};
+
 /// The time that Ghidra has to exit after its bridge session ends. After this time,
 /// the bridge halts the JVM, but never during a save. Then no orphan Ghidra
 /// process stays when the daemon stops without a chance to stop it.

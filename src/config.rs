@@ -16,6 +16,9 @@
 //! [analysis]
 //! max_cpu = 4
 //!
+//! [checkpoints]
+//! max_per_binary = 10
+//!
 //! [timeouts]
 //! process_spawn_timeout_sec = 30
 //! analysis_import_timeout_sec = 1800
@@ -45,6 +48,9 @@ const DEFAULT_CONFIG: &str = r"# ghidra-mcp config
 
 [analysis]
 max_cpu = 4
+
+[checkpoints]
+max_per_binary = 10
 ";
 
 /// The loaded configuration.
@@ -55,6 +61,8 @@ pub struct McpConfig {
     pub ghidra: GhidraConfig,
     /// `[analysis]`: the resource limits for Ghidra.
     pub analysis: AnalysisConfig,
+    /// `[checkpoints]`: the retention limits for saved project snapshots.
+    pub checkpoints: CheckpointsConfig,
     /// `[timeouts]`: the time limits for launches, requests and the shutdown.
     pub timeouts: Timeouts,
 }
@@ -89,6 +97,20 @@ pub struct AnalysisConfig {
 impl Default for AnalysisConfig {
     fn default() -> Self {
         Self { max_cpu: 4 }
+    }
+}
+
+/// The `[checkpoints]` section.
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct CheckpointsConfig {
+    /// Maximum number of retained checkpoints for one binary.
+    pub max_per_binary: usize,
+}
+
+impl Default for CheckpointsConfig {
+    fn default() -> Self {
+        Self { max_per_binary: 10 }
     }
 }
 
@@ -202,7 +224,16 @@ impl McpConfig {
         let config: Self =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         config.reject_removed_settings()?;
+        config.validate_limits()?;
         Ok(config)
+    }
+
+    /// Rejects invalid zero limits in user configuration.
+    fn validate_limits(&self) -> Result<()> {
+        if self.checkpoints.max_per_binary == 0 {
+            bail!("[checkpoints].max_per_binary must be at least 1");
+        }
+        Ok(())
     }
 
     /// Refuses the keys that have no effect now. Then a user who set them sees an

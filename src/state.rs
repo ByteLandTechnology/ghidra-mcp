@@ -250,6 +250,15 @@ impl McpState {
         Ok(())
     }
 
+    /// Removes the in-memory entry of a session and wakes the waiters.
+    pub fn remove_session(&self, md5: &str) -> Option<SessionRecord> {
+        let removed = self.entries().remove(md5).map(|entry| entry.record);
+        if removed.is_some() {
+            self.notify.notify_waiters();
+        }
+        removed
+    }
+
     // Launch jobs.
 
     /// Returns the job that owns the current launch of a session.
@@ -336,6 +345,13 @@ impl McpState {
     /// Fails for an unknown session.
     pub fn request_lock(&self, md5: &str) -> Result<Arc<tokio::sync::Mutex<()>>> {
         self.with_entry(md5, |entry| entry.request_lock.clone())
+    }
+
+    /// Returns the per-session request serialization lock if the session exists in memory.
+    pub fn find_request_lock(&self, md5: &str) -> Option<Arc<tokio::sync::Mutex<()>>> {
+        self.entries()
+            .get(md5)
+            .map(|entry| entry.request_lock.clone())
     }
 
     /// Records a request and returns the connection for the request.
@@ -587,6 +603,27 @@ impl McpState {
     /// Fails a job that runs with an explicit domain error.
     pub fn fail_job_error(&self, job_id: &str, error: DomainError) {
         self.finish_job(job_id, Err(error));
+    }
+
+    /// Fails all jobs that run for `md5`.
+    pub fn fail_session_jobs(&self, md5: &str, error: &DomainError) {
+        let mut map = self.job_map();
+        let mut changed = false;
+        for entry in map.values_mut() {
+            if entry.record.status == JobStatus::Running
+                && entry.record.session_id.as_deref() == Some(md5)
+            {
+                entry.record.status = JobStatus::Failed;
+                entry.record.error = Some(error.to_string());
+                entry.failure = Some(error.clone());
+                entry.finished_at = Some(Instant::now());
+                changed = true;
+            }
+        }
+        if changed {
+            Self::prune_jobs(&mut map);
+            self.notify.notify_waiters();
+        }
     }
 
     /// Records the latest progress of an analysis job. If there is an error, it

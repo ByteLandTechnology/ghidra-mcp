@@ -32,7 +32,7 @@ pub(super) const HELP_TOOL: &str = "ghidra_help";
 const DOMAINS: &[(&str, &str)] = &[
     (
         "session",
-        "to open, list, examine, and close the binary sessions of the daemon",
+        "to open, list, examine, checkpoint, reset, close, and delete binary sessions",
     ),
     (
         "upload",
