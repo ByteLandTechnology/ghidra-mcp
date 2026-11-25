@@ -175,9 +175,10 @@ The client does not see the relaunch.
 The daemon is a multi-threaded Tokio program.
 Three mechanisms in `state.rs` keep the state correct:
 
-- **The lifecycle lock** (`McpState::lifecycle_lock`, async) puts the session lifecycle transitions in sequence.
+- **The lifecycle locks** (`McpState::lifecycle_lock`, async) put the lifecycle transitions of each session in sequence.
+  Each canonical binary MD5 has its own lock, so transitions on different sessions run in parallel.
   The transitions are: open, launch, handshake, disconnect and close.
-  A task can keep the lock across an await, for example while a process stops.
+  A task can keep a session lock across an await, for example while a process stops.
 - **The state mutexes** protect the session map and the job map.
   A task keeps them only for short sections that do not block, and never across an await.
   For this reason, most state methods are synchronous.

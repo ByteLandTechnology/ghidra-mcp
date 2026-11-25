@@ -20,22 +20,19 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{MutexGuard, OwnedMutexGuard};
+use tokio::sync::OwnedMutexGuard;
 
 /// Holds `lifecycle_lock` and, when a session entry exists, `request_lock`.
-struct SessionMutationGuards<'a> {
+struct SessionMutationGuards {
     /// Serializes session lifecycle transitions.
-    _lifecycle: MutexGuard<'a, ()>,
+    _lifecycle: OwnedMutexGuard<()>,
     /// Serializes bridge requests for the target session.
     _request: Option<OwnedMutexGuard<()>>,
 }
 
 /// Acquires `lifecycle_lock` and then `request_lock` for `md5` in fixed order.
-async fn lock_session_mutation<'a>(
-    state: &'a McpState,
-    md5: &str,
-) -> Result<SessionMutationGuards<'a>> {
-    let lifecycle = state.lifecycle_lock.lock().await;
+async fn lock_session_mutation(state: &McpState, md5: &str) -> Result<SessionMutationGuards> {
+    let lifecycle = state.lifecycle_lock(md5)?.lock_owned().await;
     let request = if let Some(lock) = state.find_request_lock(md5) {
         let timeout = state.config.timeouts.rpc;
         Some(
