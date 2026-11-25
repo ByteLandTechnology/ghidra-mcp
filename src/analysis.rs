@@ -42,11 +42,15 @@ pub async fn start(
         )
         .into());
     }
+    state.string_index.invalidate_session(&state.paths, &md5);
     let job = state.insert_job(job_kind::START_ANALYSIS, Some(md5.clone()));
     let task_state = state.clone();
     let job_id = job.id.clone();
     tokio::spawn(async move {
         let outcome = run(&task_state, &md5, &job_id, Value::Object(params)).await;
+        task_state
+            .string_index
+            .invalidate_session(&task_state.paths, &md5);
         task_state.finish_job(
             &job_id,
             outcome.map_err(|err| DomainError::from_error(&err)),

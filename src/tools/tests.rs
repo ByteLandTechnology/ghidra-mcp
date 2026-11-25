@@ -87,7 +87,7 @@ fn bridge_domains_match_the_bridge_mcp_server() {
 fn tool_definitions_have_routes_and_annotations() {
     let tools = tool_definitions();
     assert_eq!(tools[0]["name"], "ghidra_help");
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 20);
     let tool = |name: &str| {
         tools
             .iter()
@@ -109,6 +109,11 @@ fn tool_definitions_have_routes_and_annotations() {
     assert_eq!(
         tool("ghidra_decompilation")["annotations"]["readOnlyHint"],
         true
+    );
+    assert_eq!(tool("ghidra_search")["annotations"]["readOnlyHint"], true);
+    assert_eq!(
+        tool("ghidra_search")["inputSchema"]["properties"]["operation"]["enum"],
+        json!(["strings", "bytes"])
     );
     assert_eq!(
         tool("ghidra_memory")["annotations"]["destructiveHint"],
@@ -202,7 +207,7 @@ fn session_md5_is_never_a_parameter() {
 #[test]
 fn public_tool_contract_is_gemini_compatible() {
     let tools = tool_definitions();
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 20);
     for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
         assert!(valid_function_name(name), "tool name {name}");
@@ -434,7 +439,7 @@ fn prepare_refuses_invalid_calls() {
 fn help_has_three_levels() {
     let (_, domains) = help::run(Map::new()).expect("domains");
     let domains = domains["domains"].as_array().expect("domain list");
-    assert_eq!(domains.len(), 18);
+    assert_eq!(domains.len(), 19);
     assert_eq!(domains[0], "ghidra_session");
 
     let (_, memory) = help::run(object(json!({ "domain": "memory" }))).expect("operations");

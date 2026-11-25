@@ -57,6 +57,7 @@ const DOMAINS: &[(&str, &str)] = &[
     ("reference", "for reference data"),
     ("comment", "for comment data"),
     ("data_type", "for data type data"),
+    ("search", "for string and byte pattern searches"),
     ("batch", "for batch data"),
 ];
 

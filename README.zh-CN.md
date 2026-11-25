@@ -420,7 +420,7 @@ ipc_handshake_timeout_sec = 5
 
 ## MCP 工具
 
-`tools/list` 显示 19 个 MCP 工具：`ghidra_help`，以及每个领域一个工具。
+`tools/list` 显示 20 个 MCP 工具：`ghidra_help`，以及每个领域一个工具。
 桥接领域工具使用桥接 MCP 服务器的领域名和操作名。
 守护进程还提供本地操作，但不提供桥接的 shutdown 操作。
 本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
@@ -438,6 +438,7 @@ ipc_handshake_timeout_sec = 5
 | `ghidra_job` | `list`、`get`、`wait` | 守护进程。 |
 | `ghidra_daemon` | `status`、`shutdown` | 守护进程。 |
 | `ghidra_analysis` | `start`、`get` | `start`：守护进程，然后是桥接。`get`：桥接。 |
+| `ghidra_search` | `strings`、`bytes` | `strings`：守护进程和桥接。`bytes`：桥接。 |
 | `ghidra_bridge`、`ghidra_program`、`ghidra_address`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_decompilation`、`ghidra_symbol`、`ghidra_reference`、`ghidra_comment`、`ghidra_data_type`、`ghidra_batch` | 该领域的桥接方法。 | 会话的桥接。 |
 
 桥接契约 `bridge/docs/asyncapi.yaml` 给出桥接方法、它们的模式和 `read_only` 效果。
@@ -546,6 +547,7 @@ GHIDRA_MCP_HOME/                 # 默认：~/.ghidra-mcp
 `-- projects/<md5>/
     |-- binary                  # 已保存的二进制文件，使用固定名称
     |-- binary.json             # 原始文件名
+    |-- string-index.json       # 已缓存的字符串索引快照
     `-- ghidra/
         |-- project.gpr
         `-- project.rep/
@@ -577,6 +579,7 @@ GHIDRA_MCP_HOME/                 # 默认：~/.ghidra-mcp
 |-- projects\<md5>\
 |   |-- binary
 |   |-- binary.json
+|   |-- string-index.json
 |   `-- ghidra\
 |       |-- project.gpr
 |       `-- project.rep\

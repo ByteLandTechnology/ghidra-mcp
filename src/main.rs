@@ -23,7 +23,7 @@
 //! |---|---|
 //! | Front ends | [`cli`], [`daemon`], [`mcp`], [`mcp_http`], [`upload`] |
 //! | Tools | [`tools`] (`ghidra_help` and the domain tools) |
-//! | Domain | [`session`], [`analysis`], [`project`] |
+//! | Domain | [`session`], [`analysis`], [`project`], [`string_index`], [`string_regexp`] |
 //! | Bridge | [`bridge`], [`jsonrpc`] |
 //! | State | [`state`], [`model`] |
 //! | Platform | [`config`], [`paths`], [`java_path`], [`process`], [`ghidra`] |
@@ -47,6 +47,8 @@ mod process;
 mod project;
 mod session;
 mod state;
+mod string_index;
+mod string_regexp;
 mod tools;
 mod upload;
 

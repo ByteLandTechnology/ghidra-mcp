@@ -428,7 +428,7 @@ ipc_handshake_timeout_sec = 5
 
 ## The MCP tools
 
-`tools/list` shows 19 MCP tools: `ghidra_help` and one tool for each domain.
+`tools/list` shows 20 MCP tools: `ghidra_help` and one tool for each domain.
 The bridge domain tools use the domain and operation names of the bridge MCP server.
 The daemon also has local operations and does not expose the bridge shutdown operation.
 This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
@@ -446,6 +446,7 @@ A domain tool has these arguments:
 | `ghidra_job` | `list`, `get`, `wait` | The daemon. |
 | `ghidra_daemon` | `status`, `shutdown` | The daemon. |
 | `ghidra_analysis` | `start`, `get` | `start`: the daemon, then the bridge. `get`: the bridge. |
+| `ghidra_search` | `strings`, `bytes` | `strings`: the daemon and the bridge. `bytes`: the bridge. |
 | `ghidra_bridge`, `ghidra_program`, `ghidra_address`, `ghidra_memory`, `ghidra_listing`, `ghidra_global_variable`, `ghidra_function`, `ghidra_decompilation`, `ghidra_symbol`, `ghidra_reference`, `ghidra_comment`, `ghidra_data_type`, `ghidra_batch` | The bridge methods of the domain. | The bridge of the session. |
 
 The bridge contract `bridge/docs/asyncapi.yaml` gives the bridge methods, their schemas and their `read_only` effects.
@@ -556,6 +557,7 @@ GHIDRA_MCP_HOME/                 # default: ~/.ghidra-mcp
 `-- projects/<md5>/
     |-- binary                  # The saved binary, with a fixed name
     |-- binary.json             # The original file name
+    |-- string-index.json       # The cached string index snapshot
     `-- ghidra/
         |-- project.gpr
         `-- project.rep/
@@ -587,6 +589,7 @@ On Windows, the default layout is:
 |-- projects\<md5>\
 |   |-- binary
 |   |-- binary.json
+|   |-- string-index.json
 |   `-- ghidra\
 |       |-- project.gpr
 |       `-- project.rep\

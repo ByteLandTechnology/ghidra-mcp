@@ -174,7 +174,31 @@ pub async fn call(daemon: &Daemon, tool: &str, arguments: Map<String, Value>) ->
         Route::Local(run) => run(daemon, request).await,
         Route::Bridge(method) => {
             let md5 = request.session();
-            let response = session::call(&daemon.state, &md5, method, request.params).await?;
+            let response = if method == "search.strings" {
+                crate::string_index::search_strings(&daemon.state, &md5, request.params).await?
+            } else if method == "program.save" {
+                let saved = session::call(&daemon.state, &md5, method, request.params).await?;
+                daemon
+                    .state
+                    .string_index
+                    .on_program_saved(&daemon.state.paths, &md5);
+                saved
+            } else {
+                if operation.effects.mutates_program {
+                    daemon
+                        .state
+                        .string_index
+                        .invalidate_session(&daemon.state.paths, &md5);
+                }
+                let result = session::call(&daemon.state, &md5, method, request.params).await?;
+                if operation.effects.mutates_program {
+                    daemon
+                        .state
+                        .string_index
+                        .invalidate_session(&daemon.state.paths, &md5);
+                }
+                result
+            };
             Ok((
                 format!("{} completed", request.label),
                 json!({ "response": response }),
@@ -225,5 +249,7 @@ fn parse<T: DeserializeOwned>(label: &str, value: Value) -> Result<T> {
     })
 }
 
+#[cfg(test)]
+mod search_tests;
 #[cfg(test)]
 mod tests;

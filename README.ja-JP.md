@@ -421,7 +421,7 @@ ipc_handshake_timeout_sec = 5
 
 ## MCP ツール
 
-`tools/list` は 19 個の MCP ツールを表示します：`ghidra_help` と、ドメインごとに 1 つのツールです。
+`tools/list` は 20 個の MCP ツールを表示します：`ghidra_help` と、ドメインごとに 1 つのツールです。
 ブリッジのドメインツールは、ブリッジ MCP サーバーのドメイン名と操作名を使用します。
 デーモンにはローカル操作もありますが、ブリッジの shutdown 操作は公開しません。
 このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。
@@ -439,6 +439,7 @@ ipc_handshake_timeout_sec = 5
 | `ghidra_job` | `list`、`get`、`wait` | デーモン。 |
 | `ghidra_daemon` | `status`、`shutdown` | デーモン。 |
 | `ghidra_analysis` | `start`、`get` | `start`：デーモン、次にブリッジ。`get`：ブリッジ。 |
+| `ghidra_search` | `strings`、`bytes` | `strings`：デーモンとブリッジ。`bytes`：ブリッジ。 |
 | `ghidra_bridge`、`ghidra_program`、`ghidra_address`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_decompilation`、`ghidra_symbol`、`ghidra_reference`、`ghidra_comment`、`ghidra_data_type`、`ghidra_batch` | そのドメインのブリッジメソッド。 | セッションのブリッジ。 |
 
 ブリッジ契約 `bridge/docs/asyncapi.yaml` が、ブリッジメソッド、そのスキーマ、`read_only` 効果を定義します。
@@ -548,6 +549,7 @@ GHIDRA_MCP_HOME/                 # デフォルト：~/.ghidra-mcp
 `-- projects/<md5>/
     |-- binary                  # 保存済みのバイナリ（固定の名前）
     |-- binary.json             # 元のファイル名
+    |-- string-index.json       # キャッシュ済みの文字列インデックススナップショット
     `-- ghidra/
         |-- project.gpr
         `-- project.rep/
@@ -579,6 +581,7 @@ Windows のデフォルトのレイアウトは次のとおりです：
 |-- projects\<md5>\
 |   |-- binary
 |   |-- binary.json
+|   |-- string-index.json
 |   `-- ghidra\
 |       |-- project.gpr
 |       `-- project.rep\

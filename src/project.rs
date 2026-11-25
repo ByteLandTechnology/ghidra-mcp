@@ -7,10 +7,11 @@
 //!
 //! ```text
 //! projects/<md5>/
-//! ├── binary        the saved binary, with a fixed name
-//! ├── binary.json   {"fileName": …}, written last: it shows that the copy is complete
-//! ├── binary.lock   serializes persistence for this MD5 and remains after lock release
-//! └── ghidra/       the Ghidra project: project.gpr and project.rep/
+//! ├── binary             the saved binary, with a fixed name
+//! ├── binary.json        {"fileName": …}, written last: it shows that the copy is complete
+//! ├── binary.lock        serializes persistence for this MD5 and remains after lock release
+//! ├── string-index.json  cached string index snapshot for fast reopened searches
+//! └── ghidra/            the Ghidra project: project.gpr and project.rep/
 //! ```
 //!
 //! The daemon saves a binary one time. After that, it opens the project again

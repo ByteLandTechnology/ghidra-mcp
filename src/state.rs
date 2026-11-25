@@ -120,6 +120,8 @@ pub struct McpState {
     pub lifecycle_lock: tokio::sync::Mutex<()>,
     /// Wakes the waiters after each change of a session, a job or a process.
     pub notify: Notify,
+    /// Persistent and in-memory string index snapshots by binary MD5.
+    pub string_index: crate::string_index::StringIndexStore,
     /// Shows whether shutdown started. After that, the daemon refuses new launches and processes.
     shutting_down: AtomicBool,
     /// All known sessions, with the MD5 as key.
@@ -142,6 +144,7 @@ impl McpState {
             bridge_ws_url,
             lifecycle_lock: tokio::sync::Mutex::new(()),
             notify: Notify::new(),
+            string_index: crate::string_index::StringIndexStore::default(),
             shutting_down: AtomicBool::new(false),
             sessions: Mutex::new(sessions),
             jobs: Mutex::default(),
@@ -552,6 +555,15 @@ impl McpState {
         map.values().map(|entry| entry.record.clone()).collect()
     }
 
+    /// Returns `true` while a `start_analysis` job runs for `md5`.
+    pub fn has_running_analysis(&self, md5: &str) -> bool {
+        self.job_map().values().any(|entry| {
+            entry.record.kind == crate::model::job_kind::START_ANALYSIS
+                && entry.record.status == JobStatus::Running
+                && entry.record.session_id.as_deref() == Some(md5)
+        })
+    }
+
     /// Changes a job and wakes the waiters.
     fn update_job(&self, job_id: &str, mutate: impl FnOnce(&mut JobRecord)) {
         if let Some(entry) = self.job_map().get_mut(job_id) {
@@ -695,6 +707,7 @@ pub(crate) fn test_state(root: &std::path::Path) -> Arc<McpState> {
         bridge_ws_url: String::new(),
         lifecycle_lock: tokio::sync::Mutex::new(()),
         notify: Notify::new(),
+        string_index: crate::string_index::StringIndexStore::default(),
         shutting_down: AtomicBool::new(false),
         sessions: Mutex::default(),
         jobs: Mutex::default(),

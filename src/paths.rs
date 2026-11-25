@@ -89,6 +89,11 @@ impl McpPaths {
         self.projects_dir.join(md5)
     }
 
+    /// Returns the path of the persisted string index snapshot of one binary.
+    pub fn string_index_file(&self, md5: &str) -> PathBuf {
+        self.project_dir(md5).join("string-index.json")
+    }
+
     /// Returns the physical Ghidra project root (`project.gpr` and `project.rep`).
     pub fn ghidra_project_root(&self, md5: &str) -> PathBuf {
         self.project_dir(md5).join("ghidra")

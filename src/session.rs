@@ -209,6 +209,9 @@ async fn begin_launch(
     // you replace the session and its authentication token.
     state.detach_bridge(md5, "bridge restarting");
     state.stop_process(md5, Duration::ZERO).await;
+    state
+        .string_index
+        .on_session_launching(&state.paths, md5, prepared.existing_project);
     state.put_session(&prepared.session_record())?;
     let job = state.insert_job(kind, Some(md5.to_string()));
     state.set_launch_job(md5, Some(job.id.clone()));
@@ -439,6 +442,9 @@ pub async fn close(state: &McpState, md5: &str, force: bool) -> Result<()> {
         state.stop_process(md5, Duration::ZERO).await;
     }
     state.detach_bridge(md5, "session closed");
+    state
+        .string_index
+        .on_session_closed(&state.paths, md5, force);
     state.update_session(md5, |session| session.mark_closed(force))?;
     if let Some(job_id) = state.launch_job(md5) {
         state.fail_job_error(&job_id, DomainError::disconnected(md5));
