@@ -151,11 +151,11 @@ For this reason, the rules for each transition are in one location.
 
 A launch has four steps:
 
-1. **`begin_launch`** prepares the project and stops the previous process.
-   It saves a `launching` record with a new 256-bit bridge credential.
+1. **`begin_launch`** stops any previous process and waits for active teardowns of that MD5 outside the lifecycle lock.
+   It prepares the project on disk, then takes the lock to save a `launching` record with a new 256-bit bridge credential.
    It also makes the launch job. From this point, the job owns the session.
-2. **`launch_process`** starts `analyzeHeadless` with the bridge as its post-script.
-   It sets the session to `starting`.
+2. **`launch_process`** starts `analyzeHeadless` with the bridge as its post-script outside the lifecycle lock.
+   It takes the lock to record the process and set the session to `starting`.
 3. The bridge connects and sends `ghidra.ready`.
    **`bridge::handshake`** examines the credential and attaches the connection.
    It sets the session to `ready`.
@@ -164,7 +164,7 @@ A launch has four steps:
 
 Each step first makes sure that its launch job or its credential still owns the session.
 A newer launch can replace a launch, and a client can close a session.
-In these conditions, the old step stops and does not change the newer state.
+In these conditions, the old step stops, reaps any superseded child process, and does not change the newer state.
 
 The next tool call for a session that is `disconnected` or `stale` relaunches the session.
 The client does not see the relaunch.
@@ -172,11 +172,14 @@ The client does not see the relaunch.
 ## Concurrency
 
 The daemon is a multi-threaded Tokio program.
-Three mechanisms in `state.rs` keep the state correct:
+Four mechanisms in `state.rs` keep the state correct:
 
-- **The lifecycle lock** (`McpState::lifecycle_lock`, async) puts the session lifecycle transitions in sequence.
+- **The lifecycle lock** (`McpState::lifecycle_lock`, async) puts in-memory session lifecycle checks, transition claims, and snapshot writes in sequence.
   The transitions are: open, launch, handshake, disconnect and close.
-  A task can keep the lock across an await, for example while a process stops.
+  A task never keeps the lock across an await, an RPC, project preparation, or a process stop.
+- **Per-session barriers** (`SessionEntry`, private) track the active transition and the active process stops for each MD5.
+  Waiters for the same MD5 wait on `McpState::notify` outside the lifecycle lock.
+  For this reason, a slow save or process stop on one binary never blocks other binaries.
 - **The state mutexes** protect the session map and the job map.
   A task keeps them only for short sections that do not block, and never across an await.
   For this reason, most state methods are synchronous.

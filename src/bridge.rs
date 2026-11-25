@@ -28,7 +28,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -68,9 +68,15 @@ pub fn methods() -> &'static Map<String, Value> {
     &METHODS
 }
 
+/// Serializes embedded runtime extraction across concurrent `spawn_ghidra` tasks.
+static RUNTIME_INSTALL_LOCK: Mutex<()> = Mutex::new(());
+
 /// Writes the embedded bridge JAR and script into `dir`, if they are not
 /// current. Returns the path of the JAR. The script directory is `dir`.
 pub fn install_runtime(dir: &Path) -> Result<PathBuf> {
+    let _guard = RUNTIME_INSTALL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let jar = dir.join(BRIDGE_JAR_NAME);
     if fs::read(&jar).ok().as_deref() != Some(EMBEDDED_BRIDGE_JAR) {
         atomic_write(&jar, EMBEDDED_BRIDGE_JAR)?;
@@ -281,9 +287,10 @@ async fn handshake(
         return Handshake::Failed;
     }
     let _guard = state.lifecycle_lock.lock().await;
-    if !state
-        .session_with_token(md5, token)
-        .is_some_and(|session| session.status.is_launching())
+    if state.has_transition(md5)
+        || !state
+            .session_with_token(md5, token)
+            .is_some_and(|session| session.status.is_launching())
     {
         return Handshake::Failed;
     }
@@ -327,40 +334,56 @@ async fn next_text(stream: &mut SplitStream<WebSocket>) -> Option<Utf8Bytes> {
 }
 
 /// Sets a connected session to disconnected. Stops its process after the grace period.
-async fn on_disconnect(state: &McpState, md5: &str, token: &str, conn_id: &str) {
-    let _guard = state.lifecycle_lock.lock().await;
-    // A relaunch replaced the session of this socket.
-    if state.session_with_token(md5, token).is_none()
-        || !state.detach_bridge_if_current(md5, conn_id, "bridge disconnected")
-    {
-        return;
+pub(crate) async fn on_disconnect(state: &Arc<McpState>, md5: &str, token: &str, conn_id: &str) {
+    let detached = {
+        let _guard = state.lifecycle_lock.lock().await;
+        // A close or relaunch transition owns or replaced the session of this socket.
+        if state.has_transition(md5) {
+            state.detach_bridge_if_current(md5, conn_id, "session closed");
+            return;
+        }
+        if state.session_with_token(md5, token).is_none()
+            || !state.detach_bridge_if_current(md5, conn_id, "bridge disconnected")
+        {
+            return;
+        }
+        let detached = state.take_process(md5);
+        let _ = state.update_session(md5, SessionRecord::mark_disconnected);
+        detached
+    };
+    if let Some((child, guard)) = detached {
+        state
+            .reap_detached(child, guard, state.config.timeouts.bridge_disconnect_grace)
+            .await;
     }
-    state
-        .stop_process(md5, state.config.timeouts.bridge_disconnect_grace)
-        .await;
-    let _ = state.update_session(md5, SessionRecord::mark_disconnected);
 }
 
 /// Fails a launch if its bridge did not complete the handshake.
-async fn on_failed_handshake(state: &McpState, md5: &str, token: &str) {
-    let job_id = {
+async fn on_failed_handshake(state: &Arc<McpState>, md5: &str, token: &str) {
+    let detached = {
         let _guard = state.lifecycle_lock.lock().await;
+        if state.has_transition(md5) {
+            return;
+        }
         let launching = state
             .session_with_token(md5, token)
             .is_some_and(|session| session.status.is_launching());
         let Some(job_id) = state.launch_job(md5).filter(|_| launching) else {
             return;
         };
-        state.stop_process(md5, Duration::ZERO).await;
-        job_id
+        let detached = state.take_process(md5);
+        let error = DomainError::Internal {
+            message: "bridge failed to send a valid ghidra.ready message".to_string(),
+        };
+        let message = error.to_string();
+        state.fail_job_error(&job_id, error);
+        if state.owns_launch(md5, &job_id) {
+            let _ = state.update_session(md5, |session| session.mark_error(&message));
+            state.set_launch_job(md5, None);
+        }
+        detached
     };
-    state
-        .fail_launch(
-            md5,
-            &job_id,
-            DomainError::Internal {
-                message: "bridge failed to send a valid ghidra.ready message".to_string(),
-            },
-        )
-        .await;
+    if let Some((child, guard)) = detached {
+        state.reap_detached(child, guard, Duration::ZERO).await;
+    }
 }

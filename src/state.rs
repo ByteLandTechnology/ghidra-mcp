@@ -5,14 +5,19 @@
 //!
 //! # Concurrency
 //!
-//! - [`McpState::lifecycle_lock`] (async) puts the session lifecycle
-//!   transitions in sequence: open, launch, bridge handshake, disconnect and
-//!   close. A task can keep it across an await, for example while a process stops.
+//! - [`McpState::lifecycle_lock`] (async) puts in-memory session lifecycle
+//!   checks, transition claims, and snapshot writes in sequence. A task never
+//!   keeps it across an await, an RPC, project preparation, or a process stop.
+//! - Each [`SessionEntry`] tracks its active transition and process stop count.
+//!   Waiters for the same MD5 wait on [`McpState::notify`] outside the lock.
 //! - Plain mutexes protect the session map and the job map. A task keeps them
 //!   only for short sections that do not block, and never across an await. For
 //!   this reason, most methods here are synchronous.
 //! - [`McpState::notify`] wakes all waiters after each change. Each waiter
 //!   examines its condition again. For this reason, an unnecessary wake-up does no damage.
+
+#[cfg(test)]
+mod tests;
 
 use crate::config::McpConfig;
 use crate::error::DomainError;
@@ -25,7 +30,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::process::ExitStatus;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Notify};
@@ -54,8 +59,8 @@ struct PendingRequest {
 
 /// All the data that the daemon keeps for one session.
 struct SessionEntry {
-    /// The saved record.
-    record: SessionRecord,
+    /// The saved record, after the first launch writes its snapshot.
+    record: Option<SessionRecord>,
     /// The launch or relaunch job that owns the session now.
     launch_job: Option<String>,
     /// The bridge connection, after its handshake.
@@ -66,11 +71,17 @@ struct SessionEntry {
     process: Option<ManagedChild>,
     /// Serializes bridge requests from concurrent callers.
     request_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Identifier of the active launch-preparation or close transition for this MD5.
+    transition: Option<u64>,
+    /// `true` when the active transition closes the session.
+    closing: bool,
+    /// Active process starts or detached process stops that use this MD5 project.
+    teardowns: usize,
 }
 
 impl SessionEntry {
-    /// Makes an entry with no job, no connection, no request and no process.
-    fn new(record: SessionRecord) -> Self {
+    /// Makes an entry with an optional record and no job, connection, request, or process.
+    fn new(record: Option<SessionRecord>) -> Self {
         Self {
             record,
             launch_job: None,
@@ -78,7 +89,61 @@ impl SessionEntry {
             request: None,
             process: None,
             request_lock: Arc::new(tokio::sync::Mutex::new(())),
+            transition: None,
+            closing: false,
+            teardowns: 0,
         }
+    }
+
+    /// Returns `true` when an uncreated entry has no active transition or teardown.
+    fn is_unused(&self) -> bool {
+        self.record.is_none()
+            && self.transition.is_none()
+            && self.teardowns == 0
+            && self.process.is_none()
+            && self.connection.is_none()
+    }
+}
+
+/// Owns an in-flight per-session transition outside [`McpState::lifecycle_lock`].
+pub(crate) struct TransitionGuard {
+    /// Shared daemon state that holds the session entry.
+    state: Arc<McpState>,
+    /// Target session MD5.
+    md5: String,
+    /// Monotonic identifier of this transition claim.
+    id: u64,
+    /// `true` until [`Self::finish`] or [`Drop`] releases the claim.
+    active: bool,
+}
+
+impl TransitionGuard {
+    /// Releases the transition claim and wakes waiters.
+    pub(crate) fn finish(mut self) {
+        self.active = false;
+        self.state.end_transition(&self.md5, self.id);
+    }
+}
+
+impl Drop for TransitionGuard {
+    fn drop(&mut self) {
+        if self.active {
+            self.state.end_transition(&self.md5, self.id);
+        }
+    }
+}
+
+/// Blocks new project opens on one MD5 until an active spawn or reap finishes.
+pub(crate) struct TeardownGuard {
+    /// Shared daemon state that holds the session entry.
+    state: Arc<McpState>,
+    /// Target session MD5.
+    md5: String,
+}
+
+impl Drop for TeardownGuard {
+    fn drop(&mut self) {
+        self.state.end_teardown(&self.md5);
     }
 }
 
@@ -122,6 +187,8 @@ pub struct McpState {
     pub notify: Notify,
     /// Shows whether shutdown started. After that, the daemon refuses new launches and processes.
     shutting_down: AtomicBool,
+    /// Assigns unique identifiers to per-session transition claims.
+    next_transition_id: AtomicU64,
     /// All known sessions, with the MD5 as key.
     sessions: Mutex<HashMap<String, SessionEntry>>,
     /// All jobs since the start of the daemon, with the job ID as key.
@@ -143,6 +210,7 @@ impl McpState {
             lifecycle_lock: tokio::sync::Mutex::new(()),
             notify: Notify::new(),
             shutting_down: AtomicBool::new(false),
+            next_transition_id: AtomicU64::new(1),
             sessions: Mutex::new(sessions),
             jobs: Mutex::default(),
         }))
@@ -169,6 +237,7 @@ impl McpState {
         let mut entries = self.entries();
         let entry = entries
             .get_mut(md5)
+            .filter(|entry| entry.record.is_some())
             .ok_or_else(|| DomainError::missing_target(md5, format!("unknown session: {md5}")))?;
         Ok(f(entry))
     }
@@ -179,13 +248,15 @@ impl McpState {
     pub fn sessions(&self) -> Vec<SessionRecord> {
         self.entries()
             .values()
-            .map(|entry| entry.record.clone())
+            .filter_map(|entry| entry.record.clone())
             .collect()
     }
 
     /// Returns a copy of the record of a session, if the session exists.
     pub fn find_session(&self, md5: &str) -> Option<SessionRecord> {
-        self.entries().get(md5).map(|entry| entry.record.clone())
+        self.entries()
+            .get(md5)
+            .and_then(|entry| entry.record.clone())
     }
 
     /// Returns a copy of the record of a session.
@@ -194,7 +265,9 @@ impl McpState {
     ///
     /// Fails for an unknown session.
     pub fn session(&self, md5: &str) -> Result<SessionRecord> {
-        self.with_entry(md5, |entry| entry.record.clone())
+        self.with_entry(md5, |entry| {
+            entry.record.clone().expect("verified session record")
+        })
     }
 
     /// Returns the session if `token` is still its bridge credential. A relaunch
@@ -207,8 +280,8 @@ impl McpState {
     /// Finds the live session that has the bearer token `token` as its credential.
     pub fn session_for_token(&self, token: &str) -> Option<String> {
         self.entries().values().find_map(|entry| {
-            let session = &entry.record;
-            (session.agent_token == token && session.status.is_live())
+            let session = entry.record.as_ref()?;
+            (entry.transition.is_none() && session.agent_token == token && session.status.is_live())
                 .then(|| session.session_id.clone())
         })
     }
@@ -222,8 +295,8 @@ impl McpState {
         let md5 = record.session_id.clone();
         self.entries()
             .entry(md5)
-            .and_modify(|entry| entry.record = record.clone())
-            .or_insert_with(|| SessionEntry::new(record.clone()));
+            .and_modify(|entry| entry.record = Some(record.clone()))
+            .or_insert_with(|| SessionEntry::new(Some(record.clone())));
         self.write_session(record)
     }
 
@@ -234,8 +307,9 @@ impl McpState {
     /// Fails for an unknown session, or if the daemon cannot write the snapshot.
     pub fn update_session(&self, md5: &str, mutate: impl FnOnce(&mut SessionRecord)) -> Result<()> {
         let record = self.with_entry(md5, |entry| {
-            mutate(&mut entry.record);
-            entry.record.clone()
+            let record = entry.record.as_mut().expect("verified session record");
+            mutate(record);
+            record.clone()
         })?;
         self.write_session(&record)
     }
@@ -276,7 +350,7 @@ impl McpState {
         let _guard = self.lifecycle_lock.lock().await;
         let message = error.to_string();
         self.fail_job_error(job_id, error);
-        if self.owns_launch(md5, job_id) {
+        if !self.has_transition(md5) && self.owns_launch(md5, job_id) {
             let _ = self.update_session(md5, |session| session.mark_error(&message));
             self.set_launch_job(md5, None);
         }
@@ -412,18 +486,152 @@ impl McpState {
         }
     }
 
-    // Ghidra processes.
+    // Per-session transitions and Ghidra processes.
 
-    /// Records a child process. Returns the child if the shutdown started or the session is gone.
-    pub fn register_process(&self, md5: &str, child: ManagedChild) -> Result<(), ManagedChild> {
-        let mut entries = self.entries();
-        match entries.get_mut(md5) {
-            Some(entry) if !self.is_shutting_down() => {
-                entry.process = Some(child);
-                Ok(())
-            }
-            _ => Err(child),
+    /// Returns `true` when `md5` has an active launch-preparation or close transition.
+    pub(crate) fn has_transition(&self, md5: &str) -> bool {
+        self.entries()
+            .get(md5)
+            .is_some_and(|entry| entry.transition.is_some())
+    }
+
+    /// Returns `true` when `md5` has an active close transition.
+    pub(crate) fn is_closing(&self, md5: &str) -> bool {
+        self.entries().get(md5).is_some_and(|entry| entry.closing)
+    }
+
+    /// Claims exclusive per-MD5 transition ownership outside [`Self::lifecycle_lock`].
+    pub(crate) fn begin_transition(self: &Arc<Self>, md5: &str, closing: bool) -> TransitionGuard {
+        let id = self.next_transition_id.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut entries = self.entries();
+            let entry = entries
+                .entry(md5.to_string())
+                .or_insert_with(|| SessionEntry::new(None));
+            debug_assert!(entry.transition.is_none());
+            entry.transition = Some(id);
+            entry.closing = closing;
         }
+        self.notify.notify_waiters();
+        TransitionGuard {
+            state: self.clone(),
+            md5: md5.to_string(),
+            id,
+            active: true,
+        }
+    }
+
+    /// Releases transition `id` on `md5` and wakes same-MD5 waiters.
+    fn end_transition(&self, md5: &str, id: u64) {
+        {
+            let mut entries = self.entries();
+            if let Some(entry) = entries.get_mut(md5) {
+                if entry.transition == Some(id) {
+                    entry.transition = None;
+                    entry.closing = false;
+                }
+                if entry.is_unused() {
+                    entries.remove(md5);
+                }
+            }
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// Tracks one active process spawn or teardown on `md5`.
+    pub(crate) fn begin_teardown(self: &Arc<Self>, md5: &str) -> TeardownGuard {
+        {
+            let mut entries = self.entries();
+            let entry = entries
+                .entry(md5.to_string())
+                .or_insert_with(|| SessionEntry::new(None));
+            entry.teardowns += 1;
+        }
+        TeardownGuard {
+            state: self.clone(),
+            md5: md5.to_string(),
+        }
+    }
+
+    /// Releases one teardown count on `md5` and wakes waiters.
+    fn end_teardown(&self, md5: &str) {
+        {
+            let mut entries = self.entries();
+            if let Some(entry) = entries.get_mut(md5) {
+                entry.teardowns = entry.teardowns.saturating_sub(1);
+                if entry.is_unused() {
+                    entries.remove(md5);
+                }
+            }
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// Detaches the child process of `md5` and tracks its teardown barrier.
+    pub(crate) fn take_process(
+        self: &Arc<Self>,
+        md5: &str,
+    ) -> Option<(ManagedChild, TeardownGuard)> {
+        let child = {
+            let mut entries = self.entries();
+            let entry = entries.get_mut(md5)?;
+            let child = entry.process.take()?;
+            entry.teardowns += 1;
+            child
+        };
+        Some((
+            child,
+            TeardownGuard {
+                state: self.clone(),
+                md5: md5.to_string(),
+            },
+        ))
+    }
+
+    /// Returns `true` when `md5` still has a live child or an active teardown.
+    pub(crate) fn has_teardown(&self, md5: &str) -> bool {
+        self.entries()
+            .get(md5)
+            .is_some_and(|entry| entry.teardowns > 0 || entry.process.is_some())
+    }
+
+    /// Waits outside [`Self::lifecycle_lock`] until `md5` has no active teardown.
+    pub(crate) async fn wait_teardown(&self, md5: &str) -> Result<()> {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_shutting_down() {
+                return Err(DomainError::ShuttingDown.into());
+            }
+            if !self.has_teardown(md5) {
+                return Ok(());
+            }
+            notified.await;
+        }
+    }
+
+    /// Records a spawned child and releases its spawn barrier in one step.
+    pub(crate) fn commit_spawned_process(
+        &self,
+        md5: &str,
+        child: ManagedChild,
+        spawn_guard: TeardownGuard,
+    ) -> Result<(), (ManagedChild, TeardownGuard)> {
+        {
+            let mut entries = self.entries();
+            let Some(entry) = entries.get_mut(md5) else {
+                return Err((child, spawn_guard));
+            };
+            if self.is_shutting_down() || entry.record.is_none() || entry.process.is_some() {
+                return Err((child, spawn_guard));
+            }
+            entry.process = Some(child);
+            entry.teardowns = entry.teardowns.saturating_sub(1);
+            std::mem::forget(spawn_guard);
+        }
+        self.notify.notify_waiters();
+        Ok(())
     }
 
     /// Returns the exit status if the process of the session stopped. Then the
@@ -445,17 +653,6 @@ impl McpState {
         })?
     }
 
-    /// Stops the Ghidra process of a session. First, the process has `grace` to stop by itself.
-    pub async fn stop_process(&self, md5: &str, grace: Duration) {
-        let child = self
-            .entries()
-            .get_mut(md5)
-            .and_then(|entry| entry.process.take());
-        if let Some(child) = child {
-            self.reap(child, grace).await;
-        }
-    }
-
     /// Stops all processes and removes all bridges, for the shutdown of the daemon.
     pub async fn stop_all(&self) {
         let children: Vec<ManagedChild> = self
@@ -469,11 +666,36 @@ impl McpState {
                 .map(|child| self.reap(child, Duration::from_secs(30))),
         )
         .await;
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self.entries().values().any(|entry| entry.teardowns > 0) {
+                break;
+            }
+            notified.await;
+        }
         for entry in self.entries().values_mut() {
             entry.connection = None;
             entry.request = None;
         }
         self.notify.notify_waiters();
+    }
+
+    /// Stops a detached session process and releases `guard` after the process tree stops.
+    pub(crate) async fn reap_detached(
+        &self,
+        child: ManagedChild,
+        guard: TeardownGuard,
+        grace: Duration,
+    ) {
+        let terminate = self.config.timeouts.graceful_kill;
+        let kill = self.config.timeouts.force_kill;
+        let _ = tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            child.reap_or_kill(grace, terminate, kill);
+        })
+        .await;
     }
 
     /// Stops a child process in steps (see [`ManagedChild::reap_or_kill`]), on a
@@ -676,7 +898,7 @@ fn load_sessions(paths: &McpPaths) -> Result<HashMap<String, SessionEntry>> {
         };
         record.mark_restored();
         atomic_write(&path, &serde_json::to_vec_pretty(&record)?)?;
-        sessions.insert(record.session_id.clone(), SessionEntry::new(record));
+        sessions.insert(record.session_id.clone(), SessionEntry::new(Some(record)));
     }
     Ok(sessions)
 }
@@ -684,6 +906,16 @@ fn load_sessions(paths: &McpPaths) -> Result<HashMap<String, SessionEntry>> {
 /// Makes isolated daemon state without Ghidra processes or shared environment changes.
 #[cfg(test)]
 pub(crate) fn test_state(root: &std::path::Path) -> Arc<McpState> {
+    test_state_with(root, McpConfig::default(), String::new())
+}
+
+/// Makes isolated daemon state with custom configuration and bridge WebSocket URL.
+#[cfg(test)]
+pub(crate) fn test_state_with(
+    root: &std::path::Path,
+    config: McpConfig,
+    bridge_ws_url: String,
+) -> Arc<McpState> {
     Arc::new(McpState {
         paths: McpPaths {
             config_toml: root.join("config.toml"),
@@ -691,147 +923,13 @@ pub(crate) fn test_state(root: &std::path::Path) -> Arc<McpState> {
             runtime_dir: root.join("run"),
             tmp_dir: root.join("tmp"),
         },
-        config: McpConfig::default(),
-        bridge_ws_url: String::new(),
+        config,
+        bridge_ws_url,
         lifecycle_lock: tokio::sync::Mutex::new(()),
         notify: Notify::new(),
         shutting_down: AtomicBool::new(false),
+        next_transition_id: AtomicU64::new(1),
         sessions: Mutex::default(),
         jobs: Mutex::default(),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::bridge::{agent_ws, AGENT_WS_PATH};
-    use crate::model::SessionStatus;
-    use axum::{routing::get, Router};
-    use serde_json::json;
-    use std::net::SocketAddr;
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::{TcpListener, TcpStream};
-
-    /// Opens an authenticated WebSocket through the bridge endpoint.
-    async fn connect_bridge(address: SocketAddr, token: &str) -> TcpStream {
-        let mut socket = TcpStream::connect(address).await.unwrap();
-        let request = format!(
-            "GET {AGENT_WS_PATH} HTTP/1.1\r\nHost: {address}\r\n\
-       Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
-       Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: Bearer {token}\r\n\r\n"
-        );
-        socket.write_all(request.as_bytes()).await.unwrap();
-        let mut reader = BufReader::new(socket);
-        let mut line = String::new();
-        reader.read_line(&mut line).await.unwrap();
-        assert!(line.starts_with("HTTP/1.1 101 "), "{line}");
-        loop {
-            line.clear();
-            assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
-            if line == "\r\n" {
-                break;
-            }
-        }
-        reader.into_inner()
-    }
-
-    /// Sends a masked WebSocket text frame through the test connection.
-    async fn send_text(socket: &mut TcpStream, text: &str) {
-        let length = u16::try_from(text.len()).unwrap();
-        let mask: [u8; 4] = Uuid::new_v4().as_bytes()[..4].try_into().unwrap();
-        let mut frame = vec![0x81];
-        if length < 126 {
-            frame.push(0x80 | u8::try_from(length).unwrap());
-        } else {
-            frame.push(0xfe);
-            frame.extend_from_slice(&length.to_be_bytes());
-        }
-        frame.extend_from_slice(&mask);
-        frame.extend(
-            text.bytes()
-                .enumerate()
-                .map(|(index, byte)| byte ^ mask[index % 4]),
-        );
-        socket.write_all(&frame).await.unwrap();
-    }
-
-    /// Checks request failure, session state, and socket closure after an invalid bridge message.
-    #[tokio::test]
-    async fn disconnects_bridge_after_invalid_messages() {
-        let root = tempfile::tempdir().unwrap();
-        let state = test_state(root.path());
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let router = Router::new()
-            .route(AGENT_WS_PATH, get(agent_ws))
-            .with_state(state.clone());
-        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let md5 = "0123456789abcdef0123456789abcdef";
-
-        for invalid in [
-            "not JSON",
-            r#"{"jsonrpc":"1.0","id":"request","result":{}}"#,
-            r#"{"jsonrpc":"2.0","id":"request","result":{},"extra":true}"#,
-            concat!(
-                r#"{"jsonrpc":"2.0","id":"request","result":{},"error":{"#,
-                r#""code":-32603,"message":"error"}}"#
-            ),
-        ] {
-            tokio::time::timeout(Duration::from_secs(2), async {
-                let token = Uuid::new_v4().to_string();
-                state
-                    .put_session(&SessionRecord::launching(
-                        md5.into(),
-                        "binary".into(),
-                        token.clone(),
-                    ))
-                    .unwrap();
-                let mut socket = connect_bridge(address, &token).await;
-                send_text(
-                    &mut socket,
-                    &json!({
-                      "jsonrpc": "2.0", "method": "ghidra.ready",
-                      "params": { "session_id": md5, "program_name": "binary" }
-                    })
-                    .to_string(),
-                )
-                .await;
-                loop {
-                    let notified = state.notify.notified();
-                    tokio::pin!(notified);
-                    notified.as_mut().enable();
-                    if state.session(md5).unwrap().status == SessionStatus::Ready {
-                        break;
-                    }
-                    notified.await;
-                }
-
-                let (sender, receiver) = oneshot::channel();
-                state.begin_request(md5, "valid", sender).unwrap();
-                send_text(
-                    &mut socket,
-                    r#"{"jsonrpc":"2.0","id":"valid","result":{"ok":true}}"#,
-                )
-                .await;
-                assert_eq!(receiver.await.unwrap().result, Some(json!({ "ok": true })));
-
-                let (sender, receiver) = oneshot::channel();
-                state.begin_request(md5, "request", sender).unwrap();
-                send_text(&mut socket, invalid).await;
-                let response = receiver.await.unwrap();
-                assert_eq!(response.id.as_deref(), Some("request"));
-                assert_eq!(response.status, Some(502));
-                assert_eq!(response.error.unwrap().code, "BRIDGE_DISCONNECTED");
-                assert_eq!(socket.read(&mut [0; 1]).await.unwrap(), 0);
-                assert!(state.connection(md5).is_none());
-                let session = state.session(md5).unwrap();
-                assert_eq!(session.status, SessionStatus::Disconnected);
-                assert!(!session.ws_connected);
-            })
-            .await
-            .unwrap_or_else(|_| panic!("bridge did not disconnect after: {invalid}"));
-        }
-        server.abort();
-        let _ = server.await;
-    }
 }

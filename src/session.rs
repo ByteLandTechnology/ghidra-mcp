@@ -4,13 +4,14 @@
 //! The session lifecycle: open a session, launch Ghidra, wait for its bridge,
 //! relaunch the bridge, call bridge methods, and close the session.
 //!
-//! A launch has these steps. Each step has the lifecycle lock:
+//! A launch has these steps. Each step takes [`McpState::lifecycle_lock`] only
+//! for in-memory checks and snapshot updates, never across an await:
 //!
-//! 1. [`begin_launch`] prepares the project and stops the previous process. It
-//!    saves a `launching` record with a new bridge credential. It also makes
-//!    the launch job. From this point, the job owns the session.
+//! 1. [`begin_launch`] stops any previous process and waits for same-MD5
+//!    teardowns outside the lock. It prepares the project on disk, then takes
+//!    the lock to save a `launching` record and make the launch job.
 //! 2. [`launch_process`] starts `analyzeHeadless` with the bridge as its
-//!    post-script, and sets the session to `starting`.
+//!    post-script outside the lock, and sets the session to `starting`.
 //! 3. The bridge connects and completes its handshake (see [`crate::bridge`]).
 //!    This sets the session to `ready`.
 //! 4. [`wait_ready`] sees `ready` and completes the job. It fails the job when
@@ -20,13 +21,16 @@
 //! session. A newer launch can replace a launch, and a client can close a
 //! session. In these conditions, the old step stops and does not change the newer state.
 
+#[cfg(test)]
+mod tests;
+
 use crate::bridge;
 use crate::error::DomainError;
 use crate::java_path::java_path;
 use crate::model::{job_kind, JobRecord, JobStatus, RpcEnvelope, SessionRecord, SessionStatus};
 use crate::process::{append_java_tool_option, spawn_log_forwarder, ManagedChild};
-use crate::project::{persist_binary, prepare_project, PreparedProject};
-use crate::state::McpState;
+use crate::project::{normalize_md5, persist_binary, prepare_project, PreparedProject};
+use crate::state::{McpState, TeardownGuard, TransitionGuard};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -53,6 +57,7 @@ pub async fn open(
     if state.is_shutting_down() {
         return Err(DomainError::ShuttingDown.into());
     }
+    let md5 = normalize_md5(&md5)?;
     if let Some(path) = input {
         let file_name = path
             .file_name()
@@ -72,35 +77,14 @@ pub async fn open(
             message: format!("binary persistence task failed: {err}"),
         })??;
     }
-    let (created, job_id) = {
-        let _guard = state.lifecycle_lock.lock().await;
-        if state.is_shutting_down() {
-            return Err(DomainError::ShuttingDown.into());
-        }
-        let existing = state.find_session(&md5);
-        if let Some(session) = existing.as_ref().filter(|session| session.ws_connected) {
+    let (created, job_id) = match claim_or_join_open(state, &md5).await? {
+        OpenClaim::Reused(session) => {
             return Ok((
                 format!("Reused session {md5}"),
                 json!({"created": false, "reused": true, "session": session.summary()}),
             ));
         }
-        let launching_job = existing
-            .as_ref()
-            .filter(|session| session.status.is_launching())
-            .and_then(|_| state.launch_job(&md5));
-        // Join a launch that is in progress. Do not start a second launch.
-        if let Some(job_id) = launching_job {
-            (false, job_id)
-        } else {
-            let kind = if existing.is_some() {
-                job_kind::RECOVER_SESSION_BRIDGE
-            } else {
-                job_kind::ANALYZE_BINARY
-            };
-            let (prepared, job_id) = begin_launch(state, &md5, kind).await?;
-            tokio::spawn(launch_and_wait(state.clone(), prepared, job_id.clone()));
-            (existing.is_none(), job_id)
-        }
+        OpenClaim::Launched { created, job_id } => (created, job_id),
     };
     let job = state.await_job(&job_id, wait).await?;
     if job.status == JobStatus::Failed {
@@ -129,6 +113,64 @@ pub async fn open(
     ))
 }
 
+/// Outcome of the initial session check in [`open`].
+enum OpenClaim {
+    /// An active bridge connection serves the session already.
+    Reused(SessionRecord),
+    /// A launch job owns the session.
+    Launched {
+        /// `true` when this call created the first session record for the MD5.
+        created: bool,
+        /// Identifier of the launch job.
+        job_id: String,
+    },
+}
+
+/// Reuses a connected session, joins an active launch, or starts a new launch.
+async fn claim_or_join_open(state: &Arc<McpState>, md5: &str) -> Result<OpenClaim> {
+    let (created, kind, transition, detached) = loop {
+        let notified = state.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let guard = state.lifecycle_lock.lock().await;
+        if state.is_shutting_down() {
+            return Err(DomainError::ShuttingDown.into());
+        }
+        if state.has_transition(md5) {
+            drop(guard);
+            notified.await;
+            continue;
+        }
+        let existing = state.find_session(md5);
+        if let Some(session) = existing.as_ref().filter(|session| session.ws_connected) {
+            return Ok(OpenClaim::Reused(session.clone()));
+        }
+        let launching_job = existing
+            .as_ref()
+            .filter(|session| session.status.is_launching())
+            .and_then(|_| state.launch_job(md5));
+        // Join a launch that is in progress. Do not start a second launch.
+        if let Some(job_id) = launching_job {
+            return Ok(OpenClaim::Launched {
+                created: false,
+                job_id,
+            });
+        }
+        let kind = if existing.is_some() {
+            job_kind::RECOVER_SESSION_BRIDGE
+        } else {
+            job_kind::ANALYZE_BINARY
+        };
+        let transition = state.begin_transition(md5, false);
+        state.set_launch_job(md5, None);
+        state.detach_bridge(md5, "bridge restarting");
+        let detached = state.take_process(md5);
+        break (existing.is_none(), kind, transition, detached);
+    };
+    let (_prepared, job_id) = begin_launch(state, md5, kind, transition, detached, true).await?;
+    Ok(OpenClaim::Launched { created, job_id })
+}
+
 /// Calls a bridge method. First, it connects the bridge of the session, or relaunches it.
 pub async fn call(
     state: &Arc<McpState>,
@@ -147,6 +189,9 @@ pub async fn call(
 /// Makes sure that the session has a bridge connection. It waits for a launch
 /// that is in progress, or relaunches a disconnected or stale session.
 pub async fn ensure_connected(state: &Arc<McpState>, md5: &str) -> Result<()> {
+    if state.has_transition(md5) {
+        return recover(state, md5).await;
+    }
     let session = state.session(md5)?;
     if session.ws_connected {
         return Ok(());
@@ -161,7 +206,7 @@ pub async fn ensure_connected(state: &Arc<McpState>, md5: &str) -> Result<()> {
 }
 
 /// Waits for the launch that owns the session. Then the bridge must have a connection.
-async fn wait_for_launch(state: &McpState, md5: &str) -> Result<()> {
+async fn wait_for_launch(state: &Arc<McpState>, md5: &str) -> Result<()> {
     let job_id = state
         .launch_job(md5)
         .ok_or_else(|| DomainError::disconnected(md5))?;
@@ -174,8 +219,19 @@ async fn wait_for_launch(state: &McpState, md5: &str) -> Result<()> {
 
 /// Relaunches a disconnected or stale session, and waits until it is ready.
 async fn recover(state: &Arc<McpState>, md5: &str) -> Result<()> {
-    let (prepared, job_id) = {
+    let (transition, detached) = loop {
+        let notified = state.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         let guard = state.lifecycle_lock.lock().await;
+        if state.is_shutting_down() {
+            return Err(DomainError::ShuttingDown.into());
+        }
+        if state.has_transition(md5) {
+            drop(guard);
+            notified.await;
+            continue;
+        }
         let current = state.session(md5)?;
         if current.ws_connected {
             return Ok(());
@@ -187,17 +243,38 @@ async fn recover(state: &Arc<McpState>, md5: &str) -> Result<()> {
         if !current.status.is_recoverable() {
             return Err(DomainError::disconnected(md5).into());
         }
-        begin_launch(state, md5, job_kind::RECOVER_SESSION_BRIDGE).await?
+        let transition = state.begin_transition(md5, false);
+        state.set_launch_job(md5, None);
+        state.detach_bridge(md5, "bridge restarting");
+        let detached = state.take_process(md5);
+        break (transition, detached);
     };
+    let (prepared, job_id) = begin_launch(
+        state,
+        md5,
+        job_kind::RECOVER_SESSION_BRIDGE,
+        transition,
+        detached,
+        false,
+    )
+    .await?;
     launch_and_wait(state.clone(), prepared, job_id).await
 }
 
-/// Replaces a session with a new launch and its job. The caller must have the lifecycle lock.
+/// Prepares the project outside [`McpState::lifecycle_lock`] after previous
+/// processes stop, then records the `launching` session and its job.
 async fn begin_launch(
-    state: &McpState,
+    state: &Arc<McpState>,
     md5: &str,
     kind: &'static str,
+    transition: TransitionGuard,
+    detached: Option<(ManagedChild, TeardownGuard)>,
+    spawn_background: bool,
 ) -> Result<(PreparedProject, String)> {
+    if let Some((child, guard)) = detached {
+        state.reap_detached(child, guard, Duration::ZERO).await;
+    }
+    state.wait_teardown(md5).await?;
     let paths = state.paths.clone();
     let binary_md5 = md5.to_string();
     let prepared = tokio::task::spawn_blocking(move || prepare_project(&paths, &binary_md5))
@@ -205,13 +282,21 @@ async fn begin_launch(
         .map_err(|err| DomainError::Internal {
             message: format!("project preparation task failed: {err}"),
         })??;
-    // A disconnected bridge can leave its JVM alive. Stop that process before
-    // you replace the session and its authentication token.
-    state.detach_bridge(md5, "bridge restarting");
-    state.stop_process(md5, Duration::ZERO).await;
+    let _guard = state.lifecycle_lock.lock().await;
+    if state.is_shutting_down() {
+        return Err(DomainError::ShuttingDown.into());
+    }
     state.put_session(&prepared.session_record())?;
     let job = state.insert_job(kind, Some(md5.to_string()));
     state.set_launch_job(md5, Some(job.id.clone()));
+    transition.finish();
+    if spawn_background {
+        tokio::spawn(launch_and_wait(
+            state.clone(),
+            prepared.clone(),
+            job.id.clone(),
+        ));
+    }
     Ok((prepared, job.id))
 }
 
@@ -222,7 +307,7 @@ async fn launch_and_wait(
     job_id: String,
 ) -> Result<()> {
     let md5 = prepared.md5.clone();
-    let result = match launch_process(&state, prepared).await {
+    let result = match launch_process(&state, prepared, &job_id).await {
         Ok(()) => wait_ready(&state, &md5, &job_id, state.config.launch_timeout())
             .await
             .map(drop),
@@ -240,37 +325,106 @@ async fn launch_and_wait(
     outcome.map_err(Into::into)
 }
 
-/// Starts Ghidra and records the process. Does nothing if a newer launch
-/// replaced this one or the shutdown started.
-async fn launch_process(state: &Arc<McpState>, prepared: PreparedProject) -> Result<()> {
-    let _guard = state.lifecycle_lock.lock().await;
+/// Starts Ghidra outside [`McpState::lifecycle_lock`] and records the process.
+/// Reaps the child if a newer transition replaced or closed this launch.
+async fn launch_process(
+    state: &Arc<McpState>,
+    prepared: PreparedProject,
+    job_id: &str,
+) -> Result<()> {
     let md5 = prepared.md5.clone();
-    if !state
-        .session_with_token(&md5, &prepared.agent_token)
-        .is_some_and(|session| session.status.is_launching())
-    {
-        return Err(
-            DomainError::missing_target(md5, "binary launch was replaced or closed").into(),
-        );
-    }
+    let spawn_guard = {
+        let _guard = state.lifecycle_lock.lock().await;
+        if state.is_shutting_down() {
+            return Err(DomainError::ShuttingDown.into());
+        }
+        if state.has_transition(&md5)
+            || !state.owns_launch(&md5, job_id)
+            || !state
+                .session_with_token(&md5, &prepared.agent_token)
+                .is_some_and(|session| session.status.is_launching())
+        {
+            return Err(
+                DomainError::missing_target(md5, "binary launch was replaced or closed").into(),
+            );
+        }
+        state.begin_teardown(&md5)
+    };
+    let child = spawn_with_timeout(state, prepared.clone(), &md5, spawn_guard).await?;
+    let (child, spawn_guard) = child;
+    let (rejected, grace) = {
+        let _guard = state.lifecycle_lock.lock().await;
+        let active_status = (!state.is_shutting_down()
+            && !state.has_transition(&md5)
+            && state.owns_launch(&md5, job_id))
+        .then(|| state.session_with_token(&md5, &prepared.agent_token))
+        .flatten()
+        .map(|session| session.status);
+        match active_status {
+            Some(status @ (SessionStatus::Launching | SessionStatus::Ready)) => {
+                match state.commit_spawned_process(&md5, child, spawn_guard) {
+                    Ok(()) => {
+                        if status == SessionStatus::Launching {
+                            state.update_session(&md5, SessionRecord::mark_starting)?;
+                        }
+                        return Ok(());
+                    }
+                    Err(pair) => ((pair, DomainError::ShuttingDown), Duration::ZERO),
+                }
+            }
+            Some(SessionStatus::Disconnected) => (
+                ((child, spawn_guard), DomainError::disconnected(&md5)),
+                state.config.timeouts.bridge_disconnect_grace,
+            ),
+            _ => {
+                let error = if state.is_shutting_down() {
+                    DomainError::ShuttingDown
+                } else {
+                    DomainError::missing_target(&md5, "binary launch was replaced or closed")
+                };
+                (((child, spawn_guard), error), Duration::ZERO)
+            }
+        }
+    };
+    let ((child, spawn_guard), error) = rejected;
+    state.reap_detached(child, spawn_guard, grace).await;
+    Err(error.into())
+}
+
+/// Runs [`spawn_ghidra`] on a worker thread with the configured spawn timeout.
+/// If the timeout expires first, a background task reaps any late child before
+/// it releases `spawn_guard`.
+async fn spawn_with_timeout(
+    state: &Arc<McpState>,
+    prepared: PreparedProject,
+    md5: &str,
+    spawn_guard: TeardownGuard,
+) -> Result<(ManagedChild, TeardownGuard)> {
     let task_state = state.clone();
-    let child = tokio::time::timeout(
-        state.config.timeouts.process_spawn,
-        tokio::task::spawn_blocking(move || spawn_ghidra(&task_state, &prepared)),
-    )
-    .await
-    .map_err(|_| DomainError::AgentTimeout {
-        md5: md5.clone(),
-        timeout_seconds: Some(state.config.timeouts.process_spawn.as_secs()),
-    })?
-    .map_err(|err| DomainError::Internal {
-        message: format!("spawn_ghidra task failed: {err}"),
-    })??;
-    if let Err(child) = state.register_process(&md5, child) {
-        state.reap(child, Duration::ZERO).await;
-        return Err(DomainError::ShuttingDown.into());
+    let mut spawn_task = tokio::task::spawn_blocking(move || spawn_ghidra(&task_state, &prepared));
+    if let Ok(joined) =
+        tokio::time::timeout(state.config.timeouts.process_spawn, &mut spawn_task).await
+    {
+        let child = joined.map_err(|err| DomainError::Internal {
+            message: format!("spawn_ghidra task failed: {err}"),
+        })??;
+        return Ok((child, spawn_guard));
     }
-    state.update_session(&md5, SessionRecord::mark_starting)
+    let cleanup_state = state.clone();
+    tokio::spawn(async move {
+        if let Ok(Ok(child)) = spawn_task.await {
+            cleanup_state
+                .reap_detached(child, spawn_guard, Duration::ZERO)
+                .await;
+        } else {
+            drop(spawn_guard);
+        }
+    });
+    Err(DomainError::AgentTimeout {
+        md5: md5.to_string(),
+        timeout_seconds: Some(state.config.timeouts.process_spawn.as_secs()),
+    }
+    .into())
 }
 
 /// Makes the `analyzeHeadless` command line and environment, and starts the
@@ -354,15 +508,18 @@ fn spawn_ghidra(state: &McpState, prepared: &PreparedProject) -> Result<ManagedC
 /// Waits until the bridge is ready, and then completes the launch job. A
 /// launch failure, an early process stop and a timeout are errors.
 async fn wait_ready(
-    state: &McpState,
+    state: &Arc<McpState>,
     md5: &str,
     job_id: &str,
     timeout: Duration,
 ) -> Result<JobRecord> {
     let deadline = Instant::now() + timeout;
     loop {
+        let notified = state.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         let guard = state.lifecycle_lock.lock().await;
-        if !state.owns_launch(md5, job_id) {
+        if state.is_closing(md5) || !state.owns_launch(md5, job_id) {
             return Err(
                 DomainError::missing_target(md5, "binary launch was replaced or closed").into(),
             );
@@ -402,8 +559,12 @@ async fn wait_ready(
         }
         if Instant::now() >= deadline {
             let message = format!("timed out waiting for ghidra.ready for session {md5}");
-            state.stop_process(md5, Duration::ZERO).await;
+            let detached = state.take_process(md5);
             let _ = state.update_session(md5, |session| session.mark_error(&message));
+            drop(guard);
+            if let Some((child, teardown)) = detached {
+                state.reap_detached(child, teardown, Duration::ZERO).await;
+            }
             return Err(DomainError::AgentTimeout {
                 md5: md5.to_string(),
                 timeout_seconds: Some(timeout.as_secs()),
@@ -413,36 +574,110 @@ async fn wait_ready(
         drop(guard);
         // Wake at least once each second to find a process that stopped.
         let wake = deadline.min(Instant::now() + Duration::from_secs(1));
-        let _ = tokio::time::timeout_at(wake, state.notify.notified()).await;
+        let _ = tokio::time::timeout_at(wake, notified).await;
     }
 }
 
 /// Closes a session through its bridge. If `force` is `true`, it kills the process.
-pub async fn close(state: &McpState, md5: &str, force: bool) -> Result<()> {
-    let _guard = state.lifecycle_lock.lock().await;
-    let session = state.session(md5)?;
-    if !force && session.ws_connected {
+pub async fn close(state: &Arc<McpState>, md5: &str, force: bool) -> Result<()> {
+    let (transition, send_shutdown, initial_detached) = loop {
+        let notified = state.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let guard = state.lifecycle_lock.lock().await;
+        if state.has_transition(md5) {
+            drop(guard);
+            notified.await;
+            continue;
+        }
+        let session = state.session(md5)?;
+        let transition = state.begin_transition(md5, true);
+        if let Some(job_id) = state.launch_job(md5) {
+            state.fail_job_error(&job_id, DomainError::disconnected(md5));
+        }
+        state.set_launch_job(md5, None);
+        let send_shutdown = !force && session.ws_connected;
+        let detached = if send_shutdown {
+            None
+        } else {
+            state.detach_bridge(md5, "session closed");
+            state.take_process(md5)
+        };
+        break (transition, send_shutdown, detached);
+    };
+    let task_state = state.clone();
+    let target_md5 = md5.to_string();
+    tokio::spawn(async move {
+        finish_close(
+            &task_state,
+            &target_md5,
+            force,
+            transition,
+            send_shutdown,
+            initial_detached,
+        )
+        .await
+    })
+    .await
+    .map_err(|err| DomainError::Internal {
+        message: format!("session close task failed: {err}"),
+    })?
+}
+
+/// Runs graceful shutdown and process stop outside [`McpState::lifecycle_lock`],
+/// then commits the closed session status.
+async fn finish_close(
+    state: &Arc<McpState>,
+    md5: &str,
+    force: bool,
+    transition: TransitionGuard,
+    send_shutdown: bool,
+    initial_detached: Option<(ManagedChild, TeardownGuard)>,
+) -> Result<()> {
+    if send_shutdown {
         // Let the bridge save the program. Then give its process time to stop.
         // A close never relaunches a bridge. For this reason, this code does not use `call`.
-        let shutdown = bridge::request(
+        let _ = bridge::request(
             state,
             md5,
             "session.shutdown",
             json!({}),
             Duration::from_secs(5),
-        );
-        let _ = shutdown.await;
-        state
-            .stop_process(md5, state.config.timeouts.bridge_disconnect_grace)
-            .await;
-    } else {
-        state.stop_process(md5, Duration::ZERO).await;
+        )
+        .await;
+        let detached = {
+            let _guard = state.lifecycle_lock.lock().await;
+            state.detach_bridge(md5, "session closed");
+            state.take_process(md5)
+        };
+        if let Some((child, teardown)) = detached {
+            state
+                .reap_detached(
+                    child,
+                    teardown,
+                    state.config.timeouts.bridge_disconnect_grace,
+                )
+                .await;
+        }
+    } else if let Some((child, teardown)) = initial_detached {
+        state.reap_detached(child, teardown, Duration::ZERO).await;
     }
+    loop {
+        let notified = state.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !state.has_teardown(md5) {
+            break;
+        }
+        notified.await;
+    }
+    let _guard = state.lifecycle_lock.lock().await;
     state.detach_bridge(md5, "session closed");
-    state.update_session(md5, |session| session.mark_closed(force))?;
+    let result = state.update_session(md5, |session| session.mark_closed(force));
     if let Some(job_id) = state.launch_job(md5) {
         state.fail_job_error(&job_id, DomainError::disconnected(md5));
     }
     state.set_launch_job(md5, None);
-    Ok(())
+    transition.finish();
+    result
 }
