@@ -204,7 +204,7 @@ claude mcp get ghidra-mcp
 
 ## 首次分析过程
 
-守护进程提供 `ghidra_help`，并为每个领域提供一个 MCP 工具。
+守护进程提供 `ghidra_help`、只读 `ghidra_<domain>` 工具和写入 `ghidra_<domain>_write` 工具。
 每个领域工具接受一个 `operation` 及其 `params`。
 指定一个会话的操作还接受该会话的 `md5`。
 本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。

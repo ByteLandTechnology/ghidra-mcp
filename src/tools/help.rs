@@ -47,14 +47,14 @@ pub(super) fn run(arguments: Map<String, Value>) -> Result<Output> {
             json!({ "domains": tools }),
         ));
     };
-    let domain = catalog::domain(&name).ok_or_else(|| {
+    let target = catalog::help_target(&name).ok_or_else(|| {
         DomainError::missing_target(name.clone(), format!("unknown domain: {name}"))
     })?;
-    let tool = domain.tool();
+    let tool = target.tool();
     let Some(operation_name) = args.operation else {
-        let operations: Vec<Value> = domain
-            .operations
-            .iter()
+        let operations: Vec<Value> = target
+            .operations()
+            .into_iter()
             .map(|operation| {
                 json!({
                     "name": operation.name,
@@ -70,7 +70,7 @@ pub(super) fn run(arguments: Map<String, Value>) -> Result<Output> {
             json!({ "domain": tool, "operations": operations }),
         ));
     };
-    let operation = domain.require_operation(&operation_name)?;
+    let operation = target.require_operation(&operation_name)?;
     Ok((
         format!("Help for {tool} {operation_name}"),
         json!({

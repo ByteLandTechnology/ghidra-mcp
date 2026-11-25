@@ -19,10 +19,14 @@ use crate::error::DomainError;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 /// The prefix of all tool names.
 pub(super) const TOOL_PREFIX: &str = "ghidra_";
+
+/// The suffix of split write domain tools.
+pub(super) const WRITE_SUFFIX: &str = "_write";
 
 /// The name of the help tool.
 pub(super) const HELP_TOOL: &str = "ghidra_help";
@@ -109,9 +113,36 @@ pub(super) struct Domain {
 }
 
 impl Domain {
-    /// Returns the MCP tool name of the domain.
+    /// Returns the base MCP tool name of the domain.
     pub fn tool(&self) -> String {
         format!("{TOOL_PREFIX}{}", self.name)
+    }
+
+    /// Returns the split write MCP tool name of the domain.
+    pub fn write_tool(&self) -> String {
+        format!("{TOOL_PREFIX}{}{WRITE_SUFFIX}", self.name)
+    }
+
+    /// Returns `true` when the domain has read operations and write operations.
+    pub fn is_mixed(&self) -> bool {
+        self.operations.iter().any(|op| op.effects.read_only)
+            && self.operations.iter().any(|op| !op.effects.read_only)
+    }
+
+    /// Returns the read-only operations of the domain.
+    pub fn read_operations(&self) -> Vec<&Operation> {
+        self.operations
+            .iter()
+            .filter(|operation| operation.effects.read_only)
+            .collect()
+    }
+
+    /// Returns the write operations of the domain.
+    pub fn write_operations(&self) -> Vec<&Operation> {
+        self.operations
+            .iter()
+            .filter(|operation| !operation.effects.read_only)
+            .collect()
     }
 
     /// Returns the operation with the name `name`.
@@ -121,42 +152,31 @@ impl Domain {
             .find(|operation| operation.name == name)
     }
 
-    /// Returns the operation with the name `name`.
-    ///
-    /// # Errors
-    ///
-    /// Fails with [`DomainError::MissingTarget`] if the domain has no
-    /// operation with this name.
-    pub fn require_operation(&self, name: &str) -> Result<&Operation> {
-        self.operation(name).ok_or_else(|| {
-            let tool = self.tool();
-            DomainError::missing_target(name, format!("unknown operation of {tool}: {name}")).into()
-        })
+    /// Returns the MCP tool definitions of the domain.
+    fn definitions(&self) -> Vec<Value> {
+        if self.is_mixed() {
+            vec![
+                self.slice_definition(&self.tool(), &self.read_operations()),
+                self.slice_definition(&self.write_tool(), &self.write_operations()),
+            ]
+        } else {
+            let all_operations: Vec<&Operation> = self.operations.iter().collect();
+            vec![self.slice_definition(&self.tool(), &all_operations)]
+        }
     }
 
-    /// Returns `true` if each operation obeys `predicate`.
-    fn all(&self, predicate: impl Fn(&Operation) -> bool) -> bool {
-        self.operations.iter().all(predicate)
-    }
-
-    /// Returns `true` if one or more operations obey `predicate`.
-    fn any(&self, predicate: impl Fn(&Operation) -> bool) -> bool {
-        self.operations.iter().any(predicate)
-    }
-
-    /// Returns the MCP tool definition of the domain.
-    fn definition(&self) -> Value {
-        let names: Vec<&str> = self
-            .operations
+    /// Returns one MCP tool definition for `tool_name` and `operations`.
+    fn slice_definition(&self, tool_name: &str, operations: &[&Operation]) -> Value {
+        let names: Vec<&str> = operations
             .iter()
             .map(|operation| operation.name.as_str())
             .collect();
         let mut description = format!(
-            "Use this tool {}. Select an operation: {}. Call {HELP_TOOL} with domain=\"{}\" \
-             for the inputSchema and effects of each operation, and do not guess fields.",
+            "Use this tool {}. Select an operation: {}. Call {HELP_TOOL} with \
+             domain=\"{tool_name}\" for the inputSchema and effects of each operation, \
+             and do not guess fields.",
             self.purpose,
-            names.join(", "),
-            self.tool()
+            names.join(", ")
         );
         let mut properties = Map::new();
         properties.insert(
@@ -164,7 +184,10 @@ impl Domain {
             json!({ "type": "string", "description": "The operation to perform", "enum": names }),
         );
         let mut required = vec!["operation"];
-        if self.any(|operation| operation.md5 != Md5Rule::Absent) {
+        if operations
+            .iter()
+            .any(|operation| operation.md5 != Md5Rule::Absent)
+        {
             properties.insert(
                 "md5".into(),
                 json!({
@@ -175,7 +198,10 @@ impl Domain {
                     )
                 }),
             );
-            if self.all(|operation| operation.md5 == Md5Rule::Required) {
+            if operations
+                .iter()
+                .all(|operation| operation.md5 == Md5Rule::Required)
+            {
                 description.push_str(" Set md5 to the MD5 of the session.");
                 required.push("md5");
             } else {
@@ -184,18 +210,64 @@ impl Domain {
                 description.push_str(" shows the md5 rule of each operation.");
             }
         }
-        properties.insert("params".into(), params_schema(self.name, &self.operations));
+        properties.insert("params".into(), params_schema(self.name, operations));
         json!({
-            "name": self.tool(),
+            "name": tool_name,
             "description": description,
             "inputSchema": { "type": "object", "properties": properties, "required": required },
             "annotations": {
-                "readOnlyHint": self.all(|operation| operation.effects.read_only),
-                "destructiveHint": self.any(|operation| operation.effects.destructive),
-                "idempotentHint": self.all(|operation| operation.effects.idempotent),
+                "readOnlyHint": operations.iter().all(|op| op.effects.read_only),
+                "destructiveHint": operations.iter().any(|op| op.effects.destructive),
+                "idempotentHint": operations.iter().all(|op| op.effects.idempotent),
                 "openWorldHint": false
             }
         })
+    }
+}
+
+/// A resolved domain target for `tools/call` or `ghidra_help`.
+#[derive(Clone, Copy)]
+pub(super) struct ToolTarget {
+    /// The base domain.
+    pub domain: &'static Domain,
+    /// `true` when the caller named `<prefix>_<domain>_write` or `<domain>_write`.
+    pub write_only: bool,
+}
+
+impl ToolTarget {
+    /// Returns the MCP tool name of this target.
+    pub fn tool(&self) -> String {
+        if self.write_only {
+            self.domain.write_tool()
+        } else {
+            self.domain.tool()
+        }
+    }
+
+    /// Returns the operations exposed through this target.
+    pub fn operations(&self) -> Vec<&'static Operation> {
+        if self.write_only {
+            self.domain.write_operations()
+        } else {
+            self.domain.operations.iter().collect()
+        }
+    }
+
+    /// Returns the operation `name` in this target.
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`DomainError::MissingTarget`] if the target has no operation
+    /// with this name.
+    pub fn require_operation(&self, name: &str) -> Result<&'static Operation> {
+        self.operations()
+            .into_iter()
+            .find(|operation| operation.name == name)
+            .ok_or_else(|| {
+                let tool = self.tool();
+                DomainError::missing_target(name, format!("unknown operation of {tool}: {name}"))
+                    .into()
+            })
     }
 }
 
@@ -228,16 +300,52 @@ pub(super) fn domains() -> &'static [Domain] {
     &CATALOG
 }
 
-/// Returns the domain of an exact tool name, for example `ghidra_function`.
-pub(super) fn domain_of_tool(tool: &str) -> Option<&'static Domain> {
+/// Returns the target of an exact tool name, such as `ghidra_function` or
+/// `ghidra_function_write`.
+pub(super) fn target_of_tool(tool: &str) -> Option<ToolTarget> {
     let name = tool.strip_prefix(TOOL_PREFIX)?;
-    CATALOG.iter().find(|domain| domain.name == name)
+    if let Some(domain) = CATALOG.iter().find(|domain| domain.name == name) {
+        return Some(ToolTarget {
+            domain,
+            write_only: false,
+        });
+    }
+    let base = name.strip_suffix(WRITE_SUFFIX)?;
+    CATALOG
+        .iter()
+        .find(|domain| domain.name == base && domain.is_mixed())
+        .map(|domain| ToolTarget {
+            domain,
+            write_only: true,
+        })
+}
+
+/// Returns the target of a tool name or of a domain name without the prefix.
+/// `ghidra_help` accepts both forms, as well as `_write` suffixes.
+pub(super) fn help_target(name: &str) -> Option<ToolTarget> {
+    if let Some(target) = target_of_tool(name) {
+        return Some(target);
+    }
+    if let Some(domain) = CATALOG.iter().find(|domain| domain.name == name) {
+        return Some(ToolTarget {
+            domain,
+            write_only: false,
+        });
+    }
+    let base = name.strip_suffix(WRITE_SUFFIX)?;
+    CATALOG
+        .iter()
+        .find(|domain| domain.name == base && domain.is_mixed())
+        .map(|domain| ToolTarget {
+            domain,
+            write_only: true,
+        })
 }
 
 /// Returns the domain of a tool name, or of a domain name without the prefix.
-/// `ghidra_help` accepts the two forms.
+#[cfg(test)]
 pub(super) fn domain(name: &str) -> Option<&'static Domain> {
-    domain_of_tool(name).or_else(|| CATALOG.iter().find(|domain| domain.name == name))
+    help_target(name).map(|target| target.domain)
 }
 
 /// Returns the domain and the operation of a bridge method, or `None` if the
@@ -293,32 +401,35 @@ fn bridge_effects(method: &str, contract: &Value) -> Effects {
         .unwrap_or_else(|error| panic!("effects of bridge method `{method}`: {error}"))
 }
 
-/// Returns the operation names of each tool of the bridge MCP server, in the
-/// sequence of that server, by tool name.
+/// Returns the operation names of each base domain of the bridge MCP server, in
+/// the sequence of that server.
 ///
 /// # Panics
 ///
 /// Panics if the tool contract of the bridge is not valid.
-fn bridge_tool_operations() -> Vec<(String, Vec<String>)> {
+fn bridge_tool_operations() -> BTreeMap<String, Vec<String>> {
     // The bridge build makes this contract. It gives the operation sequence,
     // which the method contract does not keep.
     let contract: Value = serde_json::from_str(include_str!("../../bridge/docs/mcp-tools.json"))
         .expect("parse the bridge MCP tool contract");
-    contract["tools"]
-        .as_array()
-        .expect("bridge MCP tools")
-        .iter()
-        .filter_map(|tool| {
-            let names = tool["inputSchema"]["properties"]["operation"]["enum"].as_array()?;
-            let names = names
-                .iter()
-                .map(|name| name.as_str().expect("bridge operation name").to_string());
-            Some((
-                tool["name"].as_str().expect("bridge tool name").to_string(),
-                names.collect(),
-            ))
-        })
-        .collect()
+    let mut by_domain: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for tool in contract["tools"].as_array().expect("bridge MCP tools") {
+        let Some(names) = tool["inputSchema"]["properties"]["operation"]["enum"].as_array() else {
+            continue;
+        };
+        let tool_name = tool["name"].as_str().expect("bridge tool name");
+        let domain_part = tool_name
+            .strip_prefix(TOOL_PREFIX)
+            .expect("bridge tool prefix");
+        let base_domain = domain_part
+            .strip_suffix(WRITE_SUFFIX)
+            .unwrap_or(domain_part);
+        let entry = by_domain.entry(base_domain.to_string()).or_default();
+        for name in names {
+            entry.push(name.as_str().expect("bridge operation name").to_string());
+        }
+    }
+    by_domain
 }
 
 /// Makes the catalog. The local operations come first, then the bridge
@@ -374,8 +485,8 @@ fn build() -> Vec<Domain> {
         };
         add(domain, operation);
     }
-    for (tool, sequence) in bridge_tool_operations() {
-        let Some(domain) = domains.iter_mut().find(|domain| domain.tool() == tool) else {
+    for (base_domain, sequence) in bridge_tool_operations() {
+        let Some(domain) = domains.iter_mut().find(|domain| domain.name == base_domain) else {
             continue;
         };
         let position = |name: &str| sequence.iter().position(|item| item == name);
@@ -426,7 +537,8 @@ fn local_operation(local: &LocalOperation) -> Operation {
     }
 }
 
-/// Returns the MCP tool definitions: `ghidra_help`, then one tool for each domain.
+/// Returns the MCP tool definitions: `ghidra_help`, then the read-only and
+/// write tools for the domains.
 pub fn tool_definitions() -> Vec<Value> {
     let mut tools = vec![json!({
         "name": HELP_TOOL,
@@ -457,7 +569,9 @@ pub fn tool_definitions() -> Vec<Value> {
             "openWorldHint": false
         }
     })];
-    tools.extend(CATALOG.iter().map(Domain::definition));
+    for domain in CATALOG.iter() {
+        tools.extend(domain.definitions());
+    }
     tools
 }
 

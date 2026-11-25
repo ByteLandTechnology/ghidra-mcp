@@ -80,9 +80,10 @@
 
 ![工具调用流程](../img/tool_call.svg)
 
-守护进程提供 `ghidra_help`，并为每个领域提供一个 MCP 工具，例如 `ghidra_function`。
+守护进程提供 30 个 MCP 工具：`ghidra_help`、16 个只读领域工具和 13 个写入领域工具。
 桥接领域工具使用桥接 MCP 服务器的领域名和操作名。
 守护进程还提供本地操作，但不提供桥接的 shutdown 操作。
+在 `tools/call` 中，`ghidra_<domain>` 同样可以运行写入操作以保持兼容。
 一次调用包含 `operation` 和它的 `params`。指定一个会话的操作还包含该会话的 `md5`，它从不放在 `params` 中。
 `ghidra_help` 显示每个操作的 `params` 模式、md5 规则（`required`、`optional` 或 `absent`）和效果。
 领域工具的描述提示客户端在首次调用操作前获取其模式。

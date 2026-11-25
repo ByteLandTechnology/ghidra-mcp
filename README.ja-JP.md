@@ -421,9 +421,10 @@ ipc_handshake_timeout_sec = 5
 
 ## MCP ツール
 
-`tools/list` は 19 個の MCP ツールを表示します：`ghidra_help` と、ドメインごとに 1 つのツールです。
+`tools/list` は 30 個の MCP ツールを表示します：`ghidra_help`、16 個の読み取り専用ドメインツール、13 個の書き込みドメインツールです。
 ブリッジのドメインツールは、ブリッジ MCP サーバーのドメイン名と操作名を使用します。
 デーモンにはローカル操作もありますが、ブリッジの shutdown 操作は公開しません。
+`tools/call` では、互換性のため `ghidra_<domain>` でも書き込み操作を実行できます。
 このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。
 
 ドメインツールには次の引数があります：
@@ -434,12 +435,13 @@ ipc_handshake_timeout_sec = 5
 
 | ツール | 操作 | 実行場所 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`list`、`get`、`close` | デーモン。 |
+| `ghidra_session`、`ghidra_session_write` | 読み取り：`list`、`get`。書き込み：`open`、`close`。 | デーモン。 |
 | `ghidra_upload` | `prepare` | デーモン。 |
 | `ghidra_job` | `list`、`get`、`wait` | デーモン。 |
-| `ghidra_daemon` | `status`、`shutdown` | デーモン。 |
-| `ghidra_analysis` | `start`、`get` | `start`：デーモン、次にブリッジ。`get`：ブリッジ。 |
-| `ghidra_bridge`、`ghidra_program`、`ghidra_address`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_decompilation`、`ghidra_symbol`、`ghidra_reference`、`ghidra_comment`、`ghidra_data_type`、`ghidra_batch` | そのドメインのブリッジメソッド。 | セッションのブリッジ。 |
+| `ghidra_daemon`、`ghidra_daemon_write` | 読み取り：`status`。書き込み：`shutdown`。 | デーモン。 |
+| `ghidra_analysis`、`ghidra_analysis_write` | 読み取り：`get`。書き込み：`start`。 | `start`：デーモン、次にブリッジ。`get`：ブリッジ。 |
+| `ghidra_bridge`、`ghidra_address`、`ghidra_decompilation`、`ghidra_reference`、`ghidra_batch` | そのドメインのブリッジメソッド。 | セッションのブリッジ。 |
+| `ghidra_program`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_symbol`、`ghidra_comment`、`ghidra_data_type`（および `*_write`） | 各ドメインの読み取り専用および書き込みブリッジメソッド。 | セッションのブリッジ。 |
 
 ブリッジ契約 `bridge/docs/asyncapi.yaml` が、ブリッジメソッド、そのスキーマ、`read_only` 効果を定義します。
 デーモンは契約にあるメソッドだけを送ります。

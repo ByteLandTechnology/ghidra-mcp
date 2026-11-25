@@ -420,9 +420,10 @@ ipc_handshake_timeout_sec = 5
 
 ## MCP 工具
 
-`tools/list` 显示 19 个 MCP 工具：`ghidra_help`，以及每个领域一个工具。
+`tools/list` 显示 30 个 MCP 工具：`ghidra_help`、16 个只读领域工具和 13 个写入领域工具。
 桥接领域工具使用桥接 MCP 服务器的领域名和操作名。
 守护进程还提供本地操作，但不提供桥接的 shutdown 操作。
+在 `tools/call` 中，`ghidra_<domain>` 同样可以运行写入操作以保持兼容。
 本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
 
 领域工具有以下参数：
@@ -433,12 +434,13 @@ ipc_handshake_timeout_sec = 5
 
 | 工具 | 操作 | 运行位置 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`list`、`get`、`close` | 守护进程。 |
+| `ghidra_session`、`ghidra_session_write` | 只读：`list`、`get`。写入：`open`、`close`。 | 守护进程。 |
 | `ghidra_upload` | `prepare` | 守护进程。 |
 | `ghidra_job` | `list`、`get`、`wait` | 守护进程。 |
-| `ghidra_daemon` | `status`、`shutdown` | 守护进程。 |
-| `ghidra_analysis` | `start`、`get` | `start`：守护进程，然后是桥接。`get`：桥接。 |
-| `ghidra_bridge`、`ghidra_program`、`ghidra_address`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_decompilation`、`ghidra_symbol`、`ghidra_reference`、`ghidra_comment`、`ghidra_data_type`、`ghidra_batch` | 该领域的桥接方法。 | 会话的桥接。 |
+| `ghidra_daemon`、`ghidra_daemon_write` | 只读：`status`。写入：`shutdown`。 | 守护进程。 |
+| `ghidra_analysis`、`ghidra_analysis_write` | 只读：`get`。写入：`start`。 | `start`：守护进程，然后是桥接。`get`：桥接。 |
+| `ghidra_bridge`、`ghidra_address`、`ghidra_decompilation`、`ghidra_reference`、`ghidra_batch` | 该领域的桥接方法。 | 会话的桥接。 |
+| `ghidra_program`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_symbol`、`ghidra_comment`、`ghidra_data_type`（及 `*_write`） | 各领域的只读和写入桥接方法。 | 会话的桥接。 |
 
 桥接契约 `bridge/docs/asyncapi.yaml` 给出桥接方法、它们的模式和 `read_only` 效果。
 守护进程只发送契约中的方法。

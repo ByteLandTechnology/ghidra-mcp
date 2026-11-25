@@ -51,14 +51,12 @@ fn bridge_domains_match_the_bridge_mcp_server() {
         serde_json::from_str(include_str!("../../bridge/docs/mcp-tools.json")).expect("contract");
     let bridge_tools = contract["tools"].as_array().expect("bridge tools");
     let mut expected = operations_by_tool(bridge_tools);
-    // The daemon hides `shutdown`: `ghidra_session close` stops the bridge.
-    let bridge = expected.get_mut("ghidra_bridge").expect("ghidra_bridge");
-    let count = bridge.len();
-    bridge.retain(|operation| operation != "shutdown");
+    // The daemon hides `shutdown`: `ghidra_session_write close` stops the bridge.
+    let bridge_write = expected.remove("ghidra_bridge_write");
     assert_eq!(
-        bridge.len() + 1,
-        count,
-        "the bridge has no shutdown operation"
+        bridge_write,
+        Some(vec!["shutdown".to_string()]),
+        "the bridge write tool has only shutdown"
     );
     let actual = operations_by_tool(&tool_definitions());
 
@@ -74,8 +72,10 @@ fn bridge_domains_match_the_bridge_mcp_server() {
         local,
         BTreeSet::from([
             "ghidra_daemon",
+            "ghidra_daemon_write",
             "ghidra_job",
             "ghidra_session",
+            "ghidra_session_write",
             "ghidra_upload"
         ])
     );
@@ -87,15 +87,69 @@ fn bridge_domains_match_the_bridge_mcp_server() {
 fn tool_definitions_have_routes_and_annotations() {
     let tools = tool_definitions();
     assert_eq!(tools[0]["name"], "ghidra_help");
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 30);
     let tool = |name: &str| {
         tools
             .iter()
             .find(|tool| tool["name"] == name)
             .unwrap_or_else(|| panic!("no tool {name}"))
     };
+    let read_tools = [
+        "ghidra_session",
+        "ghidra_job",
+        "ghidra_daemon",
+        "ghidra_bridge",
+        "ghidra_program",
+        "ghidra_address",
+        "ghidra_memory",
+        "ghidra_listing",
+        "ghidra_global_variable",
+        "ghidra_function",
+        "ghidra_analysis",
+        "ghidra_decompilation",
+        "ghidra_symbol",
+        "ghidra_reference",
+        "ghidra_comment",
+        "ghidra_data_type",
+    ];
+    for name in read_tools {
+        let annotations = &tool(name)["annotations"];
+        assert_eq!(annotations["readOnlyHint"], true, "{name}");
+        assert_eq!(annotations["destructiveHint"], false, "{name}");
+        assert_eq!(annotations["idempotentHint"], true, "{name}");
+        assert_eq!(annotations["openWorldHint"], false, "{name}");
+    }
+    for name in [
+        "ghidra_upload",
+        "ghidra_program_write",
+        "ghidra_analysis_write",
+    ] {
+        let annotations = &tool(name)["annotations"];
+        assert_eq!(annotations["readOnlyHint"], false, "{name}");
+        assert_eq!(annotations["destructiveHint"], false, "{name}");
+    }
+    for name in [
+        "ghidra_session_write",
+        "ghidra_daemon_write",
+        "ghidra_memory_write",
+        "ghidra_listing_write",
+        "ghidra_global_variable_write",
+        "ghidra_function_write",
+        "ghidra_symbol_write",
+        "ghidra_comment_write",
+        "ghidra_data_type_write",
+        "ghidra_batch",
+    ] {
+        let annotations = &tool(name)["annotations"];
+        assert_eq!(annotations["readOnlyHint"], false, "{name}");
+        assert_eq!(annotations["destructiveHint"], true, "{name}");
+    }
     assert_eq!(
         tool("ghidra_session")["inputSchema"]["required"],
+        json!(["operation"])
+    );
+    assert_eq!(
+        tool("ghidra_session_write")["inputSchema"]["required"],
         json!(["operation"])
     );
     assert_eq!(
@@ -103,33 +157,29 @@ fn tool_definitions_have_routes_and_annotations() {
         json!(["operation", "md5"])
     );
     assert_eq!(
+        tool("ghidra_function_write")["inputSchema"]["required"],
+        json!(["operation", "md5"])
+    );
+    assert_eq!(
         tool("ghidra_analysis")["inputSchema"]["required"],
         json!(["operation", "md5"])
     );
     assert_eq!(
-        tool("ghidra_decompilation")["annotations"]["readOnlyHint"],
-        true
-    );
-    assert_eq!(
-        tool("ghidra_memory")["annotations"]["destructiveHint"],
-        true
-    );
-    assert_eq!(tool("ghidra_job")["annotations"]["readOnlyHint"], true);
-    assert_eq!(
-        tool("ghidra_session")["annotations"]["destructiveHint"],
-        true
+        tool("ghidra_analysis_write")["inputSchema"]["required"],
+        json!(["operation", "md5"])
     );
 
-    assert_eq!(
-        tool("ghidra_daemon")["annotations"]["destructiveHint"],
-        true
-    );
     assert!(tool("ghidra_daemon")["inputSchema"]["properties"]
+        .get("md5")
+        .is_none());
+    assert!(tool("ghidra_daemon_write")["inputSchema"]["properties"]
         .get("md5")
         .is_none());
 
     let session = &tool("ghidra_session")["inputSchema"]["properties"];
     assert!(session["md5"].is_object());
+    let session_write = &tool("ghidra_session_write")["inputSchema"]["properties"];
+    assert!(session_write["md5"].is_object());
     let job = &tool("ghidra_job")["inputSchema"]["properties"];
     assert!(job.get("md5").is_none());
 }
@@ -202,7 +252,8 @@ fn session_md5_is_never_a_parameter() {
 #[test]
 fn public_tool_contract_is_gemini_compatible() {
     let tools = tool_definitions();
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 30);
+    let parameterless = BTreeSet::from(["ghidra_daemon", "ghidra_program_write", "ghidra_session"]);
     for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
         assert!(valid_function_name(name), "tool name {name}");
@@ -214,15 +265,36 @@ fn public_tool_contract_is_gemini_compatible() {
         assert!(tool.get("outputSchema").is_none());
 
         if name != "ghidra_help" {
+            let operations = schema["properties"]["operation"]["enum"]
+                .as_array()
+                .expect("operation enum");
             let params = &schema["properties"]["params"];
             assert_eq!(params["type"], "object", "{name} params type");
             let param_props = params["properties"]
                 .as_object()
                 .unwrap_or_else(|| panic!("{name} params.properties must be an object"));
-            assert!(
-                !param_props.is_empty(),
-                "{name} must publish non-empty params.properties"
-            );
+            if parameterless.contains(name) {
+                assert!(param_props.is_empty(), "{name} has no operation parameters");
+            } else {
+                assert!(
+                    !param_props.is_empty(),
+                    "{name} must publish non-empty params.properties"
+                );
+            }
+            if operations.len() > 1 {
+                let description = params["description"].as_str().expect("params description");
+                assert!(
+                    description.contains("Required keys by operation:"),
+                    "{name} params description"
+                );
+                for op in operations {
+                    let op_name = op.as_str().expect("operation name");
+                    assert!(
+                        description.contains(&format!("`{op_name}`")),
+                        "{name} missing {op_name}"
+                    );
+                }
+            }
         }
     }
 
@@ -315,6 +387,68 @@ fn local_operation_extends_its_bridge_method() {
         Some("0123456789abcdef0123456789abcdef")
     );
     assert_eq!(request.label, "ghidra_analysis start");
+
+    let (_, write_request) = prepare(
+        "ghidra_analysis_write",
+        object(json!({
+            "operation": "start",
+            "md5": "0123456789ABCDEF0123456789ABCDEF",
+            "params": { "analyzers": ["Stack"], "wait": true }
+        })),
+    )
+    .expect("valid split write call");
+    assert_eq!(write_request.label, "ghidra_analysis_write start");
+}
+
+/// Makes sure that legacy base tools run reads and writes, while `_write` tools
+/// run only write operations of mixed domains.
+#[test]
+fn legacy_and_write_tools_dispatch_expected_operations() {
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let patch_args = json!({
+        "operation": "patch",
+        "md5": md5,
+        "params": {
+            "selector": { "entry": "ram:00100000" },
+            "patch": { "name": "renamed_fn" }
+        }
+    });
+    let (legacy_op, _) = prepare("ghidra_function", object(patch_args.clone())).expect("legacy");
+    let (split_op, _) = prepare("ghidra_function_write", object(patch_args)).expect("split");
+    match (&legacy_op.route, &split_op.route) {
+        (Route::Bridge(left), Route::Bridge(right)) => {
+            assert_eq!(left, "function.patch");
+            assert_eq!(left, right);
+        }
+        _ => panic!("function.patch must route to the bridge"),
+    }
+
+    let read_on_write = prepare(
+        "ghidra_function_write",
+        object(json!({
+            "operation": "get",
+            "md5": md5,
+            "params": { "selector": { "entry": "ram:00100000" } }
+        })),
+    )
+    .err()
+    .expect("read operation on write tool must fail");
+    assert!(reason(&read_on_write).contains("unknown operation of ghidra_function_write: get"));
+
+    for unknown_write in [
+        "ghidra_address_write",
+        "ghidra_decompilation_write",
+        "ghidra_reference_write",
+        "ghidra_job_write",
+        "ghidra_bridge_write",
+        "ghidra_upload_write",
+        "ghidra_batch_write",
+    ] {
+        let error = prepare(unknown_write, object(json!({ "operation": "list" })))
+            .err()
+            .unwrap_or_else(|| panic!("{unknown_write} must not resolve"));
+        assert!(reason(&error).contains("unknown tool"), "{unknown_write}");
+    }
 }
 
 /// Makes sure that a bridge operation goes to its bridge method.
@@ -504,9 +638,27 @@ fn help_has_three_levels() {
         .expect("size description")
         .contains("exact file size in bytes"));
 
+    let (_, fn_all) = help::run(object(json!({ "domain": "function" }))).expect("function help");
+    assert_eq!(fn_all["domain"], "ghidra_function");
+    assert_eq!(fn_all["operations"].as_array().expect("ops").len(), 10);
+
+    let (_, fn_write) = help::run(object(json!({ "domain": "ghidra_function_write" })))
+        .expect("function_write help");
+    assert_eq!(fn_write["domain"], "ghidra_function_write");
+    let fn_write_ops = fn_write["operations"].as_array().expect("write ops");
+    assert_eq!(fn_write_ops.len(), 7);
+    assert!(fn_write_ops
+        .iter()
+        .all(|entry| entry["effects"]["read_only"] == false));
+
     for (arguments, expected) in [
         (json!({ "operation": "get" }), "requires domain"),
         (json!({ "domain": "nothing" }), "unknown domain"),
+        (json!({ "domain": "address_write" }), "unknown domain"),
+        (
+            json!({ "domain": "ghidra_function_write", "operation": "get" }),
+            "unknown operation",
+        ),
         (
             json!({ "domain": "job", "operation": "nothing" }),
             "unknown operation",

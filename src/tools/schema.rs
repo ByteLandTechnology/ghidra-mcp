@@ -33,7 +33,7 @@ const SCALAR_KEYS: &[&str] = &[
 ];
 
 /// Builds the compact `params` schema for `domain_name` and `operations`.
-pub(super) fn params_schema(domain_name: &str, operations: &[Operation]) -> Value {
+pub(super) fn params_schema(domain_name: &str, operations: &[&Operation]) -> Value {
     let max_depth = if operations.len() == 1 && domain_name != "batch" {
         SINGLE_OPERATION_MAX_DEPTH
     } else {
@@ -50,12 +50,9 @@ pub(super) fn params_schema(domain_name: &str, operations: &[Operation]) -> Valu
     };
 
     let description = if operations.len() == 1 {
-        "The parameters for the operation."
+        "The parameters for the operation.".to_string()
     } else {
-        concat!(
-            "The parameters summary for the domain. Call ghidra_help with the domain ",
-            "for the exact schema of each operation."
-        )
+        multi_operation_description(operations)
     };
 
     let mut params = Map::new();
@@ -73,6 +70,34 @@ pub(super) fn params_schema(domain_name: &str, operations: &[Operation]) -> Valu
         }
     }
     Value::Object(params)
+}
+
+/// Formats the `params` description with required keys for each operation.
+fn multi_operation_description(operations: &[&Operation]) -> String {
+    let summary = operations
+        .iter()
+        .map(|operation| {
+            let keys: Vec<String> = operation
+                .schema
+                .get("required")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|key| format!("`{key}`"))
+                .collect();
+            if keys.is_empty() {
+                format!("`{}` (none)", operation.name)
+            } else {
+                format!("`{}` ({})", operation.name, keys.join(", "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "The parameters summary for the tool. Required keys by operation: {summary}. \
+         Call ghidra_help with the domain for the exact schema of each operation."
+    )
 }
 
 /// Flattens one JSON Schema node without union, reference, or extra-property keys.

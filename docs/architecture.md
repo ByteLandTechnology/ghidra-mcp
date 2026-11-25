@@ -82,9 +82,10 @@ To read the API documentation of each module and item, use `cargo doc --document
 
 ![Tool Call Sequence](img/tool_call.svg)
 
-The daemon shows `ghidra_help` and one MCP tool for each domain, for example `ghidra_function`.
+The daemon shows 30 MCP tools: `ghidra_help`, 16 read-only domain tools, and 13 write domain tools.
 The bridge domain tools use the domain and operation names of the bridge MCP server.
 The daemon also has local operations and does not expose the bridge shutdown operation.
+In `tools/call`, `ghidra_<domain>` also runs write operations for compatibility.
 
 A call has an `operation` and its `params`. An operation that names one session also has the `md5` of that session, never in `params`.
 `ghidra_help` shows the `params` schema, md5 rule (`required`, `optional` or `absent`) and effects of each operation.

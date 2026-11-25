@@ -428,9 +428,10 @@ ipc_handshake_timeout_sec = 5
 
 ## The MCP tools
 
-`tools/list` shows 19 MCP tools: `ghidra_help` and one tool for each domain.
+`tools/list` shows 30 MCP tools: `ghidra_help`, 16 read-only domain tools, and 13 write domain tools.
 The bridge domain tools use the domain and operation names of the bridge MCP server.
 The daemon also has local operations and does not expose the bridge shutdown operation.
+In `tools/call`, `ghidra_<domain>` also runs write operations for compatibility.
 This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
 
 A domain tool has these arguments:
@@ -441,12 +442,13 @@ A domain tool has these arguments:
 
 | Tool | Operations | Runs in |
 | --- | --- | --- |
-| `ghidra_session` | `open`, `list`, `get`, `close` | The daemon. |
+| `ghidra_session`, `ghidra_session_write` | Read: `list`, `get`. Write: `open`, `close`. | The daemon. |
 | `ghidra_upload` | `prepare` | The daemon. |
 | `ghidra_job` | `list`, `get`, `wait` | The daemon. |
-| `ghidra_daemon` | `status`, `shutdown` | The daemon. |
-| `ghidra_analysis` | `start`, `get` | `start`: the daemon, then the bridge. `get`: the bridge. |
-| `ghidra_bridge`, `ghidra_program`, `ghidra_address`, `ghidra_memory`, `ghidra_listing`, `ghidra_global_variable`, `ghidra_function`, `ghidra_decompilation`, `ghidra_symbol`, `ghidra_reference`, `ghidra_comment`, `ghidra_data_type`, `ghidra_batch` | The bridge methods of the domain. | The bridge of the session. |
+| `ghidra_daemon`, `ghidra_daemon_write` | Read: `status`. Write: `shutdown`. | The daemon. |
+| `ghidra_analysis`, `ghidra_analysis_write` | Read: `get`. Write: `start`. | `start`: the daemon, then the bridge. `get`: the bridge. |
+| `ghidra_bridge`, `ghidra_address`, `ghidra_decompilation`, `ghidra_reference`, `ghidra_batch` | The bridge methods of the domain. | The bridge of the session. |
+| `ghidra_program`, `ghidra_memory`, `ghidra_listing`, `ghidra_global_variable`, `ghidra_function`, `ghidra_symbol`, `ghidra_comment`, `ghidra_data_type` (and `*_write`) | The read-only and write bridge methods of each domain. | The bridge of the session. |
 
 The bridge contract `bridge/docs/asyncapi.yaml` gives the bridge methods, their schemas and their `read_only` effects.
 The daemon sends only the methods in this contract.

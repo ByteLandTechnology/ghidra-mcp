@@ -206,7 +206,7 @@ claude mcp get ghidra-mcp
 
 ## First analysis procedure
 
-The daemon shows `ghidra_help` and one MCP tool for each domain.
+The daemon shows `ghidra_help`, read-only `ghidra_<domain>` tools, and write `ghidra_<domain>_write` tools.
 Each domain tool takes an `operation` and its `params`.
 An operation that names one session also takes the `md5` of that session.
 This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.

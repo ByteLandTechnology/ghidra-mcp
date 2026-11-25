@@ -205,7 +205,7 @@ claude mcp get ghidra-mcp
 
 ## 初回解析手順
 
-デーモンは `ghidra_help` と、ドメインごとに 1 つの MCP ツールを提供します。
+デーモンは `ghidra_help`、読み取り専用の `ghidra_<domain>` ツール、書き込み用の `ghidra_<domain>_write` ツールを提供します。
 各ドメインツールは `operation` とその `params` を受け取ります。
 1 つのセッションを指定する操作は、そのセッションの `md5` も受け取ります。
 このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。

@@ -1,7 +1,8 @@
 // Copyright 2026 ByteLand Technology Limited
 // SPDX-License-Identifier: MIT
 
-//! The public MCP tools: `ghidra_help` and one tool for each domain.
+//! The public MCP tools: `ghidra_help`, read-only `ghidra_<domain>` tools, and
+//! `ghidra_<domain>_write` tools for write operations.
 //!
 //! The bridge domains and operations use the names of the bridge MCP server.
 //! A domain tool takes `operation` and `params`. An operation that names one
@@ -190,7 +191,7 @@ pub async fn call(daemon: &Daemon, tool: &str, arguments: Map<String, Value>) ->
 /// Fails if the tool or the operation is unknown. Also fails if the arguments
 /// do not obey the md5 rule or the top-level field rules of the operation.
 fn prepare(tool: &str, arguments: Map<String, Value>) -> Result<(&'static Operation, Request)> {
-    let domain = catalog::domain_of_tool(tool)
+    let target = catalog::target_of_tool(tool)
         .ok_or_else(|| DomainError::invalid_argument("tool", format!("unknown tool: {tool}")))?;
     let ToolCall {
         operation,
@@ -198,7 +199,7 @@ fn prepare(tool: &str, arguments: Map<String, Value>) -> Result<(&'static Operat
         params,
     } = parse(tool, Value::Object(arguments))?;
     let label = format!("{tool} {operation}");
-    let operation = domain.require_operation(&operation)?;
+    let operation = target.require_operation(&operation)?;
     operation.check_md5(&label, md5.as_deref())?;
     operation.validate(&label, &params)?;
     Ok((
