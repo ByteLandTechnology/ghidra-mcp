@@ -598,158 +598,6 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     .expect("shutdown starts after the reply");
 }
 
-/// Makes sure that `ghidra_job cancel` refuses launch jobs and returns finished analysis jobs.
-#[tokio::test]
-async fn job_cancel_refuses_launch_jobs_and_returns_finished_analysis_jobs() {
-    let root = tempfile::tempdir().unwrap();
-    let daemon = test_daemon(root.path());
-    let md5 = "0123456789abcdef0123456789abcdef";
-
-    for kind in [
-        crate::model::job_kind::ANALYZE_BINARY,
-        crate::model::job_kind::RECOVER_SESSION_BRIDGE,
-    ] {
-        let launch_job = daemon.state.insert_job(kind, Some(md5.into()));
-        let error = super::call(
-            &daemon,
-            "ghidra_job",
-            object(json!({ "operation": "cancel", "params": { "jobId": launch_job.id } })),
-        )
-        .await
-        .unwrap_err();
-        let message = reason(&error);
-        assert!(message.contains("ghidra_session close"), "{message}");
-    }
-
-    let completed = daemon
-        .state
-        .insert_job(crate::model::job_kind::START_ANALYSIS, Some(md5.into()));
-    daemon.state.finish_job(
-        &completed.id,
-        Ok(json!({ "analysis": { "status": "completed" } })),
-    );
-    let (_, done) = super::call(
-        &daemon,
-        "ghidra_job",
-        object(json!({
-            "operation": "cancel",
-            "params": { "jobId": completed.id, "wait": true }
-        })),
-    )
-    .await
-    .unwrap();
-    assert_eq!(done["job"]["status"], "completed");
-
-    let failed = daemon
-        .state
-        .insert_job(crate::model::job_kind::START_ANALYSIS, Some(md5.into()));
-    daemon
-        .state
-        .finish_job(&failed.id, Err(DomainError::transaction_failed("boom")));
-    let (_, done_failed) = super::call(
-        &daemon,
-        "ghidra_job",
-        object(json!({
-            "operation": "cancel",
-            "params": { "jobId": failed.id, "wait": true }
-        })),
-    )
-    .await
-    .unwrap();
-    assert_eq!(done_failed["job"]["status"], "failed");
-    assert!(done_failed["job"]["error"]
-        .as_str()
-        .unwrap()
-        .contains("boom"));
-}
-
-/// Makes sure that `ghidra_job cancel` stops a live analysis job and keeps the bridge error.
-#[tokio::test]
-async fn job_cancel_stops_live_analysis_and_propagates_error() {
-    let root = tempfile::tempdir().unwrap();
-    let daemon = test_daemon(root.path());
-    let md5 = "0123456789abcdef0123456789abcdef";
-    let mut record = crate::model::SessionRecord::launching(md5.into(), "bin".into(), "t".into());
-    record.mark_ready();
-    daemon.state.put_session(&record).unwrap();
-
-    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    let conn_id = "conn-1".to_string();
-    assert!(daemon.state.attach_bridge(
-        md5,
-        crate::state::ConnectionHandle {
-            conn_id: conn_id.clone(),
-            sender,
-        }
-    ));
-
-    let state = daemon.state.clone();
-    let responder = tokio::spawn(async move {
-        let mut cancelled = false;
-        while let Some(axum::extract::ws::Message::Text(frame)) = receiver.recv().await {
-            let rpc: Value = serde_json::from_str(&frame).unwrap();
-            let id = rpc["id"].as_str().unwrap().to_string();
-            let method = rpc["method"].as_str().unwrap();
-            let snapshot = match method {
-                "analysis.start" => json!({ "status": "running", "progress": 10 }),
-                "analysis.cancel" => {
-                    cancelled = true;
-                    json!({ "status": "running", "progress": 25 })
-                }
-                "analysis.get" if cancelled => json!({
-                    "status": "cancelled",
-                    "progress": 25,
-                    "error": "analysis cancelled: cancelled by user"
-                }),
-                "analysis.get" => json!({ "status": "running", "progress": 15 }),
-                other => panic!("unexpected method {other}"),
-            };
-            let mut envelope = crate::model::RpcEnvelope::response(id.clone(), md5.into(), 200);
-            envelope.result = Some(snapshot);
-            state.deliver_response(md5, &conn_id, &id, envelope);
-        }
-    });
-
-    let (_, started) = super::call(
-        &daemon,
-        "ghidra_analysis",
-        object(json!({ "operation": "start", "md5": md5, "params": {} })),
-    )
-    .await
-    .unwrap();
-    let job_id = started["job"]["id"].as_str().unwrap().to_string();
-
-    let (_, first) = super::call(
-        &daemon,
-        "ghidra_job",
-        object(json!({
-            "operation": "cancel",
-            "params": { "jobId": job_id, "wait": true, "timeoutMs": 5000 }
-        })),
-    )
-    .await
-    .unwrap();
-    assert_eq!(first["job"]["status"], "failed");
-    assert!(first["job"]["error"]
-        .as_str()
-        .unwrap()
-        .contains("analysis cancelled: cancelled by user"));
-
-    let (_, second) = super::call(
-        &daemon,
-        "ghidra_job",
-        object(json!({
-            "operation": "cancel",
-            "params": { "jobId": job_id, "wait": true }
-        })),
-    )
-    .await
-    .unwrap();
-    assert_eq!(second["job"]["status"], "failed");
-    assert_eq!(second["job"]["error"], first["job"]["error"]);
-    responder.abort();
-}
-
 /// Makes sure that `params` accepts `null` and a JSON object string.
 #[tokio::test]
 async fn params_accepts_null_and_json_object_string() {
@@ -872,5 +720,60 @@ fn bridge_address_error_preserves_target_and_spaces() {
             param: "/selector/address".to_string(),
             reason: "unable to parse address: bad (valid spaces: [EXTERNAL, ram])".to_string(),
         }
+    );
+}
+
+/// Makes sure that `Route::Bridge` moves `RpcEnvelope.result` into the output map without clones.
+#[tokio::test]
+async fn bridge_call_moves_envelope_result_without_clones() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let mut record = crate::model::SessionRecord::launching(md5.into(), "bin".into(), "t".into());
+    record.mark_ready();
+    daemon.state.put_session(&record).unwrap();
+
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    assert!(daemon.state.attach_bridge(
+        md5,
+        crate::state::ConnectionHandle {
+            conn_id: "conn-1".into(),
+            sender,
+        },
+    ));
+
+    let payload = String::from("0x00401000 entry_point");
+    let payload_ptr = payload.as_ptr();
+    let state = daemon.state.clone();
+    let responder = tokio::spawn(async move {
+        let Some(axum::extract::ws::Message::Text(frame)) = receiver.recv().await else {
+            panic!("expected bridge text frame");
+        };
+        let req: Value = serde_json::from_str(&frame).unwrap();
+        let req_id = req["id"].as_str().unwrap().to_string();
+        let mut envelope = crate::model::RpcEnvelope::response(req_id.clone(), md5.into(), 200);
+        envelope.result = Some(Value::Object(Map::from_iter([(
+            "function".to_string(),
+            Value::String(payload),
+        )])));
+        state.deliver_response(md5, "conn-1", &req_id, envelope);
+    });
+
+    let (summary, structured) = super::call(
+        &daemon,
+        "ghidra_function",
+        object(json!({ "operation": "list", "md5": md5 })),
+    )
+    .await
+    .unwrap();
+    responder.await.unwrap();
+    assert_eq!(summary, "ghidra_function list completed");
+    assert_eq!(structured["response"]["status"], 200);
+    assert_eq!(
+        structured["response"]["result"]["function"]
+            .as_str()
+            .unwrap()
+            .as_ptr(),
+        payload_ptr
     );
 }

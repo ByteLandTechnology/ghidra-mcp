@@ -234,3 +234,6 @@ fn rpc_result(envelope: RpcEnvelope) -> Result<Value> {
         .into()
     })
 }
+
+#[cfg(test)]
+mod tests;
