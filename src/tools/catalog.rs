@@ -47,7 +47,7 @@ const DOMAINS: &[(&str, &str)] = &[
     ("memory", "for memory data"),
     (
         "listing",
-        "for code units, data units, instructions, and flow overrides",
+        "for code units, data units, instructions, flow overrides, and address windows",
     ),
     ("global_variable", "for global variable data"),
     ("function", "for function data"),
@@ -262,9 +262,12 @@ fn bridge_target(method: &str) -> Option<(&'static str, String)> {
         "code_unit" | "data_unit" | "instruction" | "flow_override" => {
             ("listing", format!("{prefix}.{operation}"))
         }
+        "listing_window" => ("listing", format!("window.{operation}")),
         "function_call" => ("function", format!("call.{operation}")),
         "function_parameter" => ("function", format!("parameter.{operation}")),
         "function_local_variable" => ("function", format!("local_variable.{operation}")),
+        "control_flow_graph" => ("function", format!("control_flow_graph.{operation}")),
+        "reference_context" => ("reference", format!("context.{operation}")),
         "data_type_category" => ("data_type", format!("category.{operation}")),
         _ => (DOMAINS[domain_index(prefix)].0, operation.to_string()),
     };
