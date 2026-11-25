@@ -4,7 +4,7 @@
 //! The session lifecycle: open a session, launch Ghidra, wait for its bridge,
 //! relaunch the bridge, call bridge methods, and close the session.
 //!
-//! A launch has these steps. Each step has the lifecycle lock:
+//! A launch has these steps. Each step has the lifecycle lock of its MD5:
 //!
 //! 1. [`begin_launch`] prepares the project and stops the previous process. It
 //!    saves a `launching` record with a new bridge credential. It also makes
@@ -28,9 +28,10 @@ use crate::model::{job_kind, JobRecord, JobStatus, RpcEnvelope, SessionRecord, S
 use crate::process::{append_java_tool_option, spawn_log_forwarder, ManagedChild};
 use crate::project::{
     attached_program_name, check_gpr_not_locked, is_attached_gpr_session, is_reimport_pending,
-    persist_attached_gpr, persist_binary_with_options, prepare_project,
+    normalize_md5, persist_attached_gpr, persist_binary_with_options, prepare_project,
     reset_binary_ghidra_project, resolve_gpr_path, sanitize_text_paths,
     update_attached_program_name, update_binary_import_options, LaunchMode, PreparedProject,
+    ResolvedGpr,
 };
 use crate::state::McpState;
 use anyhow::Result;
@@ -40,7 +41,12 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::OwnedMutexGuard;
 use tokio::time::Instant;
+
+mod checkpoints;
+
+pub use checkpoints::{checkpoint_create, checkpoint_list, checkpoint_restore, delete, reset};
 
 /// The time that Ghidra has to exit after its bridge session ends. After this time,
 /// the bridge halts the JVM, but never during a save. Then no orphan Ghidra
@@ -49,6 +55,21 @@ const GHIDRA_EXIT_DEADLINE: Duration = Duration::from_mins(2);
 
 /// Marker prefix emitted by `OpenSavedProject.java` and `ImportBinary.java` on open errors.
 const OPEN_ERROR_MARKER: &str = "GHIDRA_MCP_OPEN_ERROR: ";
+
+/// Opens or reuses a session by `md5` with default options.
+#[cfg(test)]
+pub async fn open(
+    state: &Arc<McpState>,
+    md5: String,
+    input: Option<&Path>,
+    wait: Option<Duration>,
+) -> Result<(String, Value)> {
+    let md5 = normalize_md5(&md5)?;
+    if let Some(path) = input {
+        return open_with_options(state, None, Some(path), OpenOptions::default(), wait).await;
+    }
+    open_with_options(state, Some(md5), None, OpenOptions::default(), wait).await
+}
 
 /// Opens a local binary or `.gpr` project, or reopens a saved session by `md5`.
 pub async fn open_with_options(
@@ -61,47 +82,104 @@ pub async fn open_with_options(
     if state.is_shutting_down() {
         return Err(DomainError::ShuttingDown.into());
     }
-    let (md5, program_switched) = match (input, md5) {
-        (Some(path), None) if is_gpr_path(path) => prepare_gpr_open(state, path, &options).await?,
-        (Some(path), None) => (prepare_binary_open(state, path, &options).await?, false),
-        (None, Some(md5)) => {
-            let switched = prepare_md5_open(state, &md5, &options).await?;
-            (md5, switched)
-        }
-        (None, None) => {
-            return Err(DomainError::invalid_argument(
-                "path/md5",
-                "`ghidra_session open` requires either params.path or md5",
-            )
-            .into());
-        }
-        (Some(_), Some(_)) => {
-            return Err(DomainError::invalid_argument(
-                "path/md5",
-                "`ghidra_session open` accepts either params.path or md5, not both",
-            )
-            .into());
-        }
-    };
-
-    finish_open(state, md5, options.reimport, program_switched, wait).await
+    match (input, md5) {
+        (Some(path), None) => open_by_path(state, path, &options, wait).await,
+        (None, Some(raw_md5)) => open_by_md5(state, &raw_md5, &options, wait).await,
+        (None, None) => Err(DomainError::invalid_argument(
+            "path/md5",
+            "`ghidra_session open` requires either params.path or md5",
+        )
+        .into()),
+        (Some(_), Some(_)) => Err(DomainError::invalid_argument(
+            "path/md5",
+            "`ghidra_session open` accepts either params.path or md5, not both",
+        )
+        .into()),
+    }
 }
 
-/// Validates and persists metadata for a local `.gpr` session open.
-async fn prepare_gpr_open(
+/// Opens or reuses a session from a local binary or `.gpr` path.
+async fn open_by_path(
     state: &Arc<McpState>,
     path: &Path,
     options: &OpenOptions,
-) -> Result<(String, bool)> {
-    options.validate_for_target(true)?;
-    let source = path.to_path_buf();
+    wait: Option<Duration>,
+) -> Result<(String, Value)> {
+    if is_gpr_path(path) {
+        options.validate_for_target(true)?;
+        let source = path.to_path_buf();
+        let gpr = tokio::task::spawn_blocking(move || resolve_gpr_path(&source))
+            .await
+            .map_err(|err| DomainError::Internal {
+                message: format!("project path task failed: {err}"),
+            })??;
+        let md5 = gpr.md5.clone();
+        let guard = state.lifecycle_lock(&md5)?.lock_owned().await;
+        if state.is_shutting_down() {
+            return Err(DomainError::ShuttingDown.into());
+        }
+        let switched = persist_gpr_open(state, gpr, options.program_name.clone()).await?;
+        return finish_open(state, md5, false, switched, guard, wait).await;
+    }
+
+    let md5 = prepare_binary_open(state, path, options).await?;
+    if state.is_shutting_down() {
+        return Err(DomainError::ShuttingDown.into());
+    }
+    if !options.reimport {
+        if let Some(output) = try_reuse_ready_session(state, &md5)? {
+            return Ok(output);
+        }
+    }
+    let guard = state.lifecycle_lock(&md5)?.lock_owned().await;
+    finish_open(state, md5, options.reimport, false, guard, wait).await
+}
+
+/// Opens or reuses a session by canonical `md5`.
+async fn open_by_md5(
+    state: &Arc<McpState>,
+    raw_md5: &str,
+    options: &OpenOptions,
+    wait: Option<Duration>,
+) -> Result<(String, Value)> {
+    let md5 = normalize_md5(raw_md5)?;
+    if options.is_empty() {
+        if let Some(output) = try_reuse_ready_session(state, &md5)? {
+            return Ok(output);
+        }
+        let guard = state.lifecycle_lock(&md5)?.lock_owned().await;
+        return finish_open(state, md5, false, false, guard, wait).await;
+    }
+    let guard = state.lifecycle_lock(&md5)?.lock_owned().await;
+    if state.is_shutting_down() {
+        return Err(DomainError::ShuttingDown.into());
+    }
+    let switched = prepare_md5_open(state, &md5, options).await?;
+    finish_open(state, md5, options.reimport, switched, guard, wait).await
+}
+
+/// Returns the reuse output when `md5` has a ready connected session and no deferred reimport.
+fn try_reuse_ready_session(state: &McpState, md5: &str) -> Result<Option<(String, Value)>> {
+    if is_reimport_pending(&state.paths, md5)? {
+        return Ok(None);
+    }
+    Ok(state
+        .find_session(md5)
+        .filter(|session| session.status == SessionStatus::Ready && session.ws_connected)
+        .map(|session| reused_session_output(md5, &session)))
+}
+
+/// Checks `.gpr` lock ownership and saves `attached.json` under the MD5 lifecycle lock.
+async fn persist_gpr_open(
+    state: &Arc<McpState>,
+    gpr: ResolvedGpr,
+    requested_program: Option<String>,
+) -> Result<bool> {
     let paths = state.paths.clone();
     let state_ref = state.clone();
-    let requested_program = options.program_name.clone();
-    tokio::task::spawn_blocking(move || -> Result<(String, bool)> {
-        let gpr = resolve_gpr_path(&source)?;
-        let current_session = state_ref.find_session(&gpr.md5);
-        let daemon_owns = current_session
+    tokio::task::spawn_blocking(move || -> Result<bool> {
+        let current = state_ref.find_session(&gpr.md5);
+        let daemon_owns = current
             .as_ref()
             .is_some_and(|session| session.ws_connected || session.status.is_launching());
         if !daemon_owns {
@@ -112,7 +190,7 @@ async fn prepare_gpr_open(
             .as_ref()
             .is_some_and(|wanted| prev_program.as_ref() != Some(wanted));
         persist_attached_gpr(&paths, &gpr, requested_program.as_deref())?;
-        Ok((gpr.md5, switched))
+        Ok(switched)
     })
     .await
     .map_err(|err| DomainError::Internal {
@@ -120,7 +198,7 @@ async fn prepare_gpr_open(
     })?
 }
 
-/// Validates and persists a local binary file and its import flags.
+/// Checks and saves a local binary file and its import flags.
 async fn prepare_binary_open(
     state: &Arc<McpState>,
     path: &Path,
@@ -161,7 +239,7 @@ async fn prepare_binary_open(
     })?
 }
 
-/// Validates and updates metadata for an `md5` session open.
+/// Checks and updates metadata for an `md5` session open with explicit options.
 async fn prepare_md5_open(state: &Arc<McpState>, md5: &str, options: &OpenOptions) -> Result<bool> {
     let paths = state.paths.clone();
     let state_ref = state.clone();
@@ -198,61 +276,50 @@ async fn prepare_md5_open(state: &Arc<McpState>, md5: &str, options: &OpenOption
     })?
 }
 
-/// Runs the lifecycle-locked launch or reuse phase for `md5`.
+/// Runs the slow-path launch or reuse step for `md5` under its lifecycle lock.
 async fn finish_open(
     state: &Arc<McpState>,
     md5: String,
     reimport_requested: bool,
     program_switched: bool,
+    guard: OwnedMutexGuard<()>,
     wait: Option<Duration>,
 ) -> Result<(String, Value)> {
     let (created, job_id) = {
-        let _guard = state.lifecycle_lock.lock().await;
+        let _guard = guard;
         if state.is_shutting_down() {
             return Err(DomainError::ShuttingDown.into());
         }
         let force_reimport = reimport_requested || is_reimport_pending(&state.paths, &md5)?;
         let force_relaunch = force_reimport || program_switched;
-        let existing = state.find_session(&md5);
+        let current = state.find_session(&md5);
 
         if force_relaunch {
-            stop_existing_for_relaunch(state, &md5, !force_reimport).await;
-            if force_reimport {
-                let paths = state.paths.clone();
-                let md5_clone = md5.clone();
-                tokio::task::spawn_blocking(move || {
-                    reset_binary_ghidra_project(&paths, &md5_clone)
-                })
-                .await
-                .map_err(|err| DomainError::Internal {
-                    message: format!("project reset task failed: {err}"),
-                })??;
-            }
-            let (prepared, job_id) = begin_launch(state, &md5, job_kind::ANALYZE_BINARY).await?;
-            tokio::spawn(launch_and_wait(state.clone(), prepared, job_id.clone()));
-            (existing.is_none() || force_reimport, job_id)
+            let job_id = relaunch_for_options(state, &md5, force_reimport).await?;
+            (current.is_none() || force_reimport, job_id)
         } else {
-            if let Some(session) = existing.as_ref().filter(|session| session.ws_connected) {
-                return Ok((
-                    format!("Reused session {md5}"),
-                    json!({"created": false, "reused": true, "session": session.summary()}),
-                ));
+            if let Some(session) = current
+                .as_ref()
+                .filter(|session| session.status == SessionStatus::Ready && session.ws_connected)
+            {
+                return Ok(reused_session_output(&md5, session));
             }
-            let launching_job = existing
+            let launching_job = current
                 .as_ref()
                 .filter(|session| session.status.is_launching())
                 .and_then(|_| state.launch_job(&md5));
+            // Join a launch that is in progress. Do not start a second launch.
             if let Some(job_id) = launching_job {
                 (false, job_id)
             } else {
-                let kind = if existing.is_some() {
+                let kind = if current.is_some() {
                     job_kind::RECOVER_SESSION_BRIDGE
                 } else {
                     job_kind::ANALYZE_BINARY
                 };
                 let (prepared, job_id) = begin_launch(state, &md5, kind).await?;
                 tokio::spawn(launch_and_wait(state.clone(), prepared, job_id.clone()));
-                (existing.is_none(), job_id)
+                (current.is_none(), job_id)
             }
         }
     };
@@ -284,8 +351,29 @@ async fn finish_open(
     ))
 }
 
+/// Stops an active process, resets internal project files on `force_reimport`, and starts Ghidra.
+async fn relaunch_for_options(
+    state: &Arc<McpState>,
+    md5: &str,
+    force_reimport: bool,
+) -> Result<String> {
+    stop_for_relaunch(state, md5, !force_reimport).await;
+    if force_reimport {
+        let paths = state.paths.clone();
+        let md5_clone = md5.to_string();
+        tokio::task::spawn_blocking(move || reset_binary_ghidra_project(&paths, &md5_clone))
+            .await
+            .map_err(|err| DomainError::Internal {
+                message: format!("project reset task failed: {err}"),
+            })??;
+    }
+    let (prepared, job_id) = begin_launch(state, md5, job_kind::ANALYZE_BINARY).await?;
+    tokio::spawn(launch_and_wait(state.clone(), prepared, job_id.clone()));
+    Ok(job_id)
+}
+
 /// Stops an active process for `md5`. The caller must hold `lifecycle_lock`.
-async fn stop_existing_for_relaunch(state: &McpState, md5: &str, save_first: bool) {
+async fn stop_for_relaunch(state: &McpState, md5: &str, save_first: bool) {
     if save_first
         && state
             .find_session(md5)
@@ -312,6 +400,14 @@ async fn stop_existing_for_relaunch(state: &McpState, md5: &str, save_first: boo
     state.set_launch_job(md5, None);
 }
 
+/// Formats the summary text and JSON payload for a ready session that `open` uses again.
+fn reused_session_output(md5: &str, session: &SessionRecord) -> (String, Value) {
+    (
+        format!("Reused session {md5}"),
+        json!({"created": false, "reused": true, "session": session.summary()}),
+    )
+}
+
 /// Calls a bridge method. First, it connects the bridge of the session, or relaunches it.
 pub async fn call(
     state: &Arc<McpState>,
@@ -319,8 +415,9 @@ pub async fn call(
     method: &str,
     params: Value,
 ) -> Result<RpcEnvelope> {
-    ensure_connected(state, md5).await?;
-    let envelope = bridge::request(state, md5, method, params, state.config.timeouts.rpc).await?;
+    let md5 = normalize_md5(md5)?;
+    ensure_connected(state, &md5).await?;
+    let envelope = bridge::request(state, &md5, method, params, state.config.timeouts.rpc).await?;
     if let Some(err) = &envelope.error {
         return Err(DomainError::from_bridge(envelope.status, err).into());
     }
@@ -329,17 +426,18 @@ pub async fn call(
 
 /// Makes sure that the session has a bridge connection.
 pub async fn ensure_connected(state: &Arc<McpState>, md5: &str) -> Result<()> {
-    let session = state.session(md5)?;
+    let md5 = normalize_md5(md5)?;
+    let session = state.session(&md5)?;
     if session.ws_connected {
         return Ok(());
     }
     if session.status.is_launching() {
-        return wait_for_launch(state, md5).await;
+        return wait_for_launch(state, &md5).await;
     }
     if session.status.is_recoverable() {
-        return recover(state, md5).await;
+        return recover(state, &md5).await;
     }
-    Err(DomainError::disconnected(md5).into())
+    Err(DomainError::disconnected(&md5).into())
 }
 
 /// Waits for the launch that owns the session. Then the bridge must have a connection.
@@ -356,20 +454,24 @@ async fn wait_for_launch(state: &McpState, md5: &str) -> Result<()> {
 
 /// Relaunches a disconnected or stale session, and waits until it is ready.
 async fn recover(state: &Arc<McpState>, md5: &str) -> Result<()> {
+    let md5 = normalize_md5(md5)?;
     let (prepared, job_id) = {
-        let guard = state.lifecycle_lock.lock().await;
-        let current = state.session(md5)?;
+        let guard = state.lifecycle_lock(&md5)?.lock_owned().await;
+        if state.is_shutting_down() {
+            return Err(DomainError::ShuttingDown.into());
+        }
+        let current = state.session(&md5)?;
         if current.ws_connected {
             return Ok(());
         }
         if current.status.is_launching() {
             drop(guard);
-            return wait_for_launch(state, md5).await;
+            return wait_for_launch(state, &md5).await;
         }
         if !current.status.is_recoverable() {
-            return Err(DomainError::disconnected(md5).into());
+            return Err(DomainError::disconnected(&md5).into());
         }
-        begin_launch(state, md5, job_kind::RECOVER_SESSION_BRIDGE).await?
+        begin_launch(state, &md5, job_kind::RECOVER_SESSION_BRIDGE).await?
     };
     launch_and_wait(state.clone(), prepared, job_id).await
 }
@@ -430,8 +532,8 @@ async fn launch_and_wait(
 
 /// Starts Ghidra and records the process.
 async fn launch_process(state: &Arc<McpState>, prepared: PreparedProject) -> Result<()> {
-    let _guard = state.lifecycle_lock.lock().await;
-    let md5 = prepared.md5.clone();
+    let md5 = normalize_md5(&prepared.md5)?;
+    let _guard = state.lifecycle_lock(&md5)?.lock_owned().await;
     if !state
         .session_with_token(&md5, &prepared.agent_token)
         .is_some_and(|session| session.status.is_launching())
@@ -584,12 +686,14 @@ async fn wait_ready(
     job_id: &str,
     timeout: Duration,
 ) -> Result<JobRecord> {
+    let md5 = normalize_md5(md5)?;
+    let lifecycle_lock = state.lifecycle_lock(&md5)?;
     let deadline = Instant::now() + timeout;
     loop {
-        let guard = state.lifecycle_lock.lock().await;
-        if !state.owns_launch(md5, job_id) {
+        let guard = lifecycle_lock.lock().await;
+        if !state.owns_launch(&md5, job_id) {
             return Err(
-                DomainError::missing_target(md5, "binary launch was replaced or closed").into(),
+                DomainError::missing_target(&md5, "binary launch was replaced or closed").into(),
             );
         }
         let job = state.job(job_id)?;
@@ -603,9 +707,9 @@ async fn wait_ready(
             }
             JobStatus::Running => {}
         }
-        let session = state.session(md5)?;
+        let session = state.session(&md5)?;
         if session.status == SessionStatus::Ready {
-            state.finish_job(job_id, Ok(json!({ "md5": md5, "status": session.status })));
+            state.finish_job(job_id, Ok(json!({ "md5": &md5, "status": session.status })));
             return state.job(job_id);
         }
         if session.status.is_terminal() {
@@ -616,11 +720,11 @@ async fn wait_ready(
             }
             .into());
         }
-        if let Some(status) = state.poll_process_exit(md5)? {
+        if let Some(status) = state.poll_process_exit(&md5)? {
             drop(guard);
             // Give log forwarder threads a brief moment to flush the final stderr lines.
             tokio::time::sleep(Duration::from_millis(60)).await;
-            if let Some(diagnostic) = extract_headless_open_error(state, md5) {
+            if let Some(diagnostic) = extract_headless_open_error(state, &md5) {
                 return Err(DomainError::invalid_argument("open", diagnostic).into());
             }
             return Err(DomainError::Internal {
@@ -633,17 +737,20 @@ async fn wait_ready(
         }
         if Instant::now() >= deadline {
             let message = format!("timed out waiting for ghidra.ready for session {md5}");
-            state.stop_process(md5, Duration::ZERO).await;
-            let _ = state.update_session(md5, |session| session.mark_error(&message));
+            state.stop_process(&md5, Duration::ZERO).await;
+            let _ = state.update_session(&md5, |session| session.mark_error(&message));
             return Err(DomainError::AgentTimeout {
-                md5: md5.to_string(),
+                md5,
                 timeout_seconds: Some(timeout.as_secs()),
             }
             .into());
         }
+        let notified = state.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         drop(guard);
         let wake = deadline.min(Instant::now() + Duration::from_secs(1));
-        let _ = tokio::time::timeout_at(wake, state.notify.notified()).await;
+        let _ = tokio::time::timeout_at(wake, notified).await;
     }
 }
 
@@ -675,28 +782,32 @@ fn extract_headless_open_error(state: &McpState, md5: &str) -> Option<String> {
 
 /// Closes a session through its bridge. If `force` is `true`, it kills the process.
 pub async fn close(state: &McpState, md5: &str, force: bool) -> Result<()> {
-    let _guard = state.lifecycle_lock.lock().await;
-    let session = state.session(md5)?;
+    let md5 = normalize_md5(md5)?;
+    let _guard = state.lifecycle_lock(&md5)?.lock_owned().await;
+    let session = state.session(&md5)?;
     if !force && session.ws_connected {
         let shutdown = bridge::request(
             state,
-            md5,
+            &md5,
             "session.shutdown",
             json!({}),
             Duration::from_secs(5),
         );
         let _ = shutdown.await;
         state
-            .stop_process(md5, state.config.timeouts.bridge_disconnect_grace)
+            .stop_process(&md5, state.config.timeouts.bridge_disconnect_grace)
             .await;
     } else {
-        state.stop_process(md5, Duration::ZERO).await;
+        state.stop_process(&md5, Duration::ZERO).await;
     }
-    state.detach_bridge(md5, "session closed");
-    state.update_session(md5, |session| session.mark_closed(force))?;
-    if let Some(job_id) = state.launch_job(md5) {
-        state.fail_job_error(&job_id, DomainError::disconnected(md5));
+    state.detach_bridge(&md5, "session closed");
+    state.update_session(&md5, |session| session.mark_closed(force))?;
+    if let Some(job_id) = state.launch_job(&md5) {
+        state.fail_job_error(&job_id, DomainError::disconnected(&md5));
     }
-    state.set_launch_job(md5, None);
+    state.set_launch_job(&md5, None);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

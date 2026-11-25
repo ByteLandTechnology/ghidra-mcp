@@ -62,9 +62,11 @@ A module uses only the modules in the layers below it:
 | `mcp_http` | Streamable HTTP, legacy SSE sessions, CORS and HTTP compatibility. |
 | `upload` | Upload credentials and the `POST /upload` endpoint. |
 | `tools` | The MCP tools: the domain catalog, the local operations, the call validation and `ghidra_help`. |
-| `session` | Open, launch, wait, relaunch, call and close for sessions. |
+| `session` | Open, launch, wait, relaunch, call, checkpoint, reset, delete, and close for sessions. |
+| `checkpoint` | Synchronized snapshots of `project.gpr` and `project.rep/`, retention limits, and atomic restore. |
 | `analysis` | Auto-analysis as a background job. |
-| `project` | Saved binaries and the preparation of Ghidra projects. |
+| `project` | Saved binaries, attached `.gpr` projects, project reset, deletion, and preparation. |
+| `import` | Validation and persistence types for firmware import flags and `.gpr` attachment. |
 | `bridge` | The bridge contract, the embedded runtime, the WebSocket and single requests. |
 | `jsonrpc` | The strict JSON-RPC 2.0 codec of the bridge WebSocket. |
 | `state` | The shared state: one entry for each session, and the jobs. |
@@ -174,9 +176,10 @@ The client does not see the relaunch.
 The daemon is a multi-threaded Tokio program.
 Three mechanisms in `state.rs` keep the state correct:
 
-- **The lifecycle lock** (`McpState::lifecycle_lock`, async) puts the session lifecycle transitions in sequence.
+- **The lifecycle locks** (`McpState::lifecycle_lock`, async) put the lifecycle transitions of each session in sequence.
+  Each canonical binary MD5 has its own lock, so transitions on different sessions run in parallel.
   The transitions are: open, launch, handshake, disconnect and close.
-  A task can keep the lock across an await, for example while a process stops.
+  A task can keep a session lock across an await, for example while a process stops.
 - **The state mutexes** protect the session map and the job map.
   A task keeps them only for short sections that do not block, and never across an await.
   For this reason, most state methods are synchronous.
@@ -231,7 +234,7 @@ To stop a session, the daemon uses these steps:
 
 | Location | Contents | Lifetime |
 |---|---|---|
-| **Persistent home** (`GHIDRA_MCP_HOME`, default `~/.ghidra-mcp` or `%LOCALAPPDATA%\ghidra-mcp`) | `config.toml`, and `projects/<md5>/` with `binary`, `binary.json`, `binary.lock`, the Ghidra project in `ghidra/`, and retained crash recovery backups in `recovery-backups/`. | Kept. |
+| **Persistent home** (`GHIDRA_MCP_HOME`, default `~/.ghidra-mcp` or `%LOCALAPPDATA%\ghidra-mcp`) | `config.toml`, and `projects/<md5>/` with `binary`, `binary.json`, `binary.lock`, the Ghidra project in `ghidra/`, snapshots in `checkpoints/`, and retained crash recovery backups in `recovery-backups/`. | Kept. |
 | **Runtime directory** (`ghidra-mcp-<uid>` in the runtime or temporary directory of the system, or `%LOCALAPPDATA%\ghidra-mcp\run`) | `daemon.lock`, `daemon.log`, `daemon.sock` (Unix), `server.json`, `sessions/<md5>/session.json`, `logs/<md5>/`, `tmp/`, the bridge files, and on Unix the `projects` link. | You can delete it. |
 
 The publisher stages files beside their destination.

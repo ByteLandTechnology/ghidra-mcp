@@ -60,9 +60,11 @@
 | `mcp_http` | Streamable HTTP、旧式 SSE 会话、CORS 和 HTTP 兼容层。 |
 | `upload` | 上传凭据和 `POST /upload` 端点。 |
 | `tools` | MCP 工具：领域目录、本地操作、调用验证和 `ghidra_help`。 |
-| `session` | 会话的打开、启动、等待、重新启动、调用和关闭。 |
+| `session` | 会话的打开、启动、等待、重新启动、调用、检查点、重置、删除和关闭。 |
+| `checkpoint` | `project.gpr` 和 `project.rep/` 的同步快照、保留上限和原子恢复。 |
 | `analysis` | 作为后台作业的自动分析。 |
-| `project` | 已保存的二进制文件和 Ghidra 项目的准备。 |
+| `project` | 已保存的二进制文件、附加的 `.gpr` 项目、项目重置、项目删除和项目准备。 |
+| `import` | 固件导入标志和 `.gpr` 附加的验证与持久化类型。 |
 | `bridge` | 桥接契约、嵌入的运行时、WebSocket 和单个请求。 |
 | `jsonrpc` | 桥接 WebSocket 的严格 JSON-RPC 2.0 编解码器。 |
 | `state` | 共享状态：每个会话一个条目，以及作业。 |
@@ -170,9 +172,10 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 守护进程是一个多线程的 Tokio 程序。
 `state.rs` 中的三种机制保持状态正确：
 
-- **生命周期锁**（`McpState::lifecycle_lock`，异步）使会话生命周期转换按顺序进行。
+- **生命周期锁**（`McpState::lifecycle_lock`，异步）使每个会话的生命周期转换按顺序进行。
+  每个规范化的二进制文件 MD5 拥有各自的锁，因此不同会话上的转换可以并行运行。
   这些转换是：打开、启动、握手、断开和关闭。
-  任务可以跨 await 持有该锁，例如在进程停止期间。
+  任务可以跨 await 持有会话锁，例如在进程停止期间。
 - **状态互斥锁**保护会话映射和作业映射。
   任务只在不会阻塞的短代码段中持有它们，从不跨 await 持有。
   因此，大多数状态方法是同步的。
@@ -226,7 +229,7 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 
 | 位置 | 内容 | 生存期 |
 |---|---|---|
-| **持久主目录**（`GHIDRA_MCP_HOME`，默认 `~/.ghidra-mcp` 或 `%LOCALAPPDATA%\ghidra-mcp`） | `config.toml`，以及 `projects/<md5>/`，其中包含 `binary`、`binary.json`、`binary.lock`、`ghidra/` 中的 Ghidra 项目和 `recovery-backups/` 中保留的崩溃恢复备份。 | 保留。 |
+| **持久主目录**（`GHIDRA_MCP_HOME`，默认 `~/.ghidra-mcp` 或 `%LOCALAPPDATA%\ghidra-mcp`） | `config.toml`，以及 `projects/<md5>/`，其中包含 `binary`、`binary.json`、`binary.lock`、`ghidra/` 中的 Ghidra 项目、`checkpoints/` 中的检查点快照和 `recovery-backups/` 中保留的崩溃恢复备份。 | 保留。 |
 | **运行时目录**（系统运行时目录或临时目录中的 `ghidra-mcp-<uid>`，或 `%LOCALAPPDATA%\ghidra-mcp\run`） | `daemon.lock`、`daemon.log`、`daemon.sock`（Unix）、`server.json`、`sessions/<md5>/session.json`、`logs/<md5>/`、`tmp/`、桥接文件，以及 Unix 上的 `projects` 链接。 | 可以删除。 |
 
 发布程序在目标目录内暂存文件。

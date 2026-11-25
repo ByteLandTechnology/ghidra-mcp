@@ -6,6 +6,10 @@
 use super::*;
 use crate::{mcp::ToolServer, mcp_http, tools::Daemon};
 use axum::{extract::Request, http::Method, Router};
+use rmcp::{
+    model::{CallToolRequestParams, CallToolResult},
+    ServiceExt as _,
+};
 use serde_json::Map;
 use tower::ServiceExt;
 
@@ -82,7 +86,27 @@ fn check_result(response: &Value, expected_url: &str) {
     assert!(upload["expiresAt"].as_u64().is_some());
 }
 
-/// Makes sure that text-only clients can read tool data and errors.
+/// Calls a tool through an external MCP client connection.
+async fn external_mcp_call(
+    server: &ToolServer,
+    name: &str,
+    arguments: Map<String, Value>,
+) -> CallToolResult {
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let server = server.clone();
+    let server_task = tokio::spawn(async move {
+        let service = server.serve(server_io).await.unwrap();
+        let _ = service.waiting().await;
+    });
+    let client = ().serve(client_io).await.unwrap();
+    let params = CallToolRequestParams::new(name.to_string()).with_arguments(arguments);
+    let result = client.peer().call_tool(params).await.unwrap();
+    drop(client);
+    let _ = server_task.await;
+    result
+}
+
+/// Makes sure that text-only MCP clients can read tool data and errors.
 #[tokio::test]
 async fn text_content_contains_tool_results() {
     let (_root, server) = test_server();
@@ -90,11 +114,16 @@ async fn text_content_contains_tool_results() {
         ("ghidra_help", Map::new(), false),
         ("unknown_tool", Map::new(), true),
     ] {
-        let result = server.call(name.into(), arguments).await;
+        let internal = server.call(name.into(), arguments.clone()).await;
+        assert_eq!(internal.is_error == Some(true), is_error);
+        assert_eq!(internal.content, Vec::new());
+
+        let result = external_mcp_call(&server, name, arguments).await;
         assert_eq!(result.is_error == Some(true), is_error);
         let text = &result.content[0].as_text().unwrap().text;
         let content: Value = serde_json::from_str(text).unwrap();
         assert_eq!(Some(content), result.structured_content);
+        assert_eq!(result.structured_content, internal.structured_content);
     }
 }
 
@@ -143,7 +172,7 @@ async fn returns_absolute_upload_urls_over_http() {
         .as_object()
         .unwrap()
         .clone();
-    let result = server.call("ghidra_upload".into(), arguments).await;
+    let result = external_mcp_call(&server, "ghidra_upload", arguments).await;
     let structured = result.structured_content.unwrap();
     assert_eq!(structured["url"], "upload");
     let content: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();

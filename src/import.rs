@@ -123,6 +123,11 @@ pub struct OpenOptions {
 }
 
 impl OpenOptions {
+    /// Returns `true` when no import flag, reimport flag, or program name is set.
+    pub fn is_empty(&self) -> bool {
+        self.import.is_empty() && !self.reimport && self.program_name.is_none()
+    }
+
     /// Validates raw session-open options.
     ///
     /// # Errors

@@ -465,6 +465,9 @@ analyze_headless = ""
 [analysis]
 max_cpu = 4
 
+[checkpoints]
+max_per_binary = 10
+
 [timeouts]
 process_spawn_timeout_sec = 30
 analysis_import_timeout_sec = 1800
@@ -483,6 +486,7 @@ ipc_handshake_timeout_sec = 5
 | `ghidra.home` | Ghidra 安装目录。 |
 | `ghidra.analyze_headless` | `analyzeHeadless` 的路径。 |
 | `analysis.max_cpu` | `analyzeHeadless -max-cpu` 的值。 |
+| `checkpoints.max_per_binary` | 单个二进制文件最多保留的检查点数量。 |
 | `timeouts.process_spawn_timeout_sec` | 启动 Ghidra 进程的时间。 |
 | `timeouts.analysis_import_timeout_sec` | 导入二进制文件的时间。也是 `ghidra_analysis start` 的默认等待时间。 |
 | `timeouts.bridge_connect_timeout_sec` | 启动会话总时间的一部分。 |
@@ -514,7 +518,7 @@ ipc_handshake_timeout_sec = 5
 
 | 工具 | 操作 | 运行位置 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`list`、`get`、`close` | 守护进程。 |
+| `ghidra_session` | `open`、`list`、`get`、`close`、`checkpoint.create`、`checkpoint.list`、`checkpoint.restore`、`reset`、`delete` | 守护进程。 |
 | `ghidra_upload` | `prepare` | 守护进程。 |
 | `ghidra_job` | `list`、`get`、`wait` | 守护进程。 |
 | `ghidra_daemon` | `status`、`shutdown` | 守护进程。 |
@@ -628,6 +632,7 @@ GHIDRA_MCP_HOME/                 # 默认：~/.ghidra-mcp
     |-- binary                  # 已保存的二进制文件（或 binary.bin、.hex、.ihex、.srec）
     |-- binary.json             # 文件名和固件导入标志
     |-- attached.json           # 附加的 .gpr 路径和程序名
+    |-- checkpoints/            # 已保存的项目快照
     |-- recovery-backups/       # 崩溃恢复备份
     `-- ghidra/
         |-- project.gpr
@@ -663,6 +668,7 @@ GHIDRA_MCP_HOME/                 # 默认：~/.ghidra-mcp
 |   |-- binary
 |   |-- binary.json
 |   |-- attached.json
+|   |-- checkpoints\
 |   |-- recovery-backups\
 |   `-- ghidra\
 |       |-- project.gpr

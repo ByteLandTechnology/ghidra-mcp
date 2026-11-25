@@ -90,7 +90,8 @@ impl McpPaths {
         self.runtime_dir.join("attached")
     }
 
-    /// Returns the persistent directory of one binary: `binary`, `binary.json` and `ghidra/`.
+    /// Returns the persistent directory of one binary: `binary`, `binary.json`, `ghidra/`
+    /// and `checkpoints/`.
     pub fn project_dir(&self, md5: &str) -> PathBuf {
         self.projects_dir.join(md5)
     }
@@ -98,6 +99,11 @@ impl McpPaths {
     /// Returns the physical Ghidra project root (`project.gpr` and `project.rep`).
     pub fn ghidra_project_root(&self, md5: &str) -> PathBuf {
         self.project_dir(md5).join("ghidra")
+    }
+
+    /// Returns the persistent checkpoint directory of one binary.
+    pub fn checkpoints_dir(&self, md5: &str) -> PathBuf {
+        self.project_dir(md5).join("checkpoints")
     }
 
     /// Returns the Ghidra project root that the daemon gives to Ghidra: the launch
@@ -151,6 +157,48 @@ impl McpPaths {
         }
     }
 
+    /// Removes the symbolic link alias for an attached `.gpr` session on Unix.
+    ///
+    /// # Errors
+    ///
+    /// Fails if a symbolic link removal fails for a reason other than `NotFound`.
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::unused_self,
+            clippy::unnecessary_wraps,
+            reason = "Unix removes the runtime symbolic link; both platforms share the API"
+        )
+    )]
+    pub fn remove_gpr_launch_alias(&self, md5: &str) -> Result<()> {
+        #[cfg(unix)]
+        {
+            let mut candidates = vec![self.attached_dir().join(md5)];
+            if has_hidden_component(&self.runtime_dir) {
+                candidates.push(
+                    PathBuf::from(format!("/tmp/ghidra-mcp-{}", current_uid()))
+                        .join("attached")
+                        .join(md5),
+                );
+            }
+            for link in candidates {
+                match fs::symlink_metadata(&link) {
+                    Ok(meta) if meta.file_type().is_symlink() => match fs::remove_file(&link) {
+                        Ok(()) => {}
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(err) => return Err(err.into()),
+                    },
+                    Ok(_) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+        #[cfg(windows)]
+        let _ = md5;
+        Ok(())
+    }
+
     /// Returns the project directory of a binary as Ghidra sees it.
     fn launch_project_dir(&self, md5: &str) -> PathBuf {
         #[cfg(unix)]
@@ -168,19 +216,29 @@ impl McpPaths {
         self.runtime_dir.join("sessions")
     }
 
+    /// Returns the runtime snapshot directory of one session.
+    pub fn session_dir(&self, md5: &str) -> PathBuf {
+        self.sessions_dir().join(md5)
+    }
+
     /// Returns the path of the runtime snapshot of a session.
     pub fn session_json(&self, md5: &str) -> PathBuf {
-        self.sessions_dir().join(md5).join("session.json")
+        self.session_dir(md5).join("session.json")
+    }
+
+    /// Returns the runtime log directory of one session.
+    pub fn log_dir(&self, md5: &str) -> PathBuf {
+        self.runtime_dir.join("logs").join(md5)
     }
 
     /// Returns the path of the log of the Ghidra standard output of a session.
     pub fn stdout_log(&self, md5: &str) -> PathBuf {
-        self.runtime_dir.join("logs").join(md5).join("stdout.log")
+        self.log_dir(md5).join("stdout.log")
     }
 
     /// Returns the path of the log of the Ghidra standard error of a session.
     pub fn stderr_log(&self, md5: &str) -> PathBuf {
-        self.runtime_dir.join("logs").join(md5).join("stderr.log")
+        self.log_dir(md5).join("stderr.log")
     }
 }
 

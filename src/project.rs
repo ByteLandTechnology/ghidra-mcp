@@ -10,6 +10,7 @@
 //! ├── binary(.ext)  the saved binary, with .bin, .hex, .ihex, or .srec extensions
 //! ├── binary.json   {"fileName": …}, written last: it shows that the copy is complete
 //! ├── binary.lock   serializes persistence for this MD5 and remains after lock release
+//! ├── checkpoints/  bounded project snapshots for rollback
 //! └── ghidra/       the Ghidra project: project.gpr and project.rep/
 //! ```
 //!
@@ -20,7 +21,7 @@ mod gpr;
 
 pub use gpr::{
     attached_program_name, check_gpr_not_locked, is_attached_gpr_session, persist_attached_gpr,
-    resolve_gpr_path, update_attached_program_name,
+    resolve_gpr_path, update_attached_program_name, ResolvedGpr,
 };
 
 use crate::error::DomainError;
@@ -40,7 +41,7 @@ const BINARY_NAME: &str = "binary";
 /// The file name of the metadata of the binary in its project directory.
 const METADATA_NAME: &str = "binary.json";
 /// The stable file on which readers and writers lock one binary.
-const BINARY_LOCK_NAME: &str = "binary.lock";
+pub(crate) const BINARY_LOCK_NAME: &str = "binary.lock";
 /// Default Ghidra project name for internal binary projects.
 const INTERNAL_PROJECT_NAME: &str = "project";
 
@@ -344,7 +345,8 @@ pub(crate) fn sanitize_text_paths(raw: &str) -> String {
 }
 
 /// Opens the stable per-MD5 lock. Writers have exclusive access.
-pub(super) fn lock_binary(project_dir: &Path, exclusive: bool) -> Result<File> {
+/// Project preparation uses a shared lock.
+pub(crate) fn lock_binary(project_dir: &Path, exclusive: bool) -> Result<File> {
     fs::create_dir_all(project_dir)?;
     let lock = OpenOptions::new()
         .read(true)
@@ -563,164 +565,210 @@ pub fn prepare_project(paths: &McpPaths, md5: &str) -> Result<PreparedProject> {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeMap;
-    use std::time::SystemTime;
-
-    /// Builds isolated [`McpPaths`] inside `root` without hidden segments.
-    fn test_paths(root: &Path) -> McpPaths {
-        let paths = McpPaths {
-            config_toml: root.join("config.toml"),
-            projects_dir: root.join("projects"),
-            runtime_dir: root.join("run"),
-            tmp_dir: root.join("run").join("tmp"),
-        };
-        paths.ensure_layout().unwrap();
-        paths
-    }
-
-    /// Collects file sizes and modification timestamps across `dir`.
-    fn snapshot_tree(dir: &Path) -> BTreeMap<PathBuf, (u64, SystemTime)> {
-        let mut out = BTreeMap::new();
-        let mut stack = vec![dir.to_path_buf()];
-        while let Some(current) = stack.pop() {
-            for entry in fs::read_dir(&current).unwrap() {
-                let entry = entry.unwrap();
-                let path = entry.path();
-                let meta = fs::symlink_metadata(&path).unwrap();
-                if meta.is_dir() {
-                    stack.push(path);
-                } else {
-                    out.insert(path, (meta.len(), meta.modified().unwrap()));
-                }
-            }
-        }
-        out
-    }
-
-    /// Checks that firmware extensions remain on the import path and options persist.
-    #[test]
-    fn keeps_sanitized_firmware_extensions_and_options() {
-        let root = tempfile::tempdir().unwrap();
-        let paths = test_paths(root.path());
-        for (index, file_name, expected_ext, expected_loader) in [
-            (1u8, "STM32.BIN", "binary.bin", None),
-            (2u8, "boot.HEX", "binary.hex", None),
-            (3u8, "app.IHEX", "binary.ihex", None),
-            (
-                4u8,
-                "motorola.SREC",
-                "binary.srec",
-                Some("MotorolaHexLoader"),
-            ),
-            (5u8, "app.elf", "binary", None),
-        ] {
-            let bytes = [index; 16];
-            let md5 = format!("{:x}", md5::compute(bytes));
-            let source = root.path().join(file_name);
-            fs::write(&source, bytes).unwrap();
-            let opts = ImportOptions::from_raw(
-                Some("ARM:LE:32:Cortex"),
-                Some("default"),
-                None,
-                Some("08000000"),
-            )
-            .unwrap();
-            persist_binary_with_options(&paths, &source, &md5, file_name, &opts, false).unwrap();
-            let prepared = prepare_project(&paths, &md5).unwrap();
-            let LaunchMode::ImportBinary {
-                input_path,
-                options,
-            } = prepared.launch_mode
-            else {
-                panic!("expected ImportBinary mode");
-            };
-            assert_eq!(
-                input_path.file_name().unwrap().to_str().unwrap(),
-                expected_ext
-            );
-            assert_eq!(options.processor.as_deref(), Some("ARM:LE:32:Cortex"));
-            assert_eq!(options.compiler_spec.as_deref(), Some("default"));
-            assert_eq!(options.base_address.as_deref(), Some("0x08000000"));
-            assert_eq!(options.effective_loader(&input_path), expected_loader);
-        }
-
-        let lebe = ImportOptions::from_raw(
-            Some("ARM:LEBE:32:v8LEInstruction"),
-            None,
-            Some("ghidra.app.util.opinion.BinaryLoader"),
-            Some("ram:08004000"),
+/// Checks that `md5` has a saved binary that [`reset_project`] can reset.
+///
+/// # Errors
+///
+/// Fails if `md5` is an attached `.gpr` project or has no saved binary.
+pub fn ensure_resettable_binary(paths: &McpPaths, md5: &str) -> Result<()> {
+    let md5 = normalize_md5(md5)?;
+    if is_attached_gpr_session(paths, &md5)? {
+        return Err(DomainError::invalid_argument(
+            "md5",
+            "session reset is not supported for attached .gpr projects",
         )
-        .unwrap();
-        assert_eq!(
-            lebe.processor.as_deref(),
-            Some("ARM:LEBE:32:v8LEInstruction")
-        );
-        assert_eq!(lebe.loader.as_deref(), Some("BinaryLoader"));
-        assert_eq!(lebe.base_address.as_deref(), Some("ram:0x08004000"));
+        .into());
+    }
+    let project_dir = paths.project_dir(&md5);
+    let Some(metadata) = read_metadata(paths, &md5)? else {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before resetting it"),
+        )
+        .into());
+    };
+    let saved_name = metadata.effective_saved_name();
+    if !project_dir.join(&saved_name).is_file() && !project_dir.join(BINARY_NAME).is_file() {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before resetting it"),
+        )
+        .into());
+    }
+    Ok(())
+}
 
-        let saved_md5 = format!("{:x}", md5::compute([9u8; 16]));
-        let saved_src = root.path().join("saved.bin");
-        fs::write(&saved_src, [9u8; 16]).unwrap();
-        let initial =
-            ImportOptions::from_raw(Some("ARM:LE:32:Cortex"), None, None, Some("08000000"))
-                .unwrap();
-        persist_binary_with_options(&paths, &saved_src, &saved_md5, "saved.bin", &initial, false)
-            .unwrap();
-        let ghidra_root = paths.ghidra_project_root(&saved_md5);
-        fs::create_dir_all(ghidra_root.join("project.rep")).unwrap();
-        fs::write(ghidra_root.join("project.gpr"), "<project/>").unwrap();
+/// Removes `ghidra/`, `checkpoints/`, and `recovery-backups/` for one binary while
+/// it keeps `binary` (and `binary.<ext>`), `binary.json`, and `binary.lock`.
+///
+/// # Errors
+///
+/// Fails if `md5` is invalid or an attached `.gpr` session, if `binary` or
+/// `binary.json` is absent, or if a file deletion fails.
+pub fn reset_project(paths: &McpPaths, md5: &str) -> Result<String> {
+    paths.ensure_layout()?;
+    let md5 = normalize_md5(md5)?;
+    if is_attached_gpr_session(paths, &md5)? {
+        return Err(DomainError::invalid_argument(
+            "md5",
+            "session reset is not supported for attached .gpr projects",
+        )
+        .into());
+    }
+    let project_dir = paths.project_dir(&md5);
+    if !project_dir.is_dir() {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before resetting it"),
+        )
+        .into());
+    }
+    let _lock = lock_binary(&project_dir, true)?;
+    let mut metadata = read_metadata(paths, &md5)?.ok_or_else(|| {
+        DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before resetting it"),
+        )
+    })?;
+    let saved_name = metadata.effective_saved_name();
+    if !project_dir.join(&saved_name).is_file() && !project_dir.join(BINARY_NAME).is_file() {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before resetting it"),
+        )
+        .into());
+    }
+    for entry in fs::read_dir(&project_dir).map_err(|err| DomainError::Internal {
+        message: format!(
+            "reading project directory: {}",
+            sanitize_error_path(&err, &project_dir)
+        ),
+    })? {
+        let entry = entry.map_err(|err| DomainError::Internal {
+            message: format!(
+                "reading project directory entry: {}",
+                sanitize_error_path(&err, &project_dir)
+            ),
+        })?;
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            remove_entry(&entry.path())?;
+            continue;
+        };
+        if matches!(name_str, BINARY_NAME | METADATA_NAME | BINARY_LOCK_NAME)
+            || name_str == saved_name
+        {
+            continue;
+        }
+        remove_entry(&entry.path())?;
+    }
+    if metadata.reimport_pending {
+        metadata.reimport_pending = false;
+        atomic_write(
+            &project_dir.join(METADATA_NAME),
+            &serde_json::to_vec(&metadata)?,
+        )?;
+    }
+    sync_directory(&project_dir)?;
+    Ok(metadata.file_name)
+}
 
-        let conflicting =
-            ImportOptions::from_raw(Some("ARM:LE:32:Cortex"), None, None, Some("08004000"))
-                .unwrap();
-        let conflict_err =
-            update_binary_import_options(&paths, &saved_md5, &conflicting, false).unwrap_err();
-        assert!(conflict_err.to_string().contains("reimport=true"));
-        update_binary_import_options(&paths, &saved_md5, &conflicting, true).unwrap();
+/// Removes `projects/<md5>/`, `sessions/<md5>/`, `logs/<md5>/`, and any attached
+/// `.gpr` symbolic link for one session. Returns `true` if at least one directory existed.
+///
+/// # Errors
+///
+/// Fails if `md5` is invalid or if a file or directory deletion fails.
+pub fn delete_project(paths: &McpPaths, md5: &str) -> Result<bool> {
+    let md5 = normalize_md5(md5)?;
+    let project_dir = paths.project_dir(&md5);
+    let session_dir = paths.session_dir(&md5);
+    let log_dir = paths.log_dir(&md5);
+    let mut removed_any = false;
+
+    if project_dir.exists() {
+        removed_any = true;
+        let lock = lock_binary(&project_dir, true)?;
+        for entry in fs::read_dir(&project_dir).map_err(|err| DomainError::Internal {
+            message: format!(
+                "reading project directory: {}",
+                sanitize_error_path(&err, &project_dir)
+            ),
+        })? {
+            let entry = entry.map_err(|err| DomainError::Internal {
+                message: format!(
+                    "reading project directory entry: {}",
+                    sanitize_error_path(&err, &project_dir)
+                ),
+            })?;
+            if entry.file_name().to_str() == Some(BINARY_LOCK_NAME) {
+                continue;
+            }
+            remove_entry(&entry.path())?;
+        }
+        sync_directory(&project_dir)?;
+        // Close the lock handle before directory deletion so Windows can delete binary.lock.
+        drop(lock);
+        remove_dir_if_exists(&project_dir)?;
+        if paths.projects_dir.is_dir() {
+            sync_directory(&paths.projects_dir)?;
+        }
     }
 
-    /// Checks deterministic 32-hex `.gpr` IDs, non-hidden aliases, and zero-mutation lock errors.
-    #[test]
-    fn attaches_hidden_gpr_and_rejects_locked_project_without_changes() {
-        let root = tempfile::tempdir().unwrap();
-        let paths = test_paths(root.path());
-        let hidden_dir = root.path().join(".hidden-ghidra").join("board");
-        fs::create_dir_all(hidden_dir.join("firmware.rep")).unwrap();
-        let gpr_file = hidden_dir.join("firmware.gpr");
-        fs::write(&gpr_file, "<project/>").unwrap();
+    paths.remove_gpr_launch_alias(&md5)?;
 
-        let gpr_first = resolve_gpr_path(&gpr_file).unwrap();
-        let gpr_second = resolve_gpr_path(&gpr_file).unwrap();
-        assert_eq!(gpr_first.md5, gpr_second.md5);
-        assert_eq!(gpr_first.md5.len(), 32);
-        assert!(gpr_first.md5.bytes().all(|b| b.is_ascii_hexdigit()));
-
-        persist_attached_gpr(&paths, &gpr_first, Some("bootloader")).unwrap();
-        let prepared = prepare_project(&paths, &gpr_first.md5).unwrap();
-        #[cfg(unix)]
-        {
-            for part in prepared.ghidra_launch_root.components() {
-                if let std::path::Component::Normal(segment) = part {
-                    assert!(
-                        !segment.to_string_lossy().starts_with('.'),
-                        "launch path has hidden segment: {}",
-                        prepared.ghidra_launch_root.display()
-                    );
-                }
+    for dir in [&session_dir, &log_dir] {
+        if dir.exists() {
+            removed_any = true;
+            remove_dir_if_exists(dir)?;
+            if let Some(parent) = dir.parent().filter(|parent| parent.is_dir()) {
+                sync_directory(parent)?;
             }
         }
-        assert_eq!(prepared.ghidra_project_name, "firmware");
+    }
+    Ok(removed_any)
+}
 
-        // Place a Ghidra `.lock` file and verify zero project file mutations on lock rejection.
-        let lock_path = hidden_dir.join("firmware.lock");
-        fs::write(&lock_path, "Project lock").unwrap();
-        let before = snapshot_tree(&hidden_dir);
-        let err = check_gpr_not_locked(&gpr_first).unwrap_err();
-        assert!(err.to_string().contains("locked"), "{err}");
-        let after = snapshot_tree(&hidden_dir);
-        assert_eq!(before, after);
+/// Deletes a file, symbolic link, or directory tree, and masks server paths in errors.
+pub(crate) fn remove_entry(path: &Path) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(DomainError::Internal {
+                message: format!("reading file metadata: {}", sanitize_error_path(&err, path)),
+            }
+            .into());
+        }
+    };
+    if metadata.file_type().is_dir() {
+        remove_dir_if_exists(path)
+    } else {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(DomainError::Internal {
+                message: format!("removing project file: {}", sanitize_error_path(&err, path)),
+            }
+            .into()),
+        }
     }
 }
+
+/// Deletes a directory tree if it exists, and masks server paths in errors.
+fn remove_dir_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(DomainError::Internal {
+            message: format!(
+                "removing project directory: {}",
+                sanitize_error_path(&err, path)
+            ),
+        }
+        .into()),
+    }
+}
+
+#[cfg(test)]
+mod tests;

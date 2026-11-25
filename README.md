@@ -254,7 +254,7 @@ Use these commands to manage the shared daemon:
 | `ghidra-mcp daemon logs [-n N] [-f]` | Show the last lines of `daemon.log`. With `-f`, show new lines until Ctrl-C. |
 | `ghidra-mcp paths [--json]` | Show the persistent home, the runtime directory and their files. |
 | `ghidra-mcp config path\|show\|edit\|check` | Find, show, change or check `config.toml`. |
-| `ghidra-mcp session list\|get\|open\|close` | Manage the sessions of the daemon. |
+| `ghidra-mcp session list\|get\|open\|close\|checkpoint\|reset\|delete` | Manage the sessions and checkpoints of the daemon. |
 | `ghidra-mcp job list\|get\|wait` | Examine the background jobs of the daemon. |
 
 If a session is live or a job runs, `daemon stop` does not stop the daemon.
@@ -473,6 +473,9 @@ analyze_headless = ""
 [analysis]
 max_cpu = 4
 
+[checkpoints]
+max_per_binary = 10
+
 [timeouts]
 process_spawn_timeout_sec = 30
 analysis_import_timeout_sec = 1800
@@ -491,6 +494,7 @@ ipc_handshake_timeout_sec = 5
 | `ghidra.home` | The Ghidra installation directory. |
 | `ghidra.analyze_headless` | The path of `analyzeHeadless`. |
 | `analysis.max_cpu` | The value of `analyzeHeadless -max-cpu`. |
+| `checkpoints.max_per_binary` | The maximum number of retained checkpoints for one binary. |
 | `timeouts.process_spawn_timeout_sec` | The time to start the Ghidra process. |
 | `timeouts.analysis_import_timeout_sec` | The time to import a binary. It is also the default wait for `ghidra_analysis start`. |
 | `timeouts.bridge_connect_timeout_sec` | A part of the total time to start a session. |
@@ -522,7 +526,7 @@ A domain tool has these arguments:
 
 | Tool | Operations | Runs in |
 | --- | --- | --- |
-| `ghidra_session` | `open`, `list`, `get`, `close` | The daemon. |
+| `ghidra_session` | `open`, `list`, `get`, `close`, `checkpoint.create`, `checkpoint.list`, `checkpoint.restore`, `reset`, `delete` | The daemon. |
 | `ghidra_upload` | `prepare` | The daemon. |
 | `ghidra_job` | `list`, `get`, `wait` | The daemon. |
 | `ghidra_daemon` | `status`, `shutdown` | The daemon. |
@@ -638,6 +642,7 @@ GHIDRA_MCP_HOME/                 # default: ~/.ghidra-mcp
     |-- binary                  # Saved binary (or binary.bin, .hex, .ihex, .srec)
     |-- binary.json             # File name and firmware import flags
     |-- attached.json           # Attached .gpr path and program name
+    |-- checkpoints/            # Saved project snapshots
     |-- recovery-backups/       # Crash recovery backups
     `-- ghidra/
         |-- project.gpr
@@ -673,6 +678,7 @@ On Windows, the default layout is:
 |   |-- binary
 |   |-- binary.json
 |   |-- attached.json
+|   |-- checkpoints\
 |   |-- recovery-backups\
 |   `-- ghidra\
 |       |-- project.gpr
