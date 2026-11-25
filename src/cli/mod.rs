@@ -127,8 +127,8 @@ async fn execute(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Call { tool, arguments }) => {
-            let result = ToolServer::proxy()?.call(tool, arguments).await;
-            output::display_call(result)
+            let result = ToolServer::proxy()?.call_raw(tool, arguments).await;
+            output::display_call(&result)
         }
     }
 }

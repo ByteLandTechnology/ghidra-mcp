@@ -3,8 +3,8 @@
 
 //! The output of the CLI: JSON, aligned tables, and the conversion of tool results.
 
+use crate::mcp::RawToolResult;
 use anyhow::{anyhow, Result};
-use rmcp::model::CallToolResult;
 use serde_json::Value;
 use std::fmt;
 use std::io::{self, Write};
@@ -42,27 +42,14 @@ pub fn print_json(value: &impl serde::Serialize) -> Result<()> {
 }
 
 /// Writes a tool result of `call`. For a success, it writes the structured
-/// result to stdout. For a failure, it writes the structured result or the
-/// error text to stderr.
-pub fn display_call(result: CallToolResult) -> Result<ExitCode> {
-    if result.is_error == Some(true) {
-        if let Some(value) = &result.structured_content {
-            write_json(io::stderr().lock(), value)?;
-        } else {
-            let mut stderr = io::stderr().lock();
-            for content in &result.content {
-                if let Some(text) = content.as_text() {
-                    writeln!(stderr, "{}", text.text)?;
-                }
-            }
-            stderr.flush()?;
-        }
+/// result to stdout. For a failure, it writes the structured result to stderr.
+pub fn display_call(result: &RawToolResult) -> Result<ExitCode> {
+    let value: Value = serde_json::from_str(result.structured_content.get())?;
+    if result.is_error {
+        write_json(io::stderr().lock(), &value)?;
         Ok(ExitCode::FAILURE)
     } else {
-        write_json(
-            io::stdout().lock(),
-            &result.structured_content.unwrap_or(Value::Null),
-        )?;
+        write_json(io::stdout().lock(), &value)?;
         Ok(ExitCode::SUCCESS)
     }
 }
@@ -72,23 +59,15 @@ pub fn display_call(result: CallToolResult) -> Result<ExitCode> {
 /// # Errors
 ///
 /// Fails with the error message of the tool if the call failed.
-pub fn tool_value(result: CallToolResult) -> Result<Value> {
-    if result.is_error != Some(true) {
-        return Ok(result.structured_content.unwrap_or(Value::Null));
+pub fn tool_value(result: &RawToolResult) -> Result<Value> {
+    let value: Value = serde_json::from_str(result.structured_content.get())?;
+    if !result.is_error {
+        return Ok(value);
     }
-    let message = result
-        .structured_content
-        .as_ref()
-        .and_then(|value| value.pointer("/response/error/message"))
+    let message = value
+        .pointer("/response/error/message")
         .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            result
-                .content
-                .iter()
-                .find_map(|content| content.as_text().map(|text| text.text.clone()))
-        })
-        .unwrap_or_else(|| "the tool call failed".to_string());
+        .map_or_else(|| "the tool call failed".to_string(), str::to_owned);
     Err(anyhow!(message))
 }
 

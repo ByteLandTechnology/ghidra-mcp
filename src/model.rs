@@ -10,7 +10,7 @@
 //! field names and the value spellings are part of the public contract.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, value::RawValue, Value};
 use std::fmt;
 
 /// The lifecycle status of a session.
@@ -244,7 +244,7 @@ pub struct RpcEnvelope {
     pub status: Option<i32>,
     /// The result of the method, for a success.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
+    pub result: Option<Box<RawValue>>,
     /// The error, for a failure.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<RpcError>,

@@ -813,7 +813,15 @@ mod tests {
                     r#"{"jsonrpc":"2.0","id":"valid","result":{"ok":true}}"#,
                 )
                 .await;
-                assert_eq!(receiver.await.unwrap().result, Some(json!({ "ok": true })));
+                assert_eq!(
+                    receiver
+                        .await
+                        .unwrap()
+                        .result
+                        .as_deref()
+                        .map(serde_json::value::RawValue::get),
+                    Some(r#"{"ok":true}"#)
+                );
 
                 let (sender, receiver) = oneshot::channel();
                 state.begin_request(md5, "request", sender).unwrap();

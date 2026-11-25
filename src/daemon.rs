@@ -14,6 +14,8 @@
 //! this rule. The daemon runs until it gets a stop signal or `ghidra_daemon
 //! shutdown`. Then it stops all Ghidra processes.
 
+mod raw_ipc;
+
 mod ipc {
     //! The local endpoint of the daemon, its lifetime lock and its detached start.
     //!
@@ -22,15 +24,12 @@ mod ipc {
     //! pipe. The daemon makes sure that the runtime directory is private to the
     //! current user. For this reason, no other user can put or replace files in it.
 
+    use super::raw_ipc::{ClientCallError, RawSocketClient};
+    use crate::mcp::RawToolResult;
     use crate::paths::{atomic_write, runtime_dir};
     use anyhow::{bail, Context, Result};
     use interprocess::local_socket::tokio::{prelude::*, Listener, Stream};
     use interprocess::local_socket::{ListenerOptions, Name};
-    use rmcp::{
-        model::{CallToolRequestParams, CallToolResult},
-        service::RunningService,
-        RoleClient, ServiceExt,
-    };
     use serde_json::{json, Map, Value};
     use std::fs::{self, File, OpenOptions, TryLockError};
     use std::io;
@@ -151,8 +150,8 @@ mod ipc {
 
     /// Manages persistent connections from the stdio proxy or CLI to the daemon.
     pub struct ProxyConnectionManager {
-        /// The cached active MCP client connection.
-        client: Mutex<Option<Arc<RunningService<RoleClient, ()>>>>,
+        /// The cached active raw JSON-RPC client connection.
+        client: Mutex<Option<Arc<RawSocketClient>>>,
         /// Time limits for daemon startup and IPC handshakes.
         timeouts: ProxyTimeouts,
         /// The runtime directory that contains `server.json` and the socket endpoints.
@@ -205,43 +204,37 @@ mod ipc {
             Ok(GLOBAL.get().expect("proxy manager was initialized").clone())
         }
 
-        /// Calls a tool through the daemon over the reused connection.
+        /// Calls a tool through the daemon over the reused raw JSON-RPC connection.
         ///
         /// # Errors
         ///
         /// Fails if the daemon connection or the tool call transmission fails.
-        pub async fn call_tool(
+        pub async fn call_tool_raw(
             &self,
             name: String,
             arguments: Map<String, Value>,
-        ) -> Result<CallToolResult> {
-            let service = {
+        ) -> Result<RawToolResult> {
+            let client = {
                 let mut guard = self.client.lock().await;
                 self.get_connection(&mut guard).await?
             };
 
-            let params = CallToolRequestParams::new(name).with_arguments(arguments);
             // The daemon owns command deadlines. Launch and job waits can be long.
             // A proxy timeout can hide a successful mutation. It does not stop the mutation.
-            match service.peer().call_tool(params).await {
+            match client.call_tool(&name, &arguments).await {
                 Ok(result) => Ok(result),
                 Err(error) => {
-                    if service.is_closed()
-                        || matches!(
-                            error,
-                            rmcp::service::ServiceError::TransportClosed
-                                | rmcp::service::ServiceError::TransportSend(_)
-                        )
-                    {
+                    if client.is_closed() || matches!(error, ClientCallError::Closed(_)) {
                         let mut guard = self.client.lock().await;
                         if guard
                             .as_ref()
-                            .is_some_and(|current| Arc::ptr_eq(current, &service))
+                            .is_some_and(|current| Arc::ptr_eq(current, &client))
                         {
                             *guard = None;
                         }
                     }
-                    Err(anyhow::anyhow!(error)
+                    Err(error
+                        .into_error()
                         .context("calling daemon tool; the request will not be replayed"))
                 }
             }
@@ -250,33 +243,33 @@ mod ipc {
         /// Returns the cached connection, or opens a new connection when necessary.
         async fn get_connection(
             &self,
-            guard: &mut Option<Arc<RunningService<RoleClient, ()>>>,
-        ) -> Result<Arc<RunningService<RoleClient, ()>>> {
-            if let Some(ref service) = *guard {
-                if !service.is_closed() {
-                    return Ok(service.clone());
+            guard: &mut Option<Arc<RawSocketClient>>,
+        ) -> Result<Arc<RawSocketClient>> {
+            if let Some(ref client) = *guard {
+                if !client.is_closed() {
+                    return Ok(client.clone());
                 }
                 *guard = None;
             }
 
-            let service = if let Some(service) = self.connect_socket().await? {
-                service
+            let client = if let Some(client) = self.connect_socket().await? {
+                client
             } else {
                 spawn_daemon(None)?;
                 self.wait_until_ready().await?
             };
 
-            let service = Arc::new(service);
-            *guard = Some(service.clone());
-            Ok(service)
+            let client = Arc::new(client);
+            *guard = Some(client.clone());
+            Ok(client)
         }
 
         /// Waits until a daemon that starts serves requests.
-        async fn wait_until_ready(&self) -> Result<RunningService<RoleClient, ()>> {
+        async fn wait_until_ready(&self) -> Result<RawSocketClient> {
             let deadline = tokio::time::Instant::now() + self.timeouts.daemon_start;
             loop {
-                if let Some(service) = self.connect_socket().await? {
-                    return Ok(service);
+                if let Some(client) = self.connect_socket().await? {
+                    return Ok(client);
                 }
                 if tokio::time::Instant::now() >= deadline {
                     bail!(
@@ -296,7 +289,7 @@ mod ipc {
         /// Fails if the daemon metadata cannot be read or the handshake fails.
         pub async fn connect_existing(&self) -> Result<bool> {
             let mut guard = self.client.lock().await;
-            if guard.as_ref().is_some_and(|service| !service.is_closed()) {
+            if guard.as_ref().is_some_and(|client| !client.is_closed()) {
                 return Ok(true);
             }
             *guard = self.connect_socket().await?.map(Arc::new);
@@ -314,8 +307,8 @@ mod ipc {
                 return Ok(false);
             }
             spawn_daemon(listen)?;
-            let service = self.wait_until_ready().await?;
-            *self.client.lock().await = Some(Arc::new(service));
+            let client = self.wait_until_ready().await?;
+            *self.client.lock().await = Some(Arc::new(client));
             Ok(true)
         }
 
@@ -329,8 +322,8 @@ mod ipc {
         /// after [`STOP_TIMEOUT`].
         pub async fn wait_until_stopped(&self) -> Result<()> {
             let original = self.daemon_pid()?;
-            if let Some(service) = self.client.lock().await.take() {
-                service.cancellation_token().cancel();
+            if let Some(client) = self.client.lock().await.take() {
+                client.close().await;
             }
             let deadline = tokio::time::Instant::now() + STOP_TIMEOUT;
             loop {
@@ -408,15 +401,19 @@ mod ipc {
             }
         }
 
-        /// Connects to the local socket and performs the MCP handshake.
-        async fn connect_socket(&self) -> Result<Option<RunningService<RoleClient, ()>>> {
+        /// Connects to the local socket and performs the raw JSON-RPC handshake.
+        async fn connect_socket(&self) -> Result<Option<RawSocketClient>> {
             let Some(stream) = self.open_stream().await? else {
                 return Ok(None);
             };
-            let client = tokio::time::timeout(self.timeouts.handshake, ().serve(stream))
-                .await
-                .context("daemon MCP handshake timed out")?
-                .context("initializing daemon MCP connection")?;
+            let (read_half, write_half) = tokio::io::split(stream);
+            let client = tokio::time::timeout(
+                self.timeouts.handshake,
+                RawSocketClient::connect_io(read_half, write_half),
+            )
+            .await
+            .context("daemon MCP handshake timed out")?
+            .context("initializing daemon MCP connection")?;
             Ok(Some(client))
         }
     }
@@ -543,6 +540,9 @@ mod ipc {
 }
 
 pub use ipc::ProxyConnectionManager;
+pub(crate) use raw_ipc::serve_client_stream;
+#[cfg(test)]
+pub(crate) use raw_ipc::RawSocketClient;
 
 use crate::bridge::AGENT_WS_PATH;
 use crate::mcp::ToolServer;
@@ -556,7 +556,6 @@ use axum::{
     Router,
 };
 use interprocess::local_socket::traits::tokio::Listener as _;
-use rmcp::ServiceExt;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -718,16 +717,7 @@ async fn serve_socket(
                 let stream = accepted.context("accepting daemon MCP connection")?;
                 let server = server.clone();
                 let client_cancel = cancellation.child_token();
-                clients.spawn(async move {
-                    match server.serve_with_ct(stream, client_cancel).await {
-                        Ok(service) => {
-                          let _ = service.waiting().await;
-                        }
-                        Err(error) => crate::process::log_daemon(
-                          &format!("daemon MCP connection failed: {error}"),
-                        ),
-                    }
-                });
+                clients.spawn(serve_client_stream(stream, server, client_cancel));
             }
             _ = clients.join_next(), if !clients.is_empty() => {}
         }

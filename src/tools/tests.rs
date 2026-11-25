@@ -4,7 +4,7 @@
 //! Tests of the tool definitions, the catalog, `ghidra_help`, and the call validation.
 
 use super::catalog::Md5Rule;
-use super::{help, prepare, tool_definitions, Route};
+use super::{help, prepare, tool_definitions, Route, ToolPayload};
 use crate::error::DomainError;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -546,9 +546,13 @@ async fn job_list_and_daemon_status_show_jobs() {
         super::call(&daemon, tool, object(json!({ "operation": operation })))
     };
 
-    let (_, listed) = call("ghidra_job", "list").await.unwrap();
+    let (_, ToolPayload::Value(listed)) = call("ghidra_job", "list").await.unwrap() else {
+        panic!("expected local Value payload");
+    };
     assert_eq!(listed["jobs"][0]["id"], job.id);
-    let (_, status) = call("ghidra_daemon", "status").await.unwrap();
+    let (_, ToolPayload::Value(status)) = call("ghidra_daemon", "status").await.unwrap() else {
+        panic!("expected local Value payload");
+    };
     assert_eq!(status["daemon"]["pid"], std::process::id());
     assert_eq!(status["jobs"][0]["id"], job.id);
 }
@@ -573,7 +577,9 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     assert!(reason(&error).contains(md5), "{error:#}");
     assert!(!daemon.control.shutdown.is_cancelled());
 
-    let (_, result) = shutdown(true).await.unwrap();
+    let (_, ToolPayload::Value(result)) = shutdown(true).await.unwrap() else {
+        panic!("expected local Value payload");
+    };
     assert_eq!(result["sessions"], json!([md5]));
     tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -610,13 +616,15 @@ async fn params_accepts_null_and_json_object_string() {
 
     let root = tempfile::tempdir().unwrap();
     let daemon = test_daemon(root.path());
-    let (_, result) = super::call(
+    let (_, ToolPayload::Value(result)) = super::call(
         &daemon,
         "ghidra_daemon",
         object(json!({ "operation": "shutdown", "params": "{\"force\":true}" })),
     )
     .await
-    .expect("local call with JSON object string params");
+    .expect("local call with JSON object string params") else {
+        panic!("expected local Value payload");
+    };
     assert_eq!(result["sessions"], json!([]));
 }
 
@@ -706,4 +714,67 @@ fn bridge_address_error_preserves_target_and_spaces() {
             reason: "unable to parse address: bad (valid spaces: [EXTERNAL, ram])".to_string(),
         }
     );
+}
+
+/// Checks that `Route::Bridge` encodes `{"response": envelope}` directly into `ToolPayload::Raw`.
+#[tokio::test]
+async fn bridge_route_returns_raw_payload_without_reformatting() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let mut record =
+        crate::model::SessionRecord::launching(md5.into(), "sample.bin".into(), "tok".into());
+    record.mark_ready();
+    daemon.state.put_session(&record).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    assert!(daemon.state.attach_bridge(
+        md5,
+        crate::state::ConnectionHandle {
+            conn_id: "conn-1".into(),
+            sender: tx,
+        },
+    ));
+
+    let raw_slice = r#"{"items":[{"name":"main","entry":"0x00401000"}],"nextCursor":null}"#;
+    let state = daemon.state.clone();
+    tokio::spawn(async move {
+        let outbound = rx
+            .recv()
+            .await
+            .expect("bridge request")
+            .into_text()
+            .expect("text frame");
+        let parsed: Value = serde_json::from_str(&outbound).expect("valid request JSON");
+        assert_eq!(parsed["method"], "function.list");
+        let id = parsed["id"].as_str().expect("string id").to_string();
+        let frame = format!(r#"{{"jsonrpc":"2.0","id":"{id}","result":{raw_slice}}}"#);
+        match crate::jsonrpc::decode_incoming(&frame, md5).expect("valid bridge reply") {
+            crate::jsonrpc::Incoming::Response { id, envelope } => {
+                state.deliver_response(md5, "conn-1", &id, *envelope);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    });
+
+    let (summary, payload) = super::call(
+        &daemon,
+        "ghidra_function",
+        object(json!({ "operation": "list", "md5": md5, "params": {} })),
+    )
+    .await
+    .expect("bridge call");
+    assert_eq!(summary, "ghidra_function list completed");
+    match payload {
+        ToolPayload::Raw(raw) => {
+            assert!(
+                raw.get().contains(raw_slice),
+                "raw payload must preserve exact bridge slice: {}",
+                raw.get()
+            );
+            let decoded: Value = serde_json::from_str(raw.get()).expect("valid JSON");
+            assert_eq!(decoded["response"]["status"], 200);
+            assert_eq!(decoded["response"]["result"]["items"][0]["name"], "main");
+        }
+        ToolPayload::Value(other) => panic!("expected ToolPayload::Raw, got Value({other})"),
+    }
 }

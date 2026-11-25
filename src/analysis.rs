@@ -170,10 +170,44 @@ fn rpc_result(envelope: RpcEnvelope) -> Result<Value> {
     if let Some(error) = envelope.error {
         return Err(DomainError::from_bridge(envelope.status, &error).into());
     }
-    envelope.result.ok_or_else(|| {
+    let raw = envelope.result.ok_or_else(|| DomainError::Internal {
+        message: "bridge response missing result".to_string(),
+    })?;
+    serde_json::from_str(raw.get()).map_err(|error| {
         DomainError::Internal {
-            message: "bridge response missing result".to_string(),
+            message: format!("bridge response contains invalid JSON: {error}"),
         }
         .into()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::RpcError;
+    use serde_json::{json, value::RawValue};
+
+    /// Checks that `rpc_result` parses `RawValue` payloads and maps absent or error envelopes.
+    #[test]
+    fn parses_raw_bridge_results_and_surfaces_errors() {
+        let mut ok = RpcEnvelope::response("1".into(), "md5".into(), 200);
+        ok.result = Some(
+            RawValue::from_string(r#"{"status":"completed","analyzed":true}"#.into()).unwrap(),
+        );
+        assert_eq!(
+            rpc_result(ok).unwrap(),
+            json!({ "status": "completed", "analyzed": true })
+        );
+
+        let missing = RpcEnvelope::response("2".into(), "md5".into(), 200);
+        assert!(rpc_result(missing).is_err());
+
+        let mut failed = RpcEnvelope::response("3".into(), "md5".into(), 400);
+        failed.error = Some(RpcError {
+            code: "invalid_request".into(),
+            message: "bad parameter".into(),
+            target: Some("address".into()),
+        });
+        assert!(rpc_result(failed).is_err());
+    }
 }

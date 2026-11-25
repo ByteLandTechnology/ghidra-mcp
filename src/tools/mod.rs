@@ -36,8 +36,8 @@ use anyhow::Result;
 use catalog::{Operation, Route, HELP_TOOL};
 use futures::future::BoxFuture;
 use serde::de::{DeserializeOwned, Error as _};
-use serde::{Deserialize, Deserializer};
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{value::RawValue, Map, Value};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio_util::sync::CancellationToken;
@@ -73,8 +73,24 @@ impl Default for Control {
     }
 }
 
-/// The summary text and the structured result of an operation.
+/// The summary text and the structured result of a local operation.
 type Output = (String, Value);
+
+/// The structured JSON result of one tool call.
+#[derive(Debug, Clone)]
+pub enum ToolPayload {
+    /// A JSON value tree from `ghidra_help` or a local operation.
+    Value(Value),
+    /// A pre-serialized JSON object from a bridge method.
+    Raw(Box<RawValue>),
+}
+
+/// The JSON wrapper of a bridge response.
+#[derive(Serialize)]
+struct BridgeOutput<'a> {
+    /// The bridge envelope under `"response"`.
+    response: &'a crate::model::RpcEnvelope,
+}
 
 /// The validated input of one operation.
 struct Request {
@@ -165,19 +181,30 @@ fn value_type_name(value: &Value) -> &'static str {
 ///
 /// Fails if the tool, the operation or the arguments are not valid, or if the
 /// operation fails.
-pub async fn call(daemon: &Daemon, tool: &str, arguments: Map<String, Value>) -> Result<Output> {
+pub async fn call(
+    daemon: &Daemon,
+    tool: &str,
+    arguments: Map<String, Value>,
+) -> Result<(String, ToolPayload)> {
     if tool == HELP_TOOL {
-        return help::run(arguments);
+        let (summary, value) = help::run(arguments)?;
+        return Ok((summary, ToolPayload::Value(value)));
     }
     let (operation, request) = prepare(tool, arguments)?;
     match &operation.route {
-        Route::Local(run) => run(daemon, request).await,
+        Route::Local(run) => {
+            let (summary, value) = run(daemon, request).await?;
+            Ok((summary, ToolPayload::Value(value)))
+        }
         Route::Bridge(method) => {
             let md5 = request.session();
             let response = session::call(&daemon.state, &md5, method, request.params).await?;
+            let raw = serde_json::value::to_raw_value(&BridgeOutput {
+                response: &response,
+            })?;
             Ok((
                 format!("{} completed", request.label),
-                json!({ "response": response }),
+                ToolPayload::Raw(raw),
             ))
         }
     }

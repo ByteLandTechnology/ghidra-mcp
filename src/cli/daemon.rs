@@ -105,8 +105,10 @@ async fn call(manager: &ProxyConnectionManager, operation: &str, params: Value) 
     let mut arguments = Map::new();
     arguments.insert("operation".into(), operation.into());
     arguments.insert("params".into(), Value::Object(params));
-    let result = manager.call_tool("ghidra_daemon".into(), arguments).await?;
-    output::tool_value(result)
+    let result = manager
+        .call_tool_raw("ghidra_daemon".into(), arguments)
+        .await?;
+    output::tool_value(&result)
 }
 
 /// Runs `daemon start`.

@@ -19,7 +19,7 @@
 use crate::model::{RpcEnvelope, RpcError};
 use anyhow::{bail, ensure, Result};
 use serde::{Deserialize, Deserializer};
-use serde_json::{json, Map, Value};
+use serde_json::{json, value::RawValue, Map, Value};
 
 /// The only `jsonrpc` value that the decoder accepts.
 const VERSION: &str = "2.0";
@@ -59,8 +59,8 @@ struct Message {
     /// Only in responses.
     id: Option<Value>,
     /// The result of a successful response. An explicit `null` counts as a value.
-    #[serde(default, deserialize_with = "present")]
-    result: Option<Value>,
+    #[serde(default, deserialize_with = "present_raw")]
+    result: Option<Box<RawValue>>,
     /// The error of a failed response.
     error: Option<ErrorObject>,
 }
@@ -109,6 +109,14 @@ struct ErrorData {
 /// Then the decoder can identify a field that is not present.
 fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
     Value::deserialize(deserializer).map(Some)
+}
+
+/// Deserializes a raw JSON field as `Some`. A null value also becomes `Some`.
+/// Then the decoder can identify a `result` field that is not present.
+fn present_raw<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Box<RawValue>>, D::Error> {
+    Box::<RawValue>::deserialize(deserializer).map(Some)
 }
 
 /// Encodes one request. If `params` is `null`, it becomes `{}`, because the
@@ -235,4 +243,57 @@ fn decode_error(id: &str, session_id: &str, error: ErrorObject) -> Result<RpcEnv
     });
     envelope.error_data = Some(Value::Object(raw));
     Ok(envelope)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checks that `decode_incoming` keeps raw JSON slices and explicit `null` results.
+    #[test]
+    fn decodes_raw_results_and_explicit_null() {
+        let session = "0123456789abcdef0123456789abcdef";
+        let payload = r#"{"functions":[{"name":"entry","address":"0x401000"}],"count":1}"#;
+        let frame = format!(r#"{{"jsonrpc":"2.0","id":"req-1","result":{payload}}}"#);
+        match decode_incoming(&frame, session).expect("valid object result") {
+            Incoming::Response { id, envelope } => {
+                assert_eq!(id, "req-1");
+                assert_eq!(envelope.status, Some(200));
+                assert_eq!(envelope.result.as_deref().map(RawValue::get), Some(payload));
+            }
+            other => panic!("unexpected incoming message: {other:?}"),
+        }
+
+        let null_frame = r#"{"jsonrpc":"2.0","id":7,"result":null}"#;
+        match decode_incoming(null_frame, session).expect("valid null result") {
+            Incoming::Response { id, envelope } => {
+                assert_eq!(id, "7");
+                assert_eq!(envelope.result.as_deref().map(RawValue::get), Some("null"));
+            }
+            other => panic!("unexpected incoming message: {other:?}"),
+        }
+    }
+
+    /// Checks that `decode_incoming` enforces strict JSON-RPC 2.0 response and field rules.
+    #[test]
+    fn refuses_ambiguous_unknown_and_invalid_messages() {
+        let session = "0123456789abcdef0123456789abcdef";
+        for invalid in [
+            r#"{"jsonrpc":"2.0","id":"1"}"#,
+            r#"{"jsonrpc":"2.0","id":"1","result":null,"error":{"code":-32603,"message":"fail"}}"#,
+            r#"{"jsonrpc":"2.0","id":"1","result":{"ok":true},"extra":1}"#,
+            r#"{"jsonrpc":"2.0","id":null,"result":{"ok":true}}"#,
+            r#"{"jsonrpc":"2.0","result":{"ok":true}}"#,
+            r#"{"jsonrpc":"2.0","id":"1","result":{"broken":}}"#,
+            concat!(
+                r#"{"jsonrpc":"2.0","method":"ghidra.ready","#,
+                r#""params":{"session_id":"wrong","program_name":"p"}}"#
+            ),
+        ] {
+            assert!(
+                decode_incoming(invalid, session).is_err(),
+                "message must fail validation: {invalid}"
+            );
+        }
+    }
 }

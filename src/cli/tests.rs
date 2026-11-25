@@ -82,3 +82,30 @@ fn durations_are_short() {
     assert_eq!(super::output::duration(65), "1m 5s");
     assert_eq!(super::output::duration(3725), "1h 2m 5s");
 }
+
+/// Checks that `output::tool_value` reads `RawToolResult` without `content[0].text`.
+#[test]
+fn tool_value_reads_raw_results_and_error_envelopes() {
+    let ok = crate::mcp::RawToolResult {
+        structured_content: serde_json::value::RawValue::from_string(
+            r#"{"sessions":[{"md5":"0123456789abcdef0123456789abcdef"}]}"#.into(),
+        )
+        .unwrap(),
+        is_error: false,
+    };
+    let parsed = super::output::tool_value(&ok).expect("valid tool value");
+    assert_eq!(
+        parsed["sessions"][0]["md5"],
+        "0123456789abcdef0123456789abcdef"
+    );
+
+    let failed = crate::mcp::RawToolResult {
+        structured_content: serde_json::value::RawValue::from_string(
+            r#"{"response":{"error":{"message":"unknown tool: ghidra_daemon"}}}"#.into(),
+        )
+        .unwrap(),
+        is_error: true,
+    };
+    let err = super::output::tool_value(&failed).expect_err("error result must fail");
+    assert_eq!(err.to_string(), "unknown tool: ghidra_daemon");
+}

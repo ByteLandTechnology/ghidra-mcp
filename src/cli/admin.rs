@@ -199,8 +199,8 @@ async fn call(tool: &str, operation: &str, md5: Option<&str>, params: Value) -> 
         arguments.insert("md5".into(), md5.into());
     }
     arguments.insert("params".into(), params);
-    let result = ToolServer::proxy()?.call(tool.into(), arguments).await;
-    output::tool_value(result)
+    let result = ToolServer::proxy()?.call_raw(tool.into(), arguments).await;
+    output::tool_value(&result)
 }
 
 /// Runs one `session` command.

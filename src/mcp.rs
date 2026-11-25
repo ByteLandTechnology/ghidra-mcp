@@ -6,7 +6,14 @@
 //! In the daemon, it runs the tool calls. In the stdio proxy, it sends them to
 //! the daemon. In both roles, it shows the same tools (see [`crate::tools`]).
 
-use crate::{error::DomainError, tools::Daemon};
+mod stdio;
+
+pub use stdio::serve_stream_with_ct;
+
+use crate::{
+    error::DomainError,
+    tools::{Daemon, ToolPayload},
+};
 use anyhow::Result;
 use rmcp::{
     handler::server::ServerHandler,
@@ -16,10 +23,20 @@ use rmcp::{
         ServerCapabilities, ServerConfig, Tool,
     },
     service::RequestContext,
-    RoleServer, ServiceExt,
+    RoleServer,
 };
-use serde_json::{Map, Value};
+use serde_json::{value::RawValue, Map, Value};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+
+/// A structured tool response before external MCP text duplication.
+#[derive(Debug, Clone)]
+pub struct RawToolResult {
+    /// Raw JSON value of `structuredContent`.
+    pub structured_content: Box<RawValue>,
+    /// Whether the tool call produced a domain or bridge error.
+    pub is_error: bool,
+}
 
 /// The location where tool calls run.
 #[derive(Clone)]
@@ -66,21 +83,23 @@ impl ToolServer {
             .collect()
     }
 
-    /// Runs one tool call. The result contains the failures, as MCP specifies.
-    /// Failures are not protocol errors.
-    pub async fn call(&self, name: String, arguments: Map<String, Value>) -> CallToolResult {
-        let mut result = match &self.backend {
+    /// Runs one tool call without formatting `content[0].text` or `Value` trees
+    /// for raw bridge payloads.
+    pub async fn call_raw(&self, name: String, arguments: Map<String, Value>) -> RawToolResult {
+        match &self.backend {
             Backend::Local(daemon) => {
-                if daemon.state.is_shutting_down() {
-                    let err = DomainError::ShuttingDown;
-                    let mut res = CallToolResult::error(vec![ContentBlock::text(err.to_string())]);
-                    res.structured_content = Some(err.to_envelope());
-                    res
-                } else {
-                    to_tool_result(crate::tools::call(daemon, &name, arguments).await)
+                let (payload, is_error) = eval_local(daemon, &name, arguments).await;
+                let structured_content = match payload {
+                    ToolPayload::Raw(raw) => raw,
+                    ToolPayload::Value(value) => serde_json::value::to_raw_value(&value)
+                        .expect("tool Value serializes to RawValue"),
+                };
+                RawToolResult {
+                    structured_content,
+                    is_error,
                 }
             }
-            Backend::Proxy(manager) => match manager.call_tool(name, arguments).await {
+            Backend::Proxy(manager) => match manager.call_tool_raw(name, arguments).await {
                 Ok(result) => result,
                 Err(error) => {
                     if error.downcast_ref::<DomainError>().is_none() {
@@ -88,52 +107,82 @@ impl ToolServer {
                             "proxy tool call failed: {error:#}"
                         ));
                     }
-                    let domain_err = DomainError::from_error(&error);
-                    let mut res =
-                        CallToolResult::error(vec![ContentBlock::text(domain_err.to_string())]);
-                    res.structured_content = Some(domain_err.to_envelope());
-                    res
+                    let envelope = DomainError::from_error(&error).to_envelope();
+                    let structured_content = serde_json::value::to_raw_value(&envelope)
+                        .expect("error envelope serializes to RawValue");
+                    RawToolResult {
+                        structured_content,
+                        is_error: true,
+                    }
                 }
             },
+        }
+    }
+
+    /// Runs one tool call for external MCP handlers that need `CallToolResult`.
+    /// The result contains the failures, as MCP specifies. Failures are not protocol errors.
+    pub async fn call(&self, name: String, arguments: Map<String, Value>) -> CallToolResult {
+        let (text, structured, is_error) = match &self.backend {
+            Backend::Local(daemon) => {
+                let (payload, is_error) = eval_local(daemon, &name, arguments).await;
+                match payload {
+                    ToolPayload::Raw(raw) => {
+                        let text = raw.get().to_owned();
+                        let value = serde_json::from_str(raw.get())
+                            .expect("bridge RawValue contains valid JSON");
+                        (text, value, is_error)
+                    }
+                    ToolPayload::Value(value) => (value.to_string(), value, is_error),
+                }
+            }
+            Backend::Proxy(_) => {
+                let raw = self.call_raw(name, arguments).await;
+                let text = raw.structured_content.get().to_owned();
+                let value = serde_json::from_str(raw.structured_content.get())
+                    .expect("proxy RawValue contains valid JSON");
+                (text, value, raw.is_error)
+            }
         };
         // Text-only clients need the same data as structured-content clients.
-        if let Some(structured) = &result.structured_content {
-            result.content = vec![ContentBlock::text(structured.to_string())];
-        }
+        let content = vec![ContentBlock::text(text)];
+        let mut result = if is_error {
+            CallToolResult::error(content)
+        } else {
+            CallToolResult::success(content)
+        };
+        result.structured_content = Some(structured);
         result
     }
 }
 
-/// Keeps the structured result. If an error occurs, formats it with `DomainError`
-/// into structured JSON-RPC error content.
-fn to_tool_result(outcome: Result<(String, Value)>) -> CallToolResult {
-    let (text, structured) = match outcome {
-        Ok(outcome) => outcome,
+/// Evaluates one local daemon tool call into `(payload, is_error)`.
+async fn eval_local(
+    daemon: &Daemon,
+    name: &str,
+    arguments: Map<String, Value>,
+) -> (ToolPayload, bool) {
+    if daemon.state.is_shutting_down() {
+        return (
+            ToolPayload::Value(DomainError::ShuttingDown.to_envelope()),
+            true,
+        );
+    }
+    match crate::tools::call(daemon, name, arguments).await {
+        Ok((_summary, ToolPayload::Raw(raw))) => (ToolPayload::Raw(raw), false),
+        Ok((_summary, ToolPayload::Value(structured))) => {
+            let is_error = structured
+                .pointer("/response/error")
+                .is_some_and(|error| !error.is_null());
+            (ToolPayload::Value(structured), is_error)
+        }
         Err(error) => {
             if error.downcast_ref::<DomainError>().is_none() {
                 crate::process::record_daemon_error(&format!("tool call failed: {error:#}"));
             }
             let domain_err = DomainError::from_error(&error);
-            let mut result =
-                CallToolResult::error(vec![ContentBlock::text(domain_err.to_string())]);
-            result.structured_content = Some(domain_err.to_envelope());
-            return result;
+            (ToolPayload::Value(domain_err.to_envelope()), true)
         }
-    };
-    let bridge_error = structured
-        .pointer("/response/error")
-        .filter(|error| !error.is_null());
-    let text = bridge_error
-        .and_then(|error| error.get("message"))
-        .and_then(Value::as_str)
-        .unwrap_or(&text);
-    let mut result = if bridge_error.is_some() {
-        CallToolResult::error(vec![ContentBlock::text(text)])
-    } else {
-        CallToolResult::success(vec![ContentBlock::text(text)])
-    };
-    result.structured_content = Some(structured);
-    result
+    }
 }
 
 impl ServerHandler for ToolServer {
@@ -199,27 +248,14 @@ fn list_tools_result(protocol_version: Option<&ProtocolVersion>) -> ListToolsRes
 ///
 /// Fails if the stdio transport fails.
 pub async fn serve_stdio() -> Result<()> {
-    ToolServer::proxy()?
-        .serve(rmcp::transport::stdio())
-        .await?
-        .waiting()
-        .await?;
-    Ok(())
+    serve_stream_with_ct(
+        ToolServer::proxy()?,
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        CancellationToken::new(),
+    )
+    .await
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Makes sure that cache fields follow the protocol version that the client negotiated.
-    #[test]
-    fn tool_list_has_version_specific_cache_fields() {
-        let legacy = list_tools_result(Some(&ProtocolVersion::V_2025_11_25));
-        assert_eq!(legacy.ttl_ms, None);
-        assert_eq!(legacy.cache_scope, None);
-
-        let current = list_tools_result(Some(&ProtocolVersion::V_2026_07_28));
-        assert_eq!(current.ttl_ms, Some(0));
-        assert_eq!(current.cache_scope, Some(CacheScope::Private));
-    }
-}
+mod tests;
