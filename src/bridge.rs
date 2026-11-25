@@ -26,9 +26,10 @@ use futures::stream::SplitStream;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -81,9 +82,29 @@ pub fn methods() -> &'static Map<String, Value> {
     &METHODS
 }
 
+/// Serializes installation of the embedded bridge files in each runtime directory.
+static RUNTIME_INSTALL_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// Writes the embedded bridge JAR and script into `dir`, if they are not
 /// current. Returns the path of the JAR. The script directory is `dir`.
 pub fn install_runtime(dir: &Path) -> Result<PathBuf> {
+    if !dir.is_dir() {
+        fs::create_dir_all(dir)?;
+    }
+    let key = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let dir_lock = {
+        let mut locks = RUNTIME_INSTALL_LOCKS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        locks
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = dir_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let jar = dir.join(BRIDGE_JAR_NAME);
     if fs::read(&jar).ok().as_deref() != Some(EMBEDDED_BRIDGE_JAR) {
         atomic_write(&jar, EMBEDDED_BRIDGE_JAR)?;
@@ -318,7 +339,10 @@ async fn handshake(
     let Ok(Incoming::Ready { program_name }) = jsonrpc::decode_incoming(&text, md5) else {
         return Handshake::Failed;
     };
-    let _guard = state.lifecycle_lock.lock().await;
+    let Ok(lock) = state.lifecycle_lock(md5) else {
+        return Handshake::Failed;
+    };
+    let _guard = lock.lock_owned().await;
     let Some(current) = state
         .session_with_token(md5, token)
         .filter(|session| session.status.is_launching())
@@ -382,7 +406,10 @@ async fn next_text(stream: &mut SplitStream<WebSocket>) -> Option<Utf8Bytes> {
 
 /// Sets a connected session to disconnected. Stops its process after the grace period.
 async fn on_disconnect(state: &McpState, md5: &str, token: &str, conn_id: &str) {
-    let _guard = state.lifecycle_lock.lock().await;
+    let Ok(lock) = state.lifecycle_lock(md5) else {
+        return;
+    };
+    let _guard = lock.lock_owned().await;
     // A relaunch replaced the session of this socket.
     if state.session_with_token(md5, token).is_none()
         || !state.detach_bridge_if_current(md5, conn_id, "bridge disconnected")
@@ -397,8 +424,11 @@ async fn on_disconnect(state: &McpState, md5: &str, token: &str, conn_id: &str) 
 
 /// Fails a launch if its bridge did not complete the handshake.
 async fn on_failed_handshake(state: &McpState, md5: &str, token: &str) {
+    let Ok(lock) = state.lifecycle_lock(md5) else {
+        return;
+    };
     let job_id = {
-        let _guard = state.lifecycle_lock.lock().await;
+        let _guard = lock.lock_owned().await;
         let launching = state
             .session_with_token(md5, token)
             .is_some_and(|session| session.status.is_launching());
