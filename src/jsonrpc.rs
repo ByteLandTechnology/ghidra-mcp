@@ -31,7 +31,10 @@ const READY_METHOD: &str = "ghidra.ready";
 #[derive(Debug)]
 pub enum Incoming {
     /// The `ghidra.ready` notification. The decoder compared it with the session.
-    Ready,
+    Ready {
+        /// The program name that Ghidra reported in `ghidra.ready`.
+        program_name: String,
+    },
     /// A response to the request that has this ID.
     Response {
         /// The request ID, as a string.
@@ -168,7 +171,9 @@ fn decode_notification(message: Message, session_id: &str) -> Result<Incoming> {
         ready.session_id == session_id && !ready.program_name.is_empty(),
         "ghidra.ready does not match the authenticated session"
     );
-    Ok(Incoming::Ready)
+    Ok(Incoming::Ready {
+        program_name: ready.program_name,
+    })
 }
 
 /// Decodes a message without a `method`. It must be a response.

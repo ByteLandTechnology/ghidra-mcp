@@ -62,6 +62,55 @@ fn management_commands_parse() {
             ..
         }))
     ));
+    let cli = parse(&["session", "attach"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Attach {
+            target: None,
+            file_name: None,
+            wait: false,
+            timeout_ms: None,
+            json: false,
+        }))
+    ));
+    let cli = parse(&[
+        "session",
+        "attach",
+        "/tmp/sample.bin",
+        "--file-name",
+        "sample.bin",
+        "--wait",
+        "--timeout-ms",
+        "5000",
+        "--json",
+    ])
+    .unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Attach {
+            target: Some(_),
+            file_name: Some(_),
+            wait: true,
+            timeout_ms: Some(5000),
+            json: true,
+        }))
+    ));
+    let cli = parse(&["setup"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Setup {
+            dir: None,
+            json: false,
+        })
+    ));
+    let cli = parse(&["setup", "/tmp/scripts", "--json"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Setup {
+            dir: Some(_),
+            json: true,
+        })
+    ));
     let cli = parse(&["job", "wait", "id", "--timeout-ms", "10"]).unwrap();
     assert!(matches!(
         cli.command,
@@ -73,6 +122,32 @@ fn management_commands_parse() {
     assert!(parse(&["paths", "--json"]).is_ok());
     assert!(parse(&["config", "check"]).is_ok());
     assert!(parse(&["call", "ghidra_help", "[]"]).is_err());
+}
+
+/// Makes sure that `install_user_scripts` writes the GUI scripts and JAR.
+#[test]
+fn setup_extracts_launcher_scripts_and_jar() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("ghidra_scripts");
+    let installed = crate::bridge::install_user_scripts(&target).unwrap();
+    assert_eq!(installed.directory, target);
+    for path in &installed.files {
+        let metadata = std::fs::metadata(path).unwrap();
+        assert!(
+            metadata.is_file() && metadata.len() > 0,
+            "{}",
+            path.display()
+        );
+    }
+    let bridge_script = std::fs::read_to_string(target.join("Bridge.java")).unwrap();
+    let mcp_script = std::fs::read_to_string(target.join("GhidraMcp.java")).unwrap();
+    assert!(bridge_script.contains("askString("));
+    assert!(mcp_script.contains("askString("));
+    assert!(bridge_script.contains("ghidra-bridge.jar"));
+    assert!(mcp_script.contains("ghidra-bridge.jar"));
+
+    let again = crate::bridge::install_user_scripts(&target).unwrap();
+    assert_eq!(again.files, installed.files);
 }
 
 /// Makes sure that the durations have a short text form.

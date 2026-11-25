@@ -1,7 +1,7 @@
 // Copyright 2026 ByteLand Technology Limited
 // SPDX-License-Identifier: MIT
 
-//! The `paths`, `config`, `session` and `job` commands.
+//! The `setup`, `paths`, `config`, `session` and `job` commands.
 //!
 //! The session and job commands call the domain tools through the daemon,
 //! the same as `call`. If necessary, they start the daemon.
@@ -57,6 +57,23 @@ pub enum SessionCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Issue Bridge.java connection arguments to attach an open GUI program.
+    Attach {
+        /// Optional local binary path or 32-character MD5.
+        target: Option<String>,
+        /// Display file name for the session.
+        #[arg(long)]
+        file_name: Option<String>,
+        /// Wait until Bridge.java connects and completes the handshake.
+        #[arg(long)]
+        wait: bool,
+        /// Maximum wait in milliseconds when --wait is set.
+        #[arg(long)]
+        timeout_ms: Option<u64>,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Close a session. The bridge saves the program, then stops.
     Close {
         /// The MD5 of the session.
@@ -98,6 +115,32 @@ pub enum JobCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Extracts the bundled Ghidra scripts and JAR into a user script directory.
+pub fn setup(dir: Option<PathBuf>, json: bool) -> Result<ExitCode> {
+    let target = match dir {
+        Some(path) => path,
+        None => crate::paths::default_ghidra_scripts_dir()?,
+    };
+    let installed = crate::bridge::install_user_scripts(&target)?;
+    if json {
+        let files: Vec<String> = installed
+            .files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        print_json(&json!({
+            "scriptDir": installed.directory.display().to_string(),
+            "files": files,
+        }))?;
+    } else {
+        out!("script_dir: {}", installed.directory.display());
+        for file in &installed.files {
+            out!("installed:  {}", file.display());
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Runs `paths`.
@@ -221,6 +264,21 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
             let params = json!({ "path": path.display().to_string(), "wait": wait });
             (call("ghidra_session", "open", None, params).await?, json)
         }
+        SessionCommand::Attach {
+            target,
+            file_name,
+            wait,
+            timeout_ms,
+            json,
+        } => {
+            let value = attach_session(target, file_name, wait, timeout_ms).await?;
+            if json {
+                print_json(&value)?;
+            } else {
+                out!("{}", text(&value, "bridgeArgs"));
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
         SessionCommand::Close { md5, force, json } => {
             let params = json!({ "force": force });
             (
@@ -237,6 +295,47 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
         print_sessions(std::slice::from_ref(&value["session"]));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Resolves `session attach` arguments and calls `ghidra_session attach`.
+async fn attach_session(
+    target: Option<String>,
+    file_name: Option<String>,
+    wait: bool,
+    timeout_ms: Option<u64>,
+) -> Result<Value> {
+    let mut md5 = None;
+    let mut params = Map::new();
+    params.insert("wait".into(), wait.into());
+    if let Some(raw) = target {
+        let candidate = Path::new(&raw);
+        if candidate.exists() {
+            let canonical = candidate
+                .canonicalize()
+                .with_context(|| format!("cannot find {raw}"))?;
+            params.insert("path".into(), canonical.display().to_string().into());
+        } else if crate::project::normalize_md5(&raw).is_ok() {
+            md5 = Some(raw);
+        } else {
+            let canonical = candidate
+                .canonicalize()
+                .with_context(|| format!("cannot find {raw}"))?;
+            params.insert("path".into(), canonical.display().to_string().into());
+        }
+    }
+    if let Some(name) = file_name {
+        params.insert("fileName".into(), name.into());
+    }
+    if let Some(timeout) = timeout_ms {
+        params.insert("timeoutMs".into(), timeout.into());
+    }
+    call(
+        "ghidra_session",
+        "attach",
+        md5.as_deref(),
+        Value::Object(params),
+    )
+    .await
 }
 
 /// Writes session summaries as a table.

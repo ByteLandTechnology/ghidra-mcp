@@ -356,8 +356,13 @@ pub fn prepare_project(paths: &McpPaths, md5: &str) -> Result<PreparedProject> {
         ghidra_launch_root: paths.ghidra_launch_root(&md5),
         input_path: paths.binary_launch_path(&md5),
         file_name: metadata.file_name,
-        agent_token: format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
+        agent_token: generate_agent_token(),
         existing_project,
         md5,
     })
+}
+
+/// Returns a fresh 256-bit hexadecimal credential for one bridge connection.
+pub fn generate_agent_token() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }

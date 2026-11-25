@@ -43,6 +43,9 @@ const GHIDRA_EXIT_DEADLINE: Duration = Duration::from_mins(2);
 /// The name of the Ghidra project in the `ghidra/` directory of each binary.
 const GHIDRA_PROJECT_NAME: &str = "project";
 
+/// Default display name for an attached GUI session before `ghidra.ready` arrives.
+pub const DEFAULT_ATTACHED_NAME: &str = "attached-program";
+
 /// Opens a saved binary, or imports `input`. If a session for the MD5 exists, it uses that session.
 pub async fn open(
     state: &Arc<McpState>,
@@ -129,6 +132,64 @@ pub async fn open(
     ))
 }
 
+/// Issues outbound `Bridge.java` connection arguments for an open GUI binary without file copies.
+pub async fn attach(
+    state: &Arc<McpState>,
+    md5: String,
+    file_name: Option<String>,
+    wait: Option<Duration>,
+) -> Result<(String, Value)> {
+    if state.is_shutting_down() {
+        return Err(DomainError::ShuttingDown.into());
+    }
+    let md5 = crate::project::normalize_md5(&md5)?;
+    if let Some(ref name) = file_name {
+        crate::project::validate_file_name(name)?;
+    }
+    let (token, job_id) = {
+        let _guard = state.lifecycle_lock.lock().await;
+        if state.is_shutting_down() {
+            return Err(DomainError::ShuttingDown.into());
+        }
+        let resolved_name = file_name
+            .or_else(|| state.find_session(&md5).map(|existing| existing.file_name))
+            .unwrap_or_else(|| DEFAULT_ATTACHED_NAME.to_string());
+        state.detach_bridge(&md5, "session attach issued a new credential");
+        state.stop_process(&md5, Duration::ZERO).await;
+        if let Some(old_job) = state.launch_job(&md5) {
+            state.fail_job_error(&old_job, DomainError::disconnected(&md5));
+        }
+        let token = crate::project::generate_agent_token();
+        let record = SessionRecord::attaching(md5.clone(), resolved_name, token.clone());
+        state.put_session(&record)?;
+        let job = state.insert_job(job_kind::ATTACH_SESSION, Some(md5.clone()));
+        state.set_launch_job(&md5, Some(job.id.clone()));
+        (token, job.id)
+    };
+    let ws_url = state.bridge_ws_url.clone();
+    let bridge_args = format!("ws_url={ws_url} session_id={md5} token={token}");
+    let job = state.await_job(&job_id, wait).await?;
+    let session = state.session(&md5)?;
+    let text = if session.ws_connected {
+        format!("Attached session {md5} is ready")
+    } else {
+        format!("Issued Bridge.java attach arguments for session {md5}")
+    };
+    Ok((
+        text,
+        json!({
+            "md5": md5,
+            "wsUrl": ws_url,
+            "sessionId": md5,
+            "token": token,
+            "bridgeArgs": bridge_args,
+            "session": session.summary(),
+            "jobId": job_id,
+            "job": job,
+        }),
+    ))
+}
+
 /// Calls a bridge method. First, it connects the bridge of the session, or relaunches it.
 pub async fn call(
     state: &Arc<McpState>,
@@ -154,7 +215,7 @@ pub async fn ensure_connected(state: &Arc<McpState>, md5: &str) -> Result<()> {
     if session.status.is_launching() {
         return wait_for_launch(state, md5).await;
     }
-    if session.status.is_recoverable() {
+    if session.can_recover() {
         return recover(state, md5).await;
     }
     Err(DomainError::disconnected(md5).into())
@@ -162,10 +223,17 @@ pub async fn ensure_connected(state: &Arc<McpState>, md5: &str) -> Result<()> {
 
 /// Waits for the launch that owns the session. Then the bridge must have a connection.
 async fn wait_for_launch(state: &McpState, md5: &str) -> Result<()> {
+    let session = state.session(md5)?;
     let job_id = state
         .launch_job(md5)
         .ok_or_else(|| DomainError::disconnected(md5))?;
-    wait_ready(state, md5, &job_id, state.config.launch_timeout()).await?;
+    if session.attached {
+        state
+            .await_job(&job_id, Some(state.config.launch_timeout()))
+            .await?;
+    } else {
+        wait_ready(state, md5, &job_id, state.config.launch_timeout()).await?;
+    }
     if !state.session(md5)?.ws_connected {
         return Err(DomainError::disconnected(md5).into());
     }
@@ -184,7 +252,7 @@ async fn recover(state: &Arc<McpState>, md5: &str) -> Result<()> {
             drop(guard);
             return wait_for_launch(state, md5).await;
         }
-        if !current.status.is_recoverable() {
+        if !current.can_recover() {
             return Err(DomainError::disconnected(md5).into());
         }
         begin_launch(state, md5, job_kind::RECOVER_SESSION_BRIDGE).await?
@@ -446,3 +514,6 @@ pub async fn close(state: &McpState, md5: &str, force: bool) -> Result<()> {
     state.set_launch_job(md5, None);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

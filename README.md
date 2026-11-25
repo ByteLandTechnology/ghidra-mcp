@@ -46,7 +46,7 @@ The MD5 of a binary identifies its session for all clients.
 - **Persistent sessions and jobs.** Sessions and analysis jobs continue after a client disconnects.
 - **Remote upload.** A client that is not on the daemon host sends a binary through a separate HTTP endpoint.
 - **Full Ghidra access.** The Java bridge gives program data, functions, decompilation, symbols, references, memory and comments.
-- **One executable.** The executable contains the bridge JAR and its launcher script.
+- **One executable.** The executable contains the bridge JAR and its launcher scripts.
 - **Background jobs.** `ghidra_job list`, `ghidra_job get` and `ghidra_job wait` monitor a long analysis.
 
 Sessions can change the program by default.
@@ -147,12 +147,12 @@ The result is `target/release/ghidra-mcp` (`ghidra-mcp.exe` on Windows).
 This one file is the complete distribution.
 
 The command `cargo xtask build` builds the bridge with Gradle.
-Then it embeds the bridge JAR and `Bridge.java` in the executable.
+Then it embeds the bridge JAR, `Bridge.java` and `GhidraMcp.java` in the executable.
 The operation catalog comes from the bridge contract `bridge/docs/asyncapi.yaml` at compile time.
 
 To embed a bridge JAR that you built before, set `GHIDRA_MCP_BRIDGE_JAR`.
 A relative path starts at the workspace root.
-The build then makes only `Bridge.java` and does not compile the bridge.
+The build then makes only `Bridge.java` and `GhidraMcp.java`, and does not compile the bridge.
 
 ### Find Ghidra
 
@@ -250,9 +250,10 @@ Use these commands to manage the shared daemon:
 | `ghidra-mcp daemon restart [--force] [--listen ADDR]` | Stop the daemon, then start it again. |
 | `ghidra-mcp daemon status [--json]` | Show the process ID, version, MCP URL, sessions and jobs. |
 | `ghidra-mcp daemon logs [-n N] [-f]` | Show the last lines of `daemon.log`. With `-f`, show new lines until Ctrl-C. |
+| `ghidra-mcp setup [DIR] [--json]` | Write `Bridge.java`, `GhidraMcp.java` and `ghidra-bridge.jar` into a script directory (default `~/ghidra_scripts`). |
 | `ghidra-mcp paths [--json]` | Show the persistent home, the runtime directory and their files. |
 | `ghidra-mcp config path\|show\|edit\|check` | Find, show, change or check `config.toml`. |
-| `ghidra-mcp session list\|get\|open\|close` | Manage the sessions of the daemon. |
+| `ghidra-mcp session list\|get\|open\|attach\|close` | Manage the sessions of the daemon. |
 | `ghidra-mcp job list\|get\|wait` | Examine the background jobs of the daemon. |
 
 If a session is live or a job runs, `daemon stop` does not stop the daemon.
@@ -288,6 +289,28 @@ The command writes `structuredContent` as formatted JSON.
 | The call fails. | The error on stderr. | 1 |
 | The arguments are not valid. | The usage on stderr. | 2 |
 | `--help` or `--version`. | The text on stdout. | 0 |
+
+### Attach an open Ghidra GUI program
+
+To connect an open Ghidra CodeBrowser program to the daemon, use this procedure:
+
+1. Write the launcher scripts into your Ghidra script directory (`~/ghidra_scripts` by default):
+
+   ```sh
+   ghidra-mcp setup
+   ```
+
+2. Issue outbound `Bridge.java` arguments for the open binary:
+
+   ```sh
+   ghidra-mcp session attach /path/to/program.bin
+   ```
+
+   You can also omit the path or give a 32-character MD5.
+   The command prints `ws_url=... session_id=... token=...` and does not copy the binary.
+3. Open the Script Manager in CodeBrowser, run `Bridge.java`, and paste the printed arguments into the startup prompt.
+4. When `Bridge.java` sends `ghidra.ready`, the session enters the `ready` state.
+   A disconnect leaves CodeBrowser open and does not start `analyzeHeadless`.
 
 ### Upload a binary from a remote client
 
@@ -365,6 +388,7 @@ Use this procedure in an agent:
    - For a binary that the daemon saved before, call `ghidra_session` with `{"operation":"open","md5":"..."}`.
    - For a file on the daemon host, call `ghidra_session` with `{"operation":"open","params":{"path":"..."}}`. The daemon calculates the MD5 and saves the binary.
    - For a file on a remote client, upload it (see [Upload a binary from a remote client](#upload-a-binary-from-a-remote-client)).
+   - For a program that is already open in CodeBrowser, call `ghidra_session` with `{"operation":"attach"}` and paste `bridgeArgs` into `Bridge.java`.
 2. If the session starts, call `ghidra_job` with `{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}`.
    You can use `ghidra_job get` to monitor the job.
 3. Confirm the ready status with `ghidra_session get`.
@@ -441,7 +465,7 @@ A domain tool has these arguments:
 
 | Tool | Operations | Runs in |
 | --- | --- | --- |
-| `ghidra_session` | `open`, `list`, `get`, `close` | The daemon. |
+| `ghidra_session` | `open`, `attach`, `list`, `get`, `close` | The daemon. |
 | `ghidra_upload` | `prepare` | The daemon. |
 | `ghidra_job` | `list`, `get`, `wait` | The daemon. |
 | `ghidra_daemon` | `status`, `shutdown` | The daemon. |

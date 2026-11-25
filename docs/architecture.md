@@ -30,7 +30,7 @@ One executable has all the roles:
 |---|---|---|---|
 | **Daemon** (`daemon run`) | The first proxy or CLI call, or the user. | All the state. | One daemon runs for each runtime directory. A file lock enforces this rule. The daemon runs until you stop it. |
 | **Stdio proxy** (no arguments) | An MCP client. | No state. | The proxy sends each tool call to the daemon. If necessary, it starts the daemon. |
-| **CLI** (the other commands) | The user. | No state. | `tools`, `paths` and `config` do not connect to the daemon. `daemon status` and `daemon stop` do not start a daemon. The other commands call the tools through the daemon. If necessary, they start it. |
+| **CLI** (the other commands) | The user. | No state. | `tools`, `setup`, `paths` and `config` do not connect to the daemon. `daemon status` and `daemon stop` do not start a daemon. The other commands call the tools through the daemon. If necessary, they start it. |
 | **Ghidra** (`analyzeHeadless`) | The daemon, one for each open session. | The analysis. | Ghidra runs the bridge as a post-script. |
 
 Clients connect to the daemon through a **local socket**.
@@ -42,7 +42,7 @@ The client starts the new daemon as a detached process. Then the daemon continue
 
 The **bridge** is a Java program in the `bridge/` submodule.
 The command `cargo xtask build` builds the bridge with Gradle.
-Then it embeds the bridge JAR and the launcher script `Bridge.java` in the executable.
+Then it embeds the bridge JAR and the launcher scripts `Bridge.java` and `GhidraMcp.java` in the executable.
 Before each launch, the daemon writes the two files into the runtime directory.
 It gives them to `analyzeHeadless -postScript`.
 The bridge then connects to the daemon through a WebSocket and serves the analysis API.
@@ -115,6 +115,13 @@ The daemon uses a connected session again, or joins a launch in progress, or sta
 [Session lifecycle](#session-lifecycle) describes the launch.
 
 `ghidra_session open` returns the launch job immediately. If the client sets `wait`, it waits for the job.
+
+### Attach a GUI session
+
+`ghidra_session attach` creates a session credential for a program that is open in Ghidra CodeBrowser.
+It accepts an `md5`, hashes a local `path` in place without file copies, or allocates a 32-character hexadecimal ID.
+The returned `bridgeArgs` string omits `exit_deadline_sec` so a disconnect leaves the CodeBrowser JVM open.
+When an attached session disconnects, the daemon marks it `disconnected` and does not start `analyzeHeadless`.
 
 ### Upload a binary
 

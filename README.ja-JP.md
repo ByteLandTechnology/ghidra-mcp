@@ -146,12 +146,12 @@ Linux 用パッケージには glibc が必要です。Alpine などの musl シ
 この 1 つのファイルが完全な配布物です。
 
 `cargo xtask build` コマンドは、Gradle でブリッジをビルドします。
-次に、ブリッジ JAR と `Bridge.java` を実行ファイルに埋め込みます。
+次に、ブリッジ JAR、`Bridge.java`、`GhidraMcp.java` を実行ファイルに埋め込みます。
 操作カタログは、コンパイル時にブリッジ契約 `bridge/docs/asyncapi.yaml` から取得されます。
 
 事前にビルドしたブリッジ JAR を埋め込むには、`GHIDRA_MCP_BRIDGE_JAR` を設定します。
 相対パスはワークスペースのルートから始まります。
-この場合、ビルドは `Bridge.java` だけを生成し、ブリッジをコンパイルしません。
+この場合、ビルドは `Bridge.java` と `GhidraMcp.java` だけを生成し、ブリッジをコンパイルしません。
 
 ### Ghidra の検索
 
@@ -248,9 +248,10 @@ Unix では、`SIGINT`、`SIGTERM`、`SIGHUP` でも停止します。
 | `ghidra-mcp daemon restart [--force] [--listen ADDR]` | デーモンを停止してから、再び起動します。 |
 | `ghidra-mcp daemon status [--json]` | プロセス ID、バージョン、MCP URL、セッション、ジョブを表示します。 |
 | `ghidra-mcp daemon logs [-n N] [-f]` | `daemon.log` の最後の行を表示します。`-f` を付けると、Ctrl-C を押すまで新しい行を表示し続けます。 |
+| `ghidra-mcp setup [DIR] [--json]` | `Bridge.java`、`GhidraMcp.java`、`ghidra-bridge.jar` をスクリプトディレクトリ（デフォルトは `~/ghidra_scripts`）に書き出します。 |
 | `ghidra-mcp paths [--json]` | 永続ホーム、ランタイムディレクトリ、およびその中のファイルを表示します。 |
 | `ghidra-mcp config path\|show\|edit\|check` | `config.toml` の場所の確認、表示、編集、検査を行います。 |
-| `ghidra-mcp session list\|get\|open\|close` | デーモンのセッションを管理します。 |
+| `ghidra-mcp session list\|get\|open\|attach\|close` | デーモンのセッションを管理します。 |
 | `ghidra-mcp job list\|get\|wait` | デーモンのバックグラウンドジョブを確認します。 |
 
 稼働中のセッションや実行中のジョブがある場合、`daemon stop` はデーモンを停止しません。停止するには `--force` を付けます。
@@ -284,6 +285,28 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
 | 呼び出しが失敗した。 | エラーを stderr に出力。 | 1 |
 | 引数が無効。 | 使用方法を stderr に出力。 | 2 |
 | `--help` または `--version`。 | テキストを stdout に出力。 | 0 |
+
+### 開いている Ghidra GUI プログラムのアタッチ
+
+Ghidra CodeBrowser で開いているプログラムをデーモンに接続するには、次の手順を使用します：
+
+1. 起動スクリプトを Ghidra のスクリプトディレクトリ（デフォルトは `~/ghidra_scripts`）に書き出します：
+
+   ```sh
+   ghidra-mcp setup
+   ```
+
+2. 開いているバイナリ用の `Bridge.java` 発信接続引数を発行します：
+
+   ```sh
+   ghidra-mcp session attach /path/to/program.bin
+   ```
+
+   パスを省略するか、32 桁の 16 進 MD5 を指定することもできます。
+   このコマンドは `ws_url=... session_id=... token=...` を出力し、バイナリをコピーしません。
+3. CodeBrowser で Script Manager を開き、`Bridge.java` を実行して、出力された引数を起動ダイアログに貼り付けます。
+4. `Bridge.java` が `ghidra.ready` を送ると、セッションは `ready` 状態になります。
+   切断しても CodeBrowser は開いたままで、デーモンは `analyzeHeadless` を起動しません。
 
 ### リモートクライアントからのバイナリのアップロード
 
@@ -358,6 +381,7 @@ claude mcp add --transport stdio --scope local ghidra-mcp -- /absolute/path/to/g
    - デーモンが以前に保存したバイナリには、`{"operation":"open","md5":"..."}` で `ghidra_session` を呼び出します。
    - デーモンホスト上のファイルには、`{"operation":"open","params":{"path":"..."}}` で `ghidra_session` を呼び出します。デーモンが MD5 を計算し、バイナリを保存します。
    - リモートクライアント上のファイルは、アップロードします（[リモートクライアントからのバイナリのアップロード](#リモートクライアントからのバイナリのアップロード)を参照）。
+   - すでに CodeBrowser で開いているプログラムには、`{"operation":"attach"}` で `ghidra_session` を呼び出し、`bridgeArgs` を `Bridge.java` に貼り付けます。
 2. セッションが起動中の場合は、`{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}` で `ghidra_job` を呼び出して待ちます。
    `ghidra_job get` でジョブを監視できます。
 3. `ghidra_session get` で準備完了状態を確認します。
@@ -434,7 +458,7 @@ ipc_handshake_timeout_sec = 5
 
 | ツール | 操作 | 実行場所 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`list`、`get`、`close` | デーモン。 |
+| `ghidra_session` | `open`、`attach`、`list`、`get`、`close` | デーモン。 |
 | `ghidra_upload` | `prepare` | デーモン。 |
 | `ghidra_job` | `list`、`get`、`wait` | デーモン。 |
 | `ghidra_daemon` | `status`、`shutdown` | デーモン。 |

@@ -247,6 +247,9 @@ Check the session status with `ghidra_session`:
 
 The `status` field shows `ready` when the session is ready.
 
+To attach a program that is already open in Ghidra CodeBrowser, run `ghidra-mcp setup` once.
+Then call `ghidra_session` with `{"operation":"attach","params":{"path":"/path/to/target_binary"}}` and paste `bridgeArgs` into the `Bridge.java` prompt.
+
 ### 2. Start background analysis
 
 Start auto-analysis on the opened binary with `ghidra_analysis`:

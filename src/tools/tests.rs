@@ -191,6 +191,7 @@ fn session_md5_is_never_a_parameter() {
             .expect("operation")
     };
     assert!(rule("session", "open") == Md5Rule::Optional);
+    assert!(rule("session", "attach") == Md5Rule::Optional);
     assert!(rule("session", "get") == Md5Rule::Required);
     assert!(rule("session", "close") == Md5Rule::Required);
     assert!(rule("session", "list") == Md5Rule::Absent);
@@ -706,4 +707,60 @@ fn bridge_address_error_preserves_target_and_spaces() {
             reason: "unable to parse address: bad (valid spaces: [EXTERNAL, ram])".to_string(),
         }
     );
+}
+
+/// Makes sure that `ghidra_session attach` validates `path` and skips project copies.
+#[tokio::test]
+async fn session_attach_validates_target_and_skips_project_copy() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let sample_path = root.path().join("sample.elf");
+    let sample_bytes = b"\x7fELFtest";
+    std::fs::write(&sample_path, sample_bytes).unwrap();
+    let expected_md5 = format!("{:x}", md5::compute(sample_bytes));
+
+    let both_error = super::call(
+        &daemon,
+        "ghidra_session",
+        object(json!({
+            "operation": "attach",
+            "md5": expected_md5,
+            "params": { "path": sample_path.to_str().unwrap() }
+        })),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        reason(&both_error).contains("either params.path or md5, not both"),
+        "{both_error:#}"
+    );
+
+    let (_, attached) = super::call(
+        &daemon,
+        "ghidra_session",
+        object(json!({
+            "operation": "attach",
+            "params": { "path": sample_path.to_str().unwrap() }
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(attached["md5"], expected_md5);
+    assert_eq!(attached["sessionId"], expected_md5);
+    assert_eq!(attached["session"]["fileName"], "sample.elf");
+    assert_eq!(attached["session"]["status"], "starting");
+    assert_eq!(attached["session"]["connected"], false);
+    assert!(attached["session"].get("token").is_none());
+
+    let bridge_args = attached["bridgeArgs"].as_str().unwrap();
+    let token = attached["token"].as_str().unwrap();
+    assert!(bridge_args.contains(&format!("session_id={expected_md5}")));
+    assert!(bridge_args.contains(&format!("token={token}")));
+    assert!(!bridge_args.contains("exit_deadline_sec"));
+    assert!(!bridge_args.contains("jar="));
+    assert!(!daemon.state.paths.project_dir(&expected_md5).exists());
+
+    let snapshot = std::fs::read_to_string(daemon.state.paths.session_json(&expected_md5)).unwrap();
+    assert!(!snapshot.contains(token));
+    assert!(!snapshot.contains("agent_token"));
 }

@@ -105,6 +105,37 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
     },
     LocalOperation {
         domain: "session",
+        name: "attach",
+        description: concat!(
+            "Issue outbound Bridge.java connection arguments for an open GUI program without ",
+            "file copies. Pass md5, params.path to hash a local file in place, or omit both to ",
+            "allocate a session ID. Set wait=true to wait until the GUI script connects."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "fileName": { "type": "string", "minLength": 1 },
+                    "wait": { "type": "boolean", "default": false },
+                    "timeoutMs": { "type": "integer", "minimum": 1 }
+                },
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Optional,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: false,
+            destructive: false,
+            idempotent: false,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| Box::pin(attach_session(daemon, request)),
+    },
+    LocalOperation {
+        domain: "session",
         name: "list",
         description: concat!(
             "List session summaries by MD5 without exposing binary paths. You do not need to ",
@@ -375,6 +406,21 @@ struct OpenArgs {
     timeout_ms: Option<u64>,
 }
 
+/// The parameters of `ghidra_session attach`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachArgs {
+    /// Optional local file to hash in place without a copy.
+    path: Option<String>,
+    /// Optional display file name for the session.
+    file_name: Option<String>,
+    /// Wait until the GUI script connects.
+    #[serde(default)]
+    wait: bool,
+    /// Maximum wait in milliseconds, instead of the launch timeout.
+    timeout_ms: Option<u64>,
+}
+
 /// The parameters of `ghidra_analysis start`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -545,6 +591,54 @@ async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
         )
         .into()),
     }
+}
+
+/// Runs `ghidra_session attach`: issues outbound `Bridge.java` arguments without file copies.
+async fn attach_session(daemon: &Daemon, request: Request) -> Result<Output> {
+    let args: AttachArgs = parse(&request.label, request.params)?;
+    let state = &daemon.state;
+    let wait = args
+        .wait
+        .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
+    let (md5, file_name) = match (args.path, request.md5) {
+        (Some(_), Some(_)) => {
+            return Err(DomainError::invalid_argument(
+                "path/md5",
+                "`ghidra_session attach` accepts either params.path or md5, not both",
+            )
+            .into());
+        }
+        (Some(raw), None) => {
+            let path = PathBuf::from(raw).canonicalize().map_err(|err| {
+                DomainError::missing_target(
+                    "path",
+                    format!("target path cannot be resolved: {err}"),
+                )
+            })?;
+            if !path.is_file() {
+                return Err(
+                    DomainError::missing_target("path", "target path is not a file").into(),
+                );
+            }
+            let inferred_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    DomainError::invalid_argument("path", "binary filename must be valid UTF-8")
+                })?
+                .to_string();
+            let path_buf = path.clone();
+            let md5 = tokio::task::spawn_blocking(move || crate::ghidra::file_md5(&path_buf))
+                .await
+                .map_err(|err| DomainError::Internal {
+                    message: format!("file_md5 task panicked: {err}"),
+                })??;
+            (md5, Some(args.file_name.unwrap_or(inferred_name)))
+        }
+        (None, Some(md5)) => (md5, args.file_name),
+        (None, None) => (uuid::Uuid::new_v4().simple().to_string(), args.file_name),
+    };
+    session::attach(state, md5, file_name, wait).await
 }
 
 /// Runs `ghidra_analysis start`.

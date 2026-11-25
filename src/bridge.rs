@@ -38,6 +38,8 @@ use uuid::Uuid;
 pub const AGENT_WS_PATH: &str = "/ws/agent";
 /// The file name of the Ghidra post-script that loads the bridge JAR.
 pub const BRIDGE_SCRIPT_NAME: &str = "Bridge.java";
+/// The file name of the Ghidra script that starts the standalone MCP HTTP server.
+pub const MCP_SCRIPT_NAME: &str = "GhidraMcp.java";
 /// The post-script that safely opens a saved program before it loads the bridge.
 pub const SAVED_PROJECT_SCRIPT_NAME: &str = "OpenSavedProject.java";
 /// The file name of the bridge JAR in the runtime directory.
@@ -47,8 +49,19 @@ const EMBEDDED_BRIDGE_JAR: &[u8] =
     include_bytes!("../bridge/build/ghidra-script/ghidra-bridge.jar");
 /// The bridge post-script. `cargo xtask` makes it, and the executable contains it.
 const EMBEDDED_BRIDGE_SCRIPT: &str = include_str!("../bridge/build/ghidra-script/Bridge.java");
+/// The standalone MCP script. `cargo xtask` makes it, and the executable contains it.
+const EMBEDDED_MCP_SCRIPT: &str = include_str!("../bridge/build/ghidra-script/GhidraMcp.java");
 /// The post-script that opens a saved project. The executable contains it.
 const EMBEDDED_SAVED_PROJECT_SCRIPT: &str = include_str!("../java/OpenSavedProject.java");
+
+/// The paths that [`install_user_scripts`] writes into a Ghidra script directory.
+#[derive(Debug, Clone)]
+pub struct InstalledScripts {
+    /// Target script directory.
+    pub directory: PathBuf,
+    /// Installed script and runtime JAR paths.
+    pub files: [PathBuf; 3],
+}
 
 /// The bridge methods with their descriptions, input schemas and effects.
 static METHODS: LazyLock<Map<String, Value>> = LazyLock::new(|| {
@@ -85,6 +98,31 @@ pub fn install_runtime(dir: &Path) -> Result<PathBuf> {
         }
     }
     Ok(jar)
+}
+
+/// Extracts `Bridge.java`, `GhidraMcp.java` and `ghidra-bridge.jar` into `dir` for Ghidra GUI use.
+///
+/// # Errors
+///
+/// Fails if `dir` cannot be created or if any distribution file write fails.
+pub fn install_user_scripts(dir: &Path) -> Result<InstalledScripts> {
+    fs::create_dir_all(dir)?;
+    let bridge_script = dir.join(BRIDGE_SCRIPT_NAME);
+    let mcp_script = dir.join(MCP_SCRIPT_NAME);
+    let jar = dir.join(BRIDGE_JAR_NAME);
+    for (path, bytes) in [
+        (&bridge_script, EMBEDDED_BRIDGE_SCRIPT.as_bytes()),
+        (&mcp_script, EMBEDDED_MCP_SCRIPT.as_bytes()),
+        (&jar, EMBEDDED_BRIDGE_JAR),
+    ] {
+        if fs::read(path).ok().as_deref() != Some(bytes) {
+            atomic_write(path, bytes)?;
+        }
+    }
+    Ok(InstalledScripts {
+        directory: dir.to_path_buf(),
+        files: [bridge_script, mcp_script, jar],
+    })
 }
 
 /// Sends one request on the current connection of the session, and waits for its response.
@@ -277,20 +315,36 @@ async fn handshake(
     let Ok(Some(text)) = tokio::time::timeout_at(deadline, next_text(stream)).await else {
         return Handshake::Failed;
     };
-    if !matches!(jsonrpc::decode_incoming(&text, md5), Ok(Incoming::Ready)) {
+    let Ok(Incoming::Ready { program_name }) = jsonrpc::decode_incoming(&text, md5) else {
         return Handshake::Failed;
-    }
+    };
     let _guard = state.lifecycle_lock.lock().await;
-    if !state
+    let Some(current) = state
         .session_with_token(md5, token)
-        .is_some_and(|session| session.status.is_launching())
-    {
+        .filter(|session| session.status.is_launching())
+    else {
         return Handshake::Failed;
-    }
+    };
     if !state.attach_bridge(md5, handle) {
         return Handshake::Duplicate;
     }
-    let _ = state.update_session(md5, SessionRecord::mark_ready);
+    let _ = state.update_session(md5, |session| {
+        if session.attached
+            && session.file_name == crate::session::DEFAULT_ATTACHED_NAME
+            && crate::project::validate_file_name(&program_name).is_ok()
+        {
+            session.file_name.clone_from(&program_name);
+        }
+        session.mark_ready();
+    });
+    if current.attached {
+        if let Some(job_id) = state.launch_job(md5) {
+            state.finish_job(
+                &job_id,
+                Ok(json!({ "md5": md5, "status": crate::model::SessionStatus::Ready })),
+            );
+        }
+    }
     Handshake::Accepted
 }
 

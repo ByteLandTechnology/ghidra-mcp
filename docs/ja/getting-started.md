@@ -245,6 +245,9 @@ claude mcp get ghidra-mcp
 
 セッションの準備が完了すると、`status` フィールドに `ready` が表示されます。
 
+すでに Ghidra CodeBrowser で開いているプログラムをアタッチするには、先に `ghidra-mcp setup` を 1 回実行します。
+次に `{"operation":"attach","params":{"path":"/path/to/target_binary"}}` で `ghidra_session` を呼び出し、返された `bridgeArgs` を `Bridge.java` のプロンプトに貼り付けます。
+
 ### 2. バックグラウンド解析を開始する
 
 `ghidra_analysis` で開いたバイナリの自動解析を開始します：

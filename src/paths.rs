@@ -229,6 +229,19 @@ pub fn sync_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Finds the default user script directory of Ghidra (`~/ghidra_scripts`).
+///
+/// # Errors
+///
+/// Fails if the user home directory is not set.
+pub fn default_ghidra_scripts_dir() -> Result<PathBuf> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+        .context("user home directory is unavailable; pass an explicit script directory")?;
+    Ok(home.join("ghidra_scripts"))
+}
+
 /// Finds `GHIDRA_MCP_HOME`. The default is `$HOME/.ghidra-mcp` on Unix and
 /// `LocalAppData/ghidra-mcp` on Windows.
 fn ghidra_mcp_home() -> Result<PathBuf> {

@@ -29,7 +29,7 @@
 |---|---|---|---|
 | **守护进程**（`daemon run`） | 第一次代理调用或 CLI 调用，或者用户。 | 全部状态。 | 每个运行时目录运行一个守护进程，由文件锁保证。守护进程一直运行，直到您停止它。 |
 | **Stdio 代理**（无参数） | MCP 客户端。 | 无状态。 | 代理把每个工具调用发送给守护进程。必要时，它会启动守护进程。 |
-| **CLI**（其他命令） | 用户。 | 无状态。 | `tools`、`paths` 和 `config` 不连接守护进程。`daemon status` 和 `daemon stop` 不会启动守护进程。其他命令通过守护进程调用工具，必要时启动它。 |
+| **CLI**（其他命令） | 用户。 | 无状态。 | `tools`、`setup`、`paths` 和 `config` 不连接守护进程。`daemon status` 和 `daemon stop` 不会启动守护进程。其他命令通过守护进程调用工具，必要时启动它。 |
 | **Ghidra**（`analyzeHeadless`） | 守护进程，每个打开的会话一个。 | 分析结果。 | Ghidra 把桥接作为后置脚本运行。 |
 
 客户端通过**本地套接字**连接守护进程。
@@ -40,7 +40,7 @@
 
 **桥接**是 `bridge/` 子模块中的 Java 程序。
 `cargo xtask build` 命令用 Gradle 构建桥接。
-然后它把桥接 JAR 和启动脚本 `Bridge.java` 嵌入可执行文件。
+然后它把桥接 JAR 以及启动脚本 `Bridge.java` 和 `GhidraMcp.java` 嵌入可执行文件。
 每次启动之前，守护进程把这两个文件写入运行时目录。
 它把它们交给 `analyzeHeadless -postScript`。
 然后桥接通过 WebSocket 连接守护进程，并提供分析 API。
@@ -111,6 +111,13 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 守护进程重用已连接的会话，或加入正在进行的启动，或开始新的启动。
 [会话生命周期](#会话生命周期)描述启动过程。
 `ghidra_session open` 立即返回启动作业。如果客户端设置了 `wait`，它会等待该作业。
+
+### 挂接 GUI 会话
+
+`ghidra_session attach` 为已在 Ghidra CodeBrowser 中打开的程序生成会话凭据。
+它接受 `md5`，或就地计算本地 `path` 的哈希而不复制文件，或自动分配 32 位十六进制 ID。
+返回的 `bridgeArgs` 省略 `exit_deadline_sec`，因此连接断开时 CodeBrowser JVM 保持打开。
+当已挂接的会话断开连接时，守护进程将其标记为 `disconnected`，且不会启动 `analyzeHeadless`。
 
 ### 上传二进制文件
 

@@ -146,12 +146,12 @@ Linux 平台包需要 glibc。在 Alpine 等 musl 系统上，请[从源代码�
 这一个文件就是完整的发行版。
 
 `cargo xtask build` 命令用 Gradle 构建桥接。
-然后它把桥接 JAR 和 `Bridge.java` 嵌入可执行文件。
+然后它把桥接 JAR、`Bridge.java` 和 `GhidraMcp.java` 嵌入可执行文件。
 操作目录在编译时来自桥接契约 `bridge/docs/asyncapi.yaml`。
 
 要嵌入事先构建好的桥接 JAR，请设置 `GHIDRA_MCP_BRIDGE_JAR`。
 相对路径从工作区根目录开始。
-此时构建只生成 `Bridge.java`，不编译桥接。
+此时构建只生成 `Bridge.java` 和 `GhidraMcp.java`，不编译桥接。
 
 ### 查找 Ghidra
 
@@ -248,9 +248,10 @@ ghidra-mcp daemon run --listen 127.0.0.1:18490
 | `ghidra-mcp daemon restart [--force] [--listen ADDR]` | 停止守护进程，然后重新启动。 |
 | `ghidra-mcp daemon status [--json]` | 显示进程 ID、版本、MCP URL、会话和作业。 |
 | `ghidra-mcp daemon logs [-n N] [-f]` | 显示 `daemon.log` 的最后几行。使用 `-f` 时持续显示新行，直到按 Ctrl-C。 |
+| `ghidra-mcp setup [DIR] [--json]` | 将 `Bridge.java`、`GhidraMcp.java` 和 `ghidra-bridge.jar` 写入脚本目录（默认 `~/ghidra_scripts`）。 |
 | `ghidra-mcp paths [--json]` | 显示持久主目录、运行时目录及其中的文件。 |
 | `ghidra-mcp config path\|show\|edit\|check` | 查找、显示、修改或检查 `config.toml`。 |
-| `ghidra-mcp session list\|get\|open\|close` | 管理守护进程的会话。 |
+| `ghidra-mcp session list\|get\|open\|attach\|close` | 管理守护进程的会话。 |
 | `ghidra-mcp job list\|get\|wait` | 查看守护进程的后台作业。 |
 
 如果有活动会话或正在运行的作业，`daemon stop` 不会停止守护进程。加上 `--force` 才会停止。
@@ -284,6 +285,28 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
 | 调用失败。 | 错误输出到 stderr。 | 1 |
 | 参数无效。 | 用法输出到 stderr。 | 2 |
 | `--help` 或 `--version`。 | 文本输出到 stdout。 | 0 |
+
+### 连接已打开的 Ghidra GUI 程序
+
+要将 Ghidra CodeBrowser 中已打开的程序连接到守护进程，请使用以下步骤：
+
+1. 将启动脚本写入 Ghidra 脚本目录（默认 `~/ghidra_scripts`）：
+
+   ```sh
+   ghidra-mcp setup
+   ```
+
+2. 为已打开的二进制文件生成 `Bridge.java` 出站连接参数：
+
+   ```sh
+   ghidra-mcp session attach /path/to/program.bin
+   ```
+
+   也可以省略路径，或直接传入 32 位十六进制 MD5。
+   该命令输出 `ws_url=... session_id=... token=...`，不会复制二进制文件。
+3. 在 CodeBrowser 中打开 Script Manager，运行 `Bridge.java`，并把输出的参数粘贴到启动提示框中。
+4. `Bridge.java` 发送 `ghidra.ready` 后，会话进入 `ready` 状态。
+   连接断开时，CodeBrowser 保持打开，守护进程不会启动 `analyzeHeadless`。
 
 ### 从远程客户端上传二进制文件
 
@@ -357,6 +380,7 @@ claude mcp add --transport stdio --scope local ghidra-mcp -- /absolute/path/to/g
    - 对于守护进程以前保存过的二进制文件，用 `{"operation":"open","md5":"..."}` 调用 `ghidra_session`。
    - 对于守护进程主机上的文件，用 `{"operation":"open","params":{"path":"..."}}` 调用 `ghidra_session`。守护进程计算 MD5 并保存二进制文件。
    - 对于远程客户端上的文件，请上传它（参见[从远程客户端上传二进制文件](#从远程客户端上传二进制文件)）。
+   - 对于已在 CodeBrowser 中打开的程序，用 `{"operation":"attach"}` 调用 `ghidra_session`，并把 `bridgeArgs` 粘贴到 `Bridge.java` 中。
 2. 如果会话正在启动，请用 `{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}` 调用 `ghidra_job` 等待。
    您可以用 `ghidra_job get` 监视作业。
 3. 用 `ghidra_session get` 确认就绪状态。
@@ -433,7 +457,7 @@ ipc_handshake_timeout_sec = 5
 
 | 工具 | 操作 | 运行位置 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`list`、`get`、`close` | 守护进程。 |
+| `ghidra_session` | `open`、`attach`、`list`、`get`、`close` | 守护进程。 |
 | `ghidra_upload` | `prepare` | 守护进程。 |
 | `ghidra_job` | `list`、`get`、`wait` | 守护进程。 |
 | `ghidra_daemon` | `status`、`shutdown` | 守护进程。 |
