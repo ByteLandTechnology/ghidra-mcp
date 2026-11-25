@@ -82,3 +82,36 @@ fn durations_are_short() {
     assert_eq!(super::output::duration(65), "1m 5s");
     assert_eq!(super::output::duration(3725), "1h 2m 5s");
 }
+
+/// Makes sure that `tool_value` reads structured data without `content` and keeps text fallbacks.
+#[test]
+fn tool_value_handles_empty_content_and_unstructured_fallback() {
+    use rmcp::model::{CallToolResult, ContentBlock};
+    use serde_json::json;
+
+    let mut ok = CallToolResult::success(Vec::new());
+    ok.structured_content = Some(json!({ "sessions": [] }));
+    assert_eq!(
+        super::output::tool_value(ok).unwrap(),
+        json!({ "sessions": [] })
+    );
+
+    let mut structured_err = CallToolResult::error(Vec::new());
+    structured_err.structured_content = Some(json!({
+        "response": { "error": { "message": "daemon is shutting down" } }
+    }));
+    assert_eq!(
+        super::output::tool_value(structured_err)
+            .unwrap_err()
+            .to_string(),
+        "daemon is shutting down"
+    );
+
+    let legacy_err = CallToolResult::error(vec![ContentBlock::text("unknown tool: ghidra_daemon")]);
+    assert_eq!(
+        super::output::tool_value(legacy_err)
+            .unwrap_err()
+            .to_string(),
+        "unknown tool: ghidra_daemon"
+    );
+}
