@@ -251,7 +251,7 @@ ghidra-mcp daemon run --listen 127.0.0.1:18490
 | `ghidra-mcp setup [DIR] [--json]` | 将 `Bridge.java`、`GhidraMcp.java` 和 `ghidra-bridge.jar` 写入脚本目录（默认 `~/ghidra_scripts`）。 |
 | `ghidra-mcp paths [--json]` | 显示持久主目录、运行时目录及其中的文件。 |
 | `ghidra-mcp config path\|show\|edit\|check` | 查找、显示、修改或检查 `config.toml`。 |
-| `ghidra-mcp session list\|get\|open\|attach\|close` | 管理守护进程的会话。 |
+| `ghidra-mcp session list\|get\|open\|attach\|close\|checkpoint\|reset\|delete` | 管理守护进程的会话和检查点。 |
 | `ghidra-mcp job list\|get\|wait` | 查看守护进程的后台作业。 |
 
 如果有活动会话或正在运行的作业，`daemon stop` 不会停止守护进程。加上 `--force` 才会停止。
@@ -411,6 +411,9 @@ analyze_headless = ""
 [analysis]
 max_cpu = 4
 
+[checkpoints]
+max_per_binary = 10
+
 [timeouts]
 process_spawn_timeout_sec = 30
 analysis_import_timeout_sec = 1800
@@ -429,6 +432,7 @@ ipc_handshake_timeout_sec = 5
 | `ghidra.home` | Ghidra 安装目录。 |
 | `ghidra.analyze_headless` | `analyzeHeadless` 的路径。 |
 | `analysis.max_cpu` | `analyzeHeadless -max-cpu` 的值。 |
+| `checkpoints.max_per_binary` | 单个二进制文件最多保留的检查点数量。 |
 | `timeouts.process_spawn_timeout_sec` | 启动 Ghidra 进程的时间。 |
 | `timeouts.analysis_import_timeout_sec` | 导入二进制文件的时间。也是 `ghidra_analysis start` 的默认等待时间。 |
 | `timeouts.bridge_connect_timeout_sec` | 启动会话总时间的一部分。 |
@@ -460,7 +464,7 @@ ipc_handshake_timeout_sec = 5
 
 | 工具 | 操作 | 运行位置 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`attach`、`list`、`get`、`close` | 守护进程。 |
+| `ghidra_session` | `open`、`attach`、`list`、`get`、`close`、`checkpoint.create`、`checkpoint.list`、`checkpoint.restore`、`reset`、`delete` | 守护进程。 |
 | `ghidra_upload` | `prepare` | 守护进程。 |
 | `ghidra_job` | `list`、`get`、`wait` | 守护进程。 |
 | `ghidra_daemon` | `status`、`shutdown` | 守护进程。 |
@@ -573,6 +577,7 @@ GHIDRA_MCP_HOME/                 # 默认：~/.ghidra-mcp
 `-- projects/<md5>/
     |-- binary                  # 已保存的二进制文件，使用固定名称
     |-- binary.json             # 原始文件名
+    |-- checkpoints/            # 已保存的项目快照
     `-- ghidra/
         |-- project.gpr
         `-- project.rep/
@@ -604,6 +609,7 @@ GHIDRA_MCP_HOME/                 # 默认：~/.ghidra-mcp
 |-- projects\<md5>\
 |   |-- binary
 |   |-- binary.json
+|   |-- checkpoints\
 |   `-- ghidra\
 |       |-- project.gpr
 |       `-- project.rep\

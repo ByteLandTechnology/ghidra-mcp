@@ -7,14 +7,14 @@
 
 use super::catalog::{Effects, Md5Rule};
 use super::{parse, Daemon, Handler, Output, Request};
-use crate::error::DomainError;
-use crate::model::{JobStatus, SessionRecord};
-use crate::{analysis, session};
-use anyhow::Result;
+use crate::model::SessionRecord;
+use crate::session;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+
+mod handlers;
+use handlers::{attach_session, daemon_status, open_session, shutdown_daemon, start_analysis};
 
 /// An operation that the daemon runs.
 pub(super) struct LocalOperation {
@@ -213,6 +213,168 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
                     format!("Closed session {md5}"),
                     json!({ "session": session.summary() }),
                 ))
+            })
+        },
+    },
+    LocalOperation {
+        domain: "session",
+        name: "checkpoint.create",
+        description: concat!(
+            "Save the active program and copy project.gpr and project.rep into ",
+            "projects/<md5>/checkpoints/. Set params.name to attach a checkpoint label."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "description": "Optional label for the checkpoint"
+                    }
+                },
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Required,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: false,
+            destructive: false,
+            idempotent: false,
+            allowed_during_analysis: false,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                let CheckpointCreateArgs { name } = parse(&request.label, request.params)?;
+                session::checkpoint_create(&daemon.state, &md5, name).await
+            })
+        },
+    },
+    LocalOperation {
+        domain: "session",
+        name: "checkpoint.list",
+        description: "List saved checkpoints for one binary session, from newest to oldest.",
+        schema: no_params,
+        md5: Md5Rule::Required,
+        basis: Basis::Own(READ),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                session::checkpoint_list(&daemon.state, &md5).await
+            })
+        },
+    },
+    LocalOperation {
+        domain: "session",
+        name: "checkpoint.restore",
+        description: concat!(
+            "Stop the active Ghidra process without save, replace projects/<md5>/ghidra/ from a ",
+            "checkpoint, and relaunch the session. Omit id and name to restore the newest ",
+            "checkpoint. Set wait=false to return before Ghidra is ready."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Checkpoint identifier from checkpoint.list"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Checkpoint label when id is omitted"
+                    },
+                    "wait": { "type": "boolean", "default": true },
+                    "timeoutMs": { "type": "integer", "minimum": 1 }
+                },
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Required,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: true,
+            destructive: true,
+            idempotent: false,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                let args: CheckpointRestoreArgs = parse(&request.label, request.params)?;
+                let state = &daemon.state;
+                let wait = args
+                    .wait
+                    .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
+                session::checkpoint_restore(state, &md5, args.id, args.name, wait).await
+            })
+        },
+    },
+    LocalOperation {
+        domain: "session",
+        name: "reset",
+        description: concat!(
+            "Stop the active Ghidra process without save, delete projects/<md5>/ghidra/ and ",
+            "checkpoints, and keep binary and binary.json. Set open=true to import the binary ",
+            "into a fresh project."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "open": { "type": "boolean", "default": false },
+                    "wait": { "type": "boolean", "default": true },
+                    "timeoutMs": { "type": "integer", "minimum": 1 }
+                },
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Required,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: true,
+            destructive: true,
+            idempotent: true,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                let args: ResetArgs = parse(&request.label, request.params)?;
+                let state = &daemon.state;
+                let wait = (args.open && args.wait)
+                    .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
+                session::reset(state, &md5, args.open, wait).await
+            })
+        },
+    },
+    LocalOperation {
+        domain: "session",
+        name: "delete",
+        description: concat!(
+            "Stop the active Ghidra process without save and remove projects/<md5>/, ",
+            "sessions/<md5>/, and logs/<md5>/."
+        ),
+        schema: no_params,
+        md5: Md5Rule::Required,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: true,
+            destructive: true,
+            idempotent: false,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                let _: Map<String, Value> = parse(&request.label, request.params)?;
+                session::delete(&daemon.state, &md5).await
             })
         },
     },
@@ -453,6 +615,48 @@ struct CloseArgs {
     force: bool,
 }
 
+/// The parameters of `ghidra_session checkpoint.create`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckpointCreateArgs {
+    /// Optional human-readable label for the checkpoint.
+    name: Option<String>,
+}
+
+/// Returns `true` as the default `wait` value for restore and reopen calls.
+const fn default_true() -> bool {
+    true
+}
+
+/// The parameters of `ghidra_session checkpoint.restore`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckpointRestoreArgs {
+    /// Target checkpoint identifier.
+    id: Option<String>,
+    /// Target checkpoint label when `id` is omitted.
+    name: Option<String>,
+    /// Wait until the relaunched session is ready.
+    #[serde(default = "default_true")]
+    wait: bool,
+    /// Maximum wait in milliseconds, instead of the launch timeout.
+    timeout_ms: Option<u64>,
+}
+
+/// The parameters of `ghidra_session reset`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResetArgs {
+    /// Launch a fresh import after deletion of the saved Ghidra project.
+    #[serde(default)]
+    open: bool,
+    /// Wait until the fresh import session is ready when `open` is `true`.
+    #[serde(default = "default_true")]
+    wait: bool,
+    /// Maximum wait in milliseconds, instead of the launch timeout.
+    timeout_ms: Option<u64>,
+}
+
 /// The parameters of `ghidra_job get` and `ghidra_job wait`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -469,238 +673,4 @@ struct ShutdownArgs {
     /// Stop the daemon also if a session is live or a job runs.
     #[serde(default)]
     force: bool,
-}
-
-/// Returns the MD5 of each live session and the ID of each job that runs.
-fn live_work(daemon: &Daemon) -> (Vec<String>, Vec<String>) {
-    let mut sessions: Vec<String> = daemon
-        .state
-        .sessions()
-        .into_iter()
-        .filter(|session| session.status.is_live())
-        .map(|session| session.session_id)
-        .collect();
-    let mut jobs: Vec<String> = daemon
-        .state
-        .jobs()
-        .into_iter()
-        .filter(|job| job.status == JobStatus::Running)
-        .map(|job| job.id)
-        .collect();
-    sessions.sort();
-    jobs.sort();
-    (sessions, jobs)
-}
-
-/// Runs `ghidra_daemon status`.
-fn daemon_status(daemon: &Daemon) -> Output {
-    let control = &daemon.control;
-    let started = control
-        .started_at
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let uptime = control.started_at.elapsed().unwrap_or_default();
-    let sessions: Vec<Value> = daemon
-        .state
-        .sessions()
-        .iter()
-        .map(SessionRecord::summary)
-        .collect();
-    let jobs: Vec<_> = daemon
-        .state
-        .jobs()
-        .into_iter()
-        .filter(|job| job.status == JobStatus::Running)
-        .collect();
-    let pid = std::process::id();
-    (
-        format!("Daemon {pid} runs with {} session(s)", sessions.len()),
-        json!({
-            "daemon": {
-                "pid": pid,
-                "version": env!("CARGO_PKG_VERSION"),
-                "startedAt": started.as_secs(),
-                "uptimeSeconds": uptime.as_secs(),
-                "mcpUrl": control.mcp_url,
-            },
-            "sessions": sessions,
-            "jobs": jobs,
-        }),
-    )
-}
-
-/// The time between the reply of `ghidra_daemon shutdown` and the start of the shutdown.
-/// Then the reply gets to the client before the daemon closes the connections.
-const SHUTDOWN_DELAY: Duration = Duration::from_millis(200);
-
-/// Runs `ghidra_daemon shutdown`.
-fn shutdown_daemon(daemon: &Daemon, request: Request) -> Result<Output> {
-    let ShutdownArgs { force } = parse(&request.label, request.params)?;
-    let (sessions, jobs) = live_work(daemon);
-    if !force && (!sessions.is_empty() || !jobs.is_empty()) {
-        return Err(DomainError::invalid_argument(
-            "force",
-            format!(
-                "the daemon has {} live session(s) {sessions:?} and {} running job(s) {jobs:?}; \
-                 set force=true to stop it",
-                sessions.len(),
-                jobs.len()
-            ),
-        )
-        .into());
-    }
-    let shutdown = daemon.control.shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(SHUTDOWN_DELAY).await;
-        shutdown.cancel();
-    });
-    Ok((
-        "The daemon is shutting down".to_string(),
-        json!({ "shuttingDown": true, "sessions": sessions, "jobs": jobs }),
-    ))
-}
-
-/// Runs `ghidra_session open`: imports a file on the daemon host, or opens a saved binary.
-async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
-    let args: OpenArgs = parse(&request.label, request.params)?;
-    let state = &daemon.state;
-    let wait = args
-        .wait
-        .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
-    match (args.path, request.md5) {
-        (Some(path), None) => {
-            let raw = PathBuf::from(path);
-            let path = raw.canonicalize().map_err(|err| {
-                DomainError::missing_target(
-                    "path",
-                    format!("target path cannot be resolved: {err}"),
-                )
-            })?;
-            if !path.is_file() {
-                return Err(
-                    DomainError::missing_target("path", "target path is not a file").into(),
-                );
-            }
-            let path_buf = path.clone();
-            let md5 = tokio::task::spawn_blocking(move || crate::ghidra::file_md5(&path_buf))
-                .await
-                .map_err(|err| DomainError::Internal {
-                    message: format!("file_md5 task panicked: {err}"),
-                })??;
-            session::open(state, md5, Some(&path), wait).await
-        }
-        (None, Some(md5)) => session::open(state, md5, None, wait).await,
-        (None, None) => Err(DomainError::invalid_argument(
-            "path/md5",
-            "`ghidra_session open` requires either params.path or md5",
-        )
-        .into()),
-        (Some(_), Some(_)) => Err(DomainError::invalid_argument(
-            "path/md5",
-            "`ghidra_session open` accepts either params.path or md5, not both",
-        )
-        .into()),
-    }
-}
-
-/// Runs `ghidra_session attach`: connects to a loopback `Bridge.java` endpoint or issues arguments.
-async fn attach_session(daemon: &Daemon, request: Request) -> Result<Output> {
-    let args: AttachArgs = parse(&request.label, request.params)?;
-    let state = &daemon.state;
-    let endpoint_url = match (args.ws_url, args.port) {
-        (Some(_), Some(_)) => {
-            return Err(DomainError::invalid_argument(
-                "wsUrl/port",
-                "`ghidra_session attach` accepts either params.wsUrl or params.port, not both",
-            )
-            .into());
-        }
-        (Some(url), None) => Some(url),
-        (None, Some(port)) => Some(crate::bridge::gui_ws_url_for_port(port)?),
-        (None, None) => None,
-    };
-    if endpoint_url.is_none() && args.token.is_some() {
-        return Err(DomainError::invalid_argument(
-            "token",
-            "`params.token` requires `params.wsUrl` or `params.port`",
-        )
-        .into());
-    }
-    let (md5, file_name) = resolve_attach_identity(args.path, request.md5, args.file_name).await?;
-    if let Some(ws_url) = endpoint_url {
-        let timeout = millis_or(args.timeout_ms, state.config.launch_timeout());
-        return session::attach_endpoint(
-            state,
-            md5,
-            file_name,
-            &ws_url,
-            args.token.as_deref(),
-            timeout,
-        )
-        .await;
-    }
-    let wait = args
-        .wait
-        .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
-    session::attach(state, md5, file_name, wait).await
-}
-
-/// Resolves the `(md5, file_name)` pair for `ghidra_session attach`.
-async fn resolve_attach_identity(
-    path: Option<String>,
-    md5: Option<String>,
-    file_name: Option<String>,
-) -> Result<(String, Option<String>)> {
-    match (path, md5) {
-        (Some(_), Some(_)) => Err(DomainError::invalid_argument(
-            "path/md5",
-            "`ghidra_session attach` accepts either params.path or md5, not both",
-        )
-        .into()),
-        (Some(raw), None) => {
-            let path = PathBuf::from(raw).canonicalize().map_err(|err| {
-                DomainError::missing_target(
-                    "path",
-                    format!("target path cannot be resolved: {err}"),
-                )
-            })?;
-            if !path.is_file() {
-                return Err(
-                    DomainError::missing_target("path", "target path is not a file").into(),
-                );
-            }
-            let inferred_name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    DomainError::invalid_argument("path", "binary filename must be valid UTF-8")
-                })?
-                .to_string();
-            let md5 = tokio::task::spawn_blocking(move || crate::ghidra::file_md5(&path))
-                .await
-                .map_err(|err| DomainError::Internal {
-                    message: format!("file_md5 task panicked: {err}"),
-                })??;
-            Ok((md5, Some(file_name.unwrap_or(inferred_name))))
-        }
-        (None, Some(md5)) => Ok((md5, file_name)),
-        (None, None) => Ok((uuid::Uuid::new_v4().simple().to_string(), file_name)),
-    }
-}
-
-/// Runs `ghidra_analysis start`.
-async fn start_analysis(daemon: &Daemon, request: Request) -> Result<Output> {
-    let md5 = request.session();
-    let args: AnalysisArgs = parse(&request.label, request.params)?;
-    let state = &daemon.state;
-    let wait = args
-        .wait
-        .then(|| millis_or(args.timeout_ms, state.config.timeouts.analysis_import));
-    let job = analysis::start(state, md5.clone(), args.params, wait).await?;
-    let text = if wait.is_some() && job.status == JobStatus::Completed {
-        format!("Analysis completed for session {md5}")
-    } else {
-        format!("Analysis started for session {md5}")
-    };
-    Ok((text, json!({ "job": job })))
 }

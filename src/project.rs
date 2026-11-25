@@ -10,6 +10,7 @@
 //! ├── binary        the saved binary, with a fixed name
 //! ├── binary.json   {"fileName": …}, written last: it shows that the copy is complete
 //! ├── binary.lock   serializes persistence for this MD5 and remains after lock release
+//! ├── checkpoints/  bounded project snapshots for rollback
 //! └── ghidra/       the Ghidra project: project.gpr and project.rep/
 //! ```
 //!
@@ -32,7 +33,7 @@ const BINARY_NAME: &str = "binary";
 /// The file name of the metadata of the binary in its project directory.
 const METADATA_NAME: &str = "binary.json";
 /// The stable file on which readers and writers lock one binary.
-const BINARY_LOCK_NAME: &str = "binary.lock";
+pub(crate) const BINARY_LOCK_NAME: &str = "binary.lock";
 
 /// The contents of `binary.json`.
 #[derive(Deserialize, Serialize)]
@@ -152,7 +153,7 @@ pub fn persist_binary(paths: &McpPaths, source: &Path, md5: &str, file_name: &st
 }
 
 /// Masks sensitive server filesystem paths from error messages before exposure.
-fn sanitize_error_path(err: &io::Error, path: &Path) -> String {
+pub(crate) fn sanitize_error_path(err: &io::Error, path: &Path) -> String {
     let err_str = err.to_string();
     let path_str = path.to_string_lossy();
     let sanitized = if !path_str.is_empty() && err_str.contains(path_str.as_ref()) {
@@ -184,7 +185,7 @@ fn sanitize_error_path(err: &io::Error, path: &Path) -> String {
 
 /// Opens the stable per-MD5 lock. Writers have exclusive access.
 /// Project preparation uses a shared lock.
-fn lock_binary(project_dir: &Path, exclusive: bool) -> Result<File> {
+pub(crate) fn lock_binary(project_dir: &Path, exclusive: bool) -> Result<File> {
     fs::create_dir_all(project_dir)?;
     // Keep the lock file in place. If you remove it, a later writer can lock a
     // different file while another writer still holds or waits on this one.
@@ -365,4 +366,157 @@ pub fn prepare_project(paths: &McpPaths, md5: &str) -> Result<PreparedProject> {
 /// Returns a fresh 256-bit hexadecimal credential for one bridge connection.
 pub fn generate_agent_token() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+/// Removes `ghidra/`, `checkpoints/`, and `recovery-backups/` for one binary while
+/// it keeps `binary`, `binary.json`, and `binary.lock`.
+///
+/// # Errors
+///
+/// Fails if `md5` is invalid, if `binary` or `binary.json` is absent, or if a
+/// file deletion fails.
+pub fn reset_project(paths: &McpPaths, md5: &str) -> Result<String> {
+    paths.ensure_layout()?;
+    let md5 = normalize_md5(md5)?;
+    let project_dir = paths.project_dir(&md5);
+    if !project_dir.is_dir() {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before resetting it"),
+        )
+        .into());
+    }
+    let _lock = lock_binary(&project_dir, true)?;
+    let metadata = read_metadata(paths, &md5)?.ok_or_else(|| {
+        DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before resetting it"),
+        )
+    })?;
+    if !project_dir.join(BINARY_NAME).is_file() {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before resetting it"),
+        )
+        .into());
+    }
+    for entry in fs::read_dir(&project_dir).map_err(|err| DomainError::Internal {
+        message: format!(
+            "reading project directory: {}",
+            sanitize_error_path(&err, &project_dir)
+        ),
+    })? {
+        let entry = entry.map_err(|err| DomainError::Internal {
+            message: format!(
+                "reading project directory entry: {}",
+                sanitize_error_path(&err, &project_dir)
+            ),
+        })?;
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            remove_entry(&entry.path())?;
+            continue;
+        };
+        if matches!(name_str, BINARY_NAME | METADATA_NAME | BINARY_LOCK_NAME) {
+            continue;
+        }
+        remove_entry(&entry.path())?;
+    }
+    sync_directory(&project_dir)?;
+    Ok(metadata.file_name)
+}
+
+/// Removes `projects/<md5>/`, `sessions/<md5>/`, and `logs/<md5>/` for one binary.
+/// Returns `true` if at least one directory existed on disk.
+///
+/// # Errors
+///
+/// Fails if `md5` is invalid or if a file or directory deletion fails.
+pub fn delete_project(paths: &McpPaths, md5: &str) -> Result<bool> {
+    let md5 = normalize_md5(md5)?;
+    let project_dir = paths.project_dir(&md5);
+    let session_dir = paths.session_dir(&md5);
+    let log_dir = paths.log_dir(&md5);
+    let mut removed_any = false;
+
+    if project_dir.exists() {
+        removed_any = true;
+        let lock = lock_binary(&project_dir, true)?;
+        for entry in fs::read_dir(&project_dir).map_err(|err| DomainError::Internal {
+            message: format!(
+                "reading project directory: {}",
+                sanitize_error_path(&err, &project_dir)
+            ),
+        })? {
+            let entry = entry.map_err(|err| DomainError::Internal {
+                message: format!(
+                    "reading project directory entry: {}",
+                    sanitize_error_path(&err, &project_dir)
+                ),
+            })?;
+            if entry.file_name().to_str() == Some(BINARY_LOCK_NAME) {
+                continue;
+            }
+            remove_entry(&entry.path())?;
+        }
+        sync_directory(&project_dir)?;
+        // Close the lock handle before directory deletion so Windows can delete binary.lock.
+        drop(lock);
+        remove_dir_if_exists(&project_dir)?;
+        if paths.projects_dir.is_dir() {
+            sync_directory(&paths.projects_dir)?;
+        }
+    }
+
+    for dir in [&session_dir, &log_dir] {
+        if dir.exists() {
+            removed_any = true;
+            remove_dir_if_exists(dir)?;
+            if let Some(parent) = dir.parent().filter(|parent| parent.is_dir()) {
+                sync_directory(parent)?;
+            }
+        }
+    }
+    Ok(removed_any)
+}
+
+/// Deletes a file, symbolic link, or directory tree, and masks server paths in errors.
+pub(crate) fn remove_entry(path: &Path) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(DomainError::Internal {
+                message: format!("reading file metadata: {}", sanitize_error_path(&err, path)),
+            }
+            .into());
+        }
+    };
+    if metadata.file_type().is_dir() {
+        remove_dir_if_exists(path)
+    } else {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(DomainError::Internal {
+                message: format!("removing project file: {}", sanitize_error_path(&err, path)),
+            }
+            .into()),
+        }
+    }
+}
+
+/// Deletes a directory tree if it exists, and masks server paths in errors.
+fn remove_dir_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(DomainError::Internal {
+            message: format!(
+                "removing project directory: {}",
+                sanitize_error_path(&err, path)
+            ),
+        }
+        .into()),
+    }
 }

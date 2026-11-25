@@ -35,6 +35,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 
+mod checkpoints;
+
+pub use checkpoints::{checkpoint_create, checkpoint_list, checkpoint_restore, delete, reset};
+
 /// The time that Ghidra has to exit after its bridge session ends. After this time,
 /// the bridge halts the JVM, but never during a save. Then no orphan Ghidra
 /// process stays when the daemon stops without a chance to stop it.
@@ -177,9 +181,7 @@ pub async fn attach(
             .unwrap_or_else(|| DEFAULT_ATTACHED_NAME.to_string());
         state.detach_bridge(&md5, "session attach issued a new credential");
         state.stop_process(&md5, Duration::ZERO).await;
-        if let Some(old_job) = state.launch_job(&md5) {
-            state.fail_job_error(&old_job, DomainError::disconnected(&md5));
-        }
+        state.fail_session_jobs(&md5, &DomainError::disconnected(&md5));
         let token = crate::project::generate_agent_token();
         let record = SessionRecord::attaching(md5.clone(), resolved_name, token.clone());
         state.put_session(&record)?;
@@ -239,9 +241,7 @@ pub async fn attach_endpoint(
             .unwrap_or_else(|| DEFAULT_ATTACHED_NAME.to_string());
         state.detach_bridge(&md5, "session attach replaced the bridge connection");
         state.stop_process(&md5, Duration::ZERO).await;
-        if let Some(old_job) = state.launch_job(&md5) {
-            state.fail_job_error(&old_job, DomainError::disconnected(&md5));
-        }
+        state.fail_session_jobs(&md5, &DomainError::disconnected(&md5));
         let token = crate::project::generate_agent_token();
         let record = SessionRecord::attaching(md5.clone(), resolved_name, token.clone());
         state.put_session(&record)?;

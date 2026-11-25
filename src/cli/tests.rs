@@ -3,7 +3,7 @@
 
 //! Tests of the command-line parser.
 
-use super::admin::{JobCommand, SessionCommand};
+use super::admin::{CheckpointCommand, JobCommand, SessionCommand};
 use super::daemon::DaemonCommand;
 use super::{Cli, Command};
 use clap::{CommandFactory, Parser};
@@ -73,6 +73,23 @@ fn management_commands_parse() {
     assert!(parse(&["paths", "--json"]).is_ok());
     assert!(parse(&["config", "check"]).is_ok());
     assert!(parse(&["call", "ghidra_help", "[]"]).is_err());
+    let cli = parse(&["session", "checkpoint", "create", "0123", "--name", "base"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Checkpoint(
+            CheckpointCommand::Create { .. }
+        )))
+    ));
+    let cli = parse(&["session", "reset", "0123", "--open", "--wait"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Reset {
+            open: true,
+            wait: true,
+            ..
+        }))
+    ));
+    assert!(parse(&["session", "delete", "0123"]).is_ok());
 }
 
 /// Makes sure that `session attach` and `setup` parse their arguments.
