@@ -37,7 +37,7 @@ use catalog::{Operation, Route, HELP_TOOL};
 use futures::future::BoxFuture;
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio_util::sync::CancellationToken;
@@ -199,10 +199,9 @@ pub async fn call(daemon: &Daemon, tool: &str, arguments: Map<String, Value>) ->
                 }
                 result
             };
-            Ok((
-                format!("{} completed", request.label),
-                json!({ "response": response }),
-            ))
+            let mut body = Map::new();
+            body.insert("response".to_string(), response.into_value());
+            Ok((format!("{} completed", request.label), Value::Object(body)))
         }
     }
 }
