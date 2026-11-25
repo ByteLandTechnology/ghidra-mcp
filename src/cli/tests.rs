@@ -3,7 +3,7 @@
 
 //! Tests of the command-line parser.
 
-use super::admin::{JobCommand, SessionCommand};
+use super::admin::{CheckpointCommand, JobCommand, SessionCommand};
 use super::daemon::DaemonCommand;
 use super::{Cli, Command};
 use clap::{CommandFactory, Parser};
@@ -73,6 +73,23 @@ fn management_commands_parse() {
     assert!(parse(&["paths", "--json"]).is_ok());
     assert!(parse(&["config", "check"]).is_ok());
     assert!(parse(&["call", "ghidra_help", "[]"]).is_err());
+    let cli = parse(&["session", "checkpoint", "create", "0123", "--name", "base"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Checkpoint(
+            CheckpointCommand::Create { .. }
+        )))
+    ));
+    let cli = parse(&["session", "reset", "0123", "--open", "--wait"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Reset {
+            open: true,
+            wait: true,
+            ..
+        }))
+    ));
+    assert!(parse(&["session", "delete", "0123"]).is_ok());
 }
 
 /// Makes sure that the durations have a short text form.
@@ -81,4 +98,37 @@ fn durations_are_short() {
     assert_eq!(super::output::duration(5), "5s");
     assert_eq!(super::output::duration(65), "1m 5s");
     assert_eq!(super::output::duration(3725), "1h 2m 5s");
+}
+
+/// Makes sure that `tool_value` reads structured data without `content` and keeps text fallbacks.
+#[test]
+fn tool_value_handles_empty_content_and_unstructured_fallback() {
+    use rmcp::model::{CallToolResult, ContentBlock};
+    use serde_json::json;
+
+    let mut ok = CallToolResult::success(Vec::new());
+    ok.structured_content = Some(json!({ "sessions": [] }));
+    assert_eq!(
+        super::output::tool_value(ok).unwrap(),
+        json!({ "sessions": [] })
+    );
+
+    let mut structured_err = CallToolResult::error(Vec::new());
+    structured_err.structured_content = Some(json!({
+        "response": { "error": { "message": "daemon is shutting down" } }
+    }));
+    assert_eq!(
+        super::output::tool_value(structured_err)
+            .unwrap_err()
+            .to_string(),
+        "daemon is shutting down"
+    );
+
+    let legacy_err = CallToolResult::error(vec![ContentBlock::text("unknown tool: ghidra_daemon")]);
+    assert_eq!(
+        super::output::tool_value(legacy_err)
+            .unwrap_err()
+            .to_string(),
+        "unknown tool: ghidra_daemon"
+    );
 }

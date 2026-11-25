@@ -5,9 +5,11 @@
 //!
 //! # Concurrency
 //!
-//! - [`McpState::lifecycle_lock`] (async) puts the session lifecycle
-//!   transitions in sequence: open, launch, bridge handshake, disconnect and
-//!   close. A task can keep it across an await, for example while a process stops.
+//! - [`McpState::lifecycle_lock`] returns one async mutex for each canonical
+//!   MD5. Each mutex puts the lifecycle transitions of its session in sequence:
+//!   open, launch, bridge handshake, disconnect and close. Transitions of
+//!   different sessions run in parallel. A task can keep a session lock across
+//!   an await, for example while a process stops.
 //! - Plain mutexes protect the session map and the job map. A task keeps them
 //!   only for short sections that do not block, and never across an await. For
 //!   this reason, most methods here are synchronous.
@@ -19,6 +21,7 @@ use crate::error::DomainError;
 use crate::model::{JobRecord, JobStatus, RpcEnvelope, RpcError, SessionRecord};
 use crate::paths::{atomic_write, McpPaths};
 use crate::process::ManagedChild;
+use crate::project::normalize_md5;
 use anyhow::Result;
 use axum::extract::ws::Message;
 use serde_json::Value;
@@ -116,8 +119,9 @@ pub struct McpState {
     pub config: McpConfig,
     /// The WebSocket URL to which a bridge connects.
     pub bridge_ws_url: String,
-    /// Puts the session lifecycle transitions in order: open, launch, ready, disconnect and close.
-    pub lifecycle_lock: tokio::sync::Mutex<()>,
+    /// One async mutex for each canonical MD5. Each mutex puts the lifecycle transitions of its
+    /// session in sequence: open, launch, ready, disconnect and close.
+    lifecycle_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Wakes the waiters after each change of a session, a job or a process.
     pub notify: Notify,
     /// Shows whether shutdown started. After that, the daemon refuses new launches and processes.
@@ -140,7 +144,7 @@ impl McpState {
             paths,
             config,
             bridge_ws_url,
-            lifecycle_lock: tokio::sync::Mutex::new(()),
+            lifecycle_locks: Mutex::default(),
             notify: Notify::new(),
             shutting_down: AtomicBool::new(false),
             sessions: Mutex::new(sessions),
@@ -250,6 +254,15 @@ impl McpState {
         Ok(())
     }
 
+    /// Removes the in-memory entry of a session and wakes the waiters.
+    pub fn remove_session(&self, md5: &str) -> Option<SessionRecord> {
+        let removed = self.entries().remove(md5).map(|entry| entry.record);
+        if removed.is_some() {
+            self.notify.notify_waiters();
+        }
+        removed
+    }
+
     // Launch jobs.
 
     /// Returns the job that owns the current launch of a session.
@@ -271,14 +284,47 @@ impl McpState {
         self.notify.notify_waiters();
     }
 
+    /// Returns the lifecycle lock of the session with the MD5 `md5`.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `md5` does not contain 32 hexadecimal characters.
+    pub fn lifecycle_lock(&self, md5: &str) -> Result<Arc<tokio::sync::Mutex<()>>> {
+        let md5 = normalize_md5(md5)?;
+        let mut locks = self
+            .lifecycle_locks
+            .lock()
+            .expect("lifecycle lock map poisoned");
+        Ok(locks
+            .entry(md5)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone())
+    }
+
+    /// Returns the number of allocated per-MD5 lifecycle locks.
+    #[cfg(test)]
+    pub(crate) fn lifecycle_lock_count(&self) -> usize {
+        self.lifecycle_locks
+            .lock()
+            .expect("lifecycle lock map poisoned")
+            .len()
+    }
+
     /// Fails a launch job. If the job still owns the session, the session also fails.
     pub async fn fail_launch(&self, md5: &str, job_id: &str, error: DomainError) {
-        let _guard = self.lifecycle_lock.lock().await;
+        let Ok(md5) = normalize_md5(md5) else {
+            self.fail_job_error(job_id, error);
+            return;
+        };
+        let lock = self
+            .lifecycle_lock(&md5)
+            .expect("normalized MD5 must be valid");
+        let _guard = lock.lock_owned().await;
         let message = error.to_string();
         self.fail_job_error(job_id, error);
-        if self.owns_launch(md5, job_id) {
-            let _ = self.update_session(md5, |session| session.mark_error(&message));
-            self.set_launch_job(md5, None);
+        if self.owns_launch(&md5, job_id) {
+            let _ = self.update_session(&md5, |session| session.mark_error(&message));
+            self.set_launch_job(&md5, None);
         }
     }
 
@@ -336,6 +382,13 @@ impl McpState {
     /// Fails for an unknown session.
     pub fn request_lock(&self, md5: &str) -> Result<Arc<tokio::sync::Mutex<()>>> {
         self.with_entry(md5, |entry| entry.request_lock.clone())
+    }
+
+    /// Returns the per-session request serialization lock if the session exists in memory.
+    pub fn find_request_lock(&self, md5: &str) -> Option<Arc<tokio::sync::Mutex<()>>> {
+        self.entries()
+            .get(md5)
+            .map(|entry| entry.request_lock.clone())
     }
 
     /// Records a request and returns the connection for the request.
@@ -589,6 +642,27 @@ impl McpState {
         self.finish_job(job_id, Err(error));
     }
 
+    /// Fails all jobs that run for `md5`.
+    pub fn fail_session_jobs(&self, md5: &str, error: &DomainError) {
+        let mut map = self.job_map();
+        let mut changed = false;
+        for entry in map.values_mut() {
+            if entry.record.status == JobStatus::Running
+                && entry.record.session_id.as_deref() == Some(md5)
+            {
+                entry.record.status = JobStatus::Failed;
+                entry.record.error = Some(error.to_string());
+                entry.failure = Some(error.clone());
+                entry.finished_at = Some(Instant::now());
+                changed = true;
+            }
+        }
+        if changed {
+            Self::prune_jobs(&mut map);
+            self.notify.notify_waiters();
+        }
+    }
+
     /// Records the latest progress of an analysis job. If there is an error, it
     /// also records the error.
     pub fn set_job_progress(&self, job_id: &str, progress: Option<Value>, error: Option<String>) {
@@ -684,6 +758,12 @@ fn load_sessions(paths: &McpPaths) -> Result<HashMap<String, SessionEntry>> {
 /// Makes isolated daemon state without Ghidra processes or shared environment changes.
 #[cfg(test)]
 pub(crate) fn test_state(root: &std::path::Path) -> Arc<McpState> {
+    test_state_with_config(root, McpConfig::default())
+}
+
+/// Makes isolated daemon state with custom configuration settings for tests.
+#[cfg(test)]
+pub(crate) fn test_state_with_config(root: &std::path::Path, config: McpConfig) -> Arc<McpState> {
     Arc::new(McpState {
         paths: McpPaths {
             config_toml: root.join("config.toml"),
@@ -691,9 +771,9 @@ pub(crate) fn test_state(root: &std::path::Path) -> Arc<McpState> {
             runtime_dir: root.join("run"),
             tmp_dir: root.join("tmp"),
         },
-        config: McpConfig::default(),
+        config,
         bridge_ws_url: String::new(),
-        lifecycle_lock: tokio::sync::Mutex::new(()),
+        lifecycle_locks: Mutex::default(),
         notify: Notify::new(),
         shutting_down: AtomicBool::new(false),
         sessions: Mutex::default(),
