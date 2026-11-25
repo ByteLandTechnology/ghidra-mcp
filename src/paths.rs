@@ -84,7 +84,8 @@ impl McpPaths {
         Ok(())
     }
 
-    /// Returns the persistent directory of one binary: `binary`, `binary.json` and `ghidra/`.
+    /// Returns the persistent directory of one binary: `binary`, `binary.json`, `ghidra/`
+    /// and `checkpoints/`.
     pub fn project_dir(&self, md5: &str) -> PathBuf {
         self.projects_dir.join(md5)
     }
@@ -92,6 +93,11 @@ impl McpPaths {
     /// Returns the physical Ghidra project root (`project.gpr` and `project.rep`).
     pub fn ghidra_project_root(&self, md5: &str) -> PathBuf {
         self.project_dir(md5).join("ghidra")
+    }
+
+    /// Returns the persistent checkpoint directory of one binary.
+    pub fn checkpoints_dir(&self, md5: &str) -> PathBuf {
+        self.project_dir(md5).join("checkpoints")
     }
 
     /// Returns the Ghidra project root that the daemon gives to Ghidra: the launch
@@ -122,19 +128,29 @@ impl McpPaths {
         self.runtime_dir.join("sessions")
     }
 
+    /// Returns the runtime snapshot directory of one session.
+    pub fn session_dir(&self, md5: &str) -> PathBuf {
+        self.sessions_dir().join(md5)
+    }
+
     /// Returns the path of the runtime snapshot of a session.
     pub fn session_json(&self, md5: &str) -> PathBuf {
-        self.sessions_dir().join(md5).join("session.json")
+        self.session_dir(md5).join("session.json")
+    }
+
+    /// Returns the runtime log directory of one session.
+    pub fn log_dir(&self, md5: &str) -> PathBuf {
+        self.runtime_dir.join("logs").join(md5)
     }
 
     /// Returns the path of the log of the Ghidra standard output of a session.
     pub fn stdout_log(&self, md5: &str) -> PathBuf {
-        self.runtime_dir.join("logs").join(md5).join("stdout.log")
+        self.log_dir(md5).join("stdout.log")
     }
 
     /// Returns the path of the log of the Ghidra standard error of a session.
     pub fn stderr_log(&self, md5: &str) -> PathBuf {
-        self.runtime_dir.join("logs").join(md5).join("stderr.log")
+        self.log_dir(md5).join("stderr.log")
     }
 }
 

@@ -385,6 +385,9 @@ analyze_headless = ""
 [analysis]
 max_cpu = 4
 
+[checkpoints]
+max_per_binary = 10
+
 [timeouts]
 process_spawn_timeout_sec = 30
 analysis_import_timeout_sec = 1800
@@ -403,6 +406,7 @@ ipc_handshake_timeout_sec = 5
 | `ghidra.home` | Ghidra のインストールディレクトリ。 |
 | `ghidra.analyze_headless` | `analyzeHeadless` のパス。 |
 | `analysis.max_cpu` | `analyzeHeadless -max-cpu` の値。 |
+| `checkpoints.max_per_binary` | 1 つのバイナリにつき保持するチェックポイントの最大数。 |
 | `timeouts.process_spawn_timeout_sec` | Ghidra プロセスを起動する時間。 |
 | `timeouts.analysis_import_timeout_sec` | バイナリをインポートする時間。`ghidra_analysis start` のデフォルトの待機時間でもあります。 |
 | `timeouts.bridge_connect_timeout_sec` | セッションを起動する合計時間の一部。 |
@@ -434,7 +438,7 @@ ipc_handshake_timeout_sec = 5
 
 | ツール | 操作 | 実行場所 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`list`、`get`、`close` | デーモン。 |
+| `ghidra_session` | `open`、`list`、`get`、`close`、`checkpoint.create`、`checkpoint.list`、`checkpoint.restore`、`reset`、`delete` | デーモン。 |
 | `ghidra_upload` | `prepare` | デーモン。 |
 | `ghidra_job` | `list`、`get`、`wait` | デーモン。 |
 | `ghidra_daemon` | `status`、`shutdown` | デーモン。 |
@@ -571,6 +575,7 @@ GHIDRA_MCP_HOME/                 # デフォルト：~/.ghidra-mcp
 `-- projects/<md5>/
     |-- binary                  # 保存済みのバイナリ（固定の名前）
     |-- binary.json             # 元のファイル名
+    |-- checkpoints/            # 保存済みのプロジェクトスナップショット
     `-- ghidra/
         |-- project.gpr
         `-- project.rep/
@@ -602,6 +607,7 @@ Windows のデフォルトのレイアウトは次のとおりです：
 |-- projects\<md5>\
 |   |-- binary
 |   |-- binary.json
+|   |-- checkpoints\
 |   `-- ghidra\
 |       |-- project.gpr
 |       `-- project.rep\
