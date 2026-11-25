@@ -250,7 +250,7 @@ Unix では、`SIGINT`、`SIGTERM`、`SIGHUP` でも停止します。
 | `ghidra-mcp daemon logs [-n N] [-f]` | `daemon.log` の最後の行を表示します。`-f` を付けると、Ctrl-C を押すまで新しい行を表示し続けます。 |
 | `ghidra-mcp paths [--json]` | 永続ホーム、ランタイムディレクトリ、およびその中のファイルを表示します。 |
 | `ghidra-mcp config path\|show\|edit\|check` | `config.toml` の場所の確認、表示、編集、検査を行います。 |
-| `ghidra-mcp session list\|get\|open\|close` | デーモンのセッションを管理します。 |
+| `ghidra-mcp session list\|get\|open\|close\|reset\|delete` | デーモンのセッションを管理します。 |
 | `ghidra-mcp job list\|get\|wait` | デーモンのバックグラウンドジョブを確認します。 |
 
 稼働中のセッションや実行中のジョブがある場合、`daemon stop` はデーモンを停止しません。停止するには `--force` を付けます。
@@ -434,7 +434,7 @@ ipc_handshake_timeout_sec = 5
 
 | ツール | 操作 | 実行場所 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`list`、`get`、`close` | デーモン。 |
+| `ghidra_session` | `open`、`list`、`get`、`close`、`reset`、`delete` | デーモン。 |
 | `ghidra_upload` | `prepare` | デーモン。 |
 | `ghidra_job` | `list`、`get`、`wait` | デーモン。 |
 | `ghidra_daemon` | `status`、`shutdown` | デーモン。 |

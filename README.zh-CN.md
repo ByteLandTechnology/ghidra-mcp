@@ -250,7 +250,7 @@ ghidra-mcp daemon run --listen 127.0.0.1:18490
 | `ghidra-mcp daemon logs [-n N] [-f]` | 显示 `daemon.log` 的最后几行。使用 `-f` 时持续显示新行，直到按 Ctrl-C。 |
 | `ghidra-mcp paths [--json]` | 显示持久主目录、运行时目录及其中的文件。 |
 | `ghidra-mcp config path\|show\|edit\|check` | 查找、显示、修改或检查 `config.toml`。 |
-| `ghidra-mcp session list\|get\|open\|close` | 管理守护进程的会话。 |
+| `ghidra-mcp session list\|get\|open\|close\|reset\|delete` | 管理守护进程的会话。 |
 | `ghidra-mcp job list\|get\|wait` | 查看守护进程的后台作业。 |
 
 如果有活动会话或正在运行的作业，`daemon stop` 不会停止守护进程。加上 `--force` 才会停止。
@@ -433,7 +433,7 @@ ipc_handshake_timeout_sec = 5
 
 | 工具 | 操作 | 运行位置 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`list`、`get`、`close` | 守护进程。 |
+| `ghidra_session` | `open`、`list`、`get`、`close`、`reset`、`delete` | 守护进程。 |
 | `ghidra_upload` | `prepare` | 守护进程。 |
 | `ghidra_job` | `list`、`get`、`wait` | 守护进程。 |
 | `ghidra_daemon` | `status`、`shutdown` | 守护进程。 |

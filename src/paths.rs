@@ -122,19 +122,29 @@ impl McpPaths {
         self.runtime_dir.join("sessions")
     }
 
+    /// Returns the runtime snapshot directory of one session.
+    pub fn session_dir(&self, md5: &str) -> PathBuf {
+        self.sessions_dir().join(md5)
+    }
+
     /// Returns the path of the runtime snapshot of a session.
     pub fn session_json(&self, md5: &str) -> PathBuf {
-        self.sessions_dir().join(md5).join("session.json")
+        self.session_dir(md5).join("session.json")
+    }
+
+    /// Returns the Ghidra log directory of one session.
+    pub fn log_dir(&self, md5: &str) -> PathBuf {
+        self.runtime_dir.join("logs").join(md5)
     }
 
     /// Returns the path of the log of the Ghidra standard output of a session.
     pub fn stdout_log(&self, md5: &str) -> PathBuf {
-        self.runtime_dir.join("logs").join(md5).join("stdout.log")
+        self.log_dir(md5).join("stdout.log")
     }
 
     /// Returns the path of the log of the Ghidra standard error of a session.
     pub fn stderr_log(&self, md5: &str) -> PathBuf {
-        self.runtime_dir.join("logs").join(md5).join("stderr.log")
+        self.log_dir(md5).join("stderr.log")
     }
 }
 

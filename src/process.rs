@@ -323,6 +323,19 @@ impl ManagedChild {
         }
     }
 
+    /// Kills the process tree at once and waits for it to stop.
+    ///
+    /// This function blocks the thread. Run it with `spawn_blocking`.
+    pub fn kill_now(mut self, kill_timeout: Duration) {
+        self.cleanup();
+        if !self.wait_timeout(kill_timeout) {
+            self.cleanup();
+        }
+        if let Some(mut child) = self.child.take() {
+            let _ = child.wait();
+        }
+    }
+
     /// Stops the child process tree. Drop does not repeat the action.
     fn cleanup(&mut self) {
         self.cleaned_up = true;

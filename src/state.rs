@@ -240,6 +240,26 @@ impl McpState {
         self.write_session(&record)
     }
 
+    /// Removes a session from memory and deletes its runtime snapshot directory.
+    pub fn remove_session(&self, md5: &str) -> Option<SessionRecord> {
+        let entry = self.entries().remove(md5)?;
+        if let Some(request) = entry.request {
+            let mut envelope = RpcEnvelope::response(request.id, md5.to_string(), 502);
+            envelope.error = Some(RpcError {
+                code: "BRIDGE_DISCONNECTED".to_string(),
+                message: "session deleted".to_string(),
+                target: Some(md5.to_string()),
+            });
+            let _ = request.sender.send(envelope);
+        }
+        let session_dir = self.paths.session_dir(md5);
+        if session_dir.exists() {
+            let _ = fs::remove_dir_all(session_dir);
+        }
+        self.notify.notify_waiters();
+        Some(entry.record)
+    }
+
     /// Saves the snapshot of a record and wakes the waiters.
     fn write_session(&self, session: &SessionRecord) -> Result<()> {
         atomic_write(
@@ -453,6 +473,18 @@ impl McpState {
             .and_then(|entry| entry.process.take());
         if let Some(child) = child {
             self.reap(child, grace).await;
+        }
+    }
+
+    /// Kills the Ghidra process of a session at once without a graceful signal.
+    pub async fn kill_process(&self, md5: &str) {
+        let child = self
+            .entries()
+            .get_mut(md5)
+            .and_then(|entry| entry.process.take());
+        if let Some(child) = child {
+            let kill = self.config.timeouts.force_kill;
+            let _ = tokio::task::spawn_blocking(move || child.kill_now(kill)).await;
         }
     }
 

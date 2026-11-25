@@ -25,7 +25,9 @@ use crate::error::DomainError;
 use crate::java_path::java_path;
 use crate::model::{job_kind, JobRecord, JobStatus, RpcEnvelope, SessionRecord, SessionStatus};
 use crate::process::{append_java_tool_option, spawn_log_forwarder, ManagedChild};
-use crate::project::{persist_binary, prepare_project, PreparedProject};
+use crate::project::{
+    delete_project, normalize_md5, persist_binary, prepare_project, reset_project, PreparedProject,
+};
 use crate::state::McpState;
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -92,14 +94,10 @@ pub async fn open(
         if let Some(job_id) = launching_job {
             (false, job_id)
         } else {
-            let kind = if existing.is_some() {
-                job_kind::RECOVER_SESSION_BRIDGE
-            } else {
-                job_kind::ANALYZE_BINARY
-            };
-            let (prepared, job_id) = begin_launch(state, &md5, kind).await?;
+            let (prepared, job_id) = begin_launch(state, &md5, existing.is_some()).await?;
+            let created = existing.is_none() || !prepared.existing_project;
             tokio::spawn(launch_and_wait(state.clone(), prepared, job_id.clone()));
-            (existing.is_none(), job_id)
+            (created, job_id)
         }
     };
     let job = state.await_job(&job_id, wait).await?;
@@ -187,7 +185,7 @@ async fn recover(state: &Arc<McpState>, md5: &str) -> Result<()> {
         if !current.status.is_recoverable() {
             return Err(DomainError::disconnected(md5).into());
         }
-        begin_launch(state, md5, job_kind::RECOVER_SESSION_BRIDGE).await?
+        begin_launch(state, md5, true).await?
     };
     launch_and_wait(state.clone(), prepared, job_id).await
 }
@@ -196,7 +194,7 @@ async fn recover(state: &Arc<McpState>, md5: &str) -> Result<()> {
 async fn begin_launch(
     state: &McpState,
     md5: &str,
-    kind: &'static str,
+    has_record: bool,
 ) -> Result<(PreparedProject, String)> {
     let paths = state.paths.clone();
     let binary_md5 = md5.to_string();
@@ -210,6 +208,11 @@ async fn begin_launch(
     state.detach_bridge(md5, "bridge restarting");
     state.stop_process(md5, Duration::ZERO).await;
     state.put_session(&prepared.session_record())?;
+    let kind = if has_record && prepared.existing_project {
+        job_kind::RECOVER_SESSION_BRIDGE
+    } else {
+        job_kind::ANALYZE_BINARY
+    };
     let job = state.insert_job(kind, Some(md5.to_string()));
     state.set_launch_job(md5, Some(job.id.clone()));
     Ok((prepared, job.id))
@@ -421,7 +424,9 @@ async fn wait_ready(
 pub async fn close(state: &McpState, md5: &str, force: bool) -> Result<()> {
     let _guard = state.lifecycle_lock.lock().await;
     let session = state.session(md5)?;
-    if !force && session.ws_connected {
+    if force {
+        state.kill_process(md5).await;
+    } else if session.ws_connected {
         // Let the bridge save the program. Then give its process time to stop.
         // A close never relaunches a bridge. For this reason, this code does not use `call`.
         let shutdown = bridge::request(
@@ -445,4 +450,72 @@ pub async fn close(state: &McpState, md5: &str, force: bool) -> Result<()> {
     }
     state.set_launch_job(md5, None);
     Ok(())
+}
+
+/// Stops any active Ghidra process without a save and deletes `projects/<md5>/ghidra/`.
+///
+/// # Errors
+///
+/// Fails if daemon shutdown started, if `md5` is not valid, or if the saved binary is absent.
+pub async fn reset(state: &McpState, md5: &str) -> Result<(String, Value)> {
+    let md5 = normalize_md5(md5)?;
+    let _guard = state.lifecycle_lock.lock().await;
+    if state.is_shutting_down() {
+        return Err(DomainError::ShuttingDown.into());
+    }
+    if state.find_session(&md5).is_some() {
+        abort_session(state, &md5, "session reset").await;
+    }
+    let paths = state.paths.clone();
+    let md5_clone = md5.clone();
+    let file_name = tokio::task::spawn_blocking(move || reset_project(&paths, &md5_clone))
+        .await
+        .map_err(|err| DomainError::Internal {
+            message: format!("project reset task failed: {err}"),
+        })??;
+    let record = SessionRecord::closed(md5.clone(), file_name);
+    state.put_session(&record)?;
+    Ok((
+        format!("Reset session {md5}"),
+        json!({ "md5": md5, "reset": true, "session": record.summary() }),
+    ))
+}
+
+/// Stops any active Ghidra process without a save and deletes all files of the session.
+///
+/// # Errors
+///
+/// Fails if daemon shutdown started, if `md5` is not valid, or if the session is unknown.
+pub async fn delete(state: &McpState, md5: &str) -> Result<(String, Value)> {
+    let md5 = normalize_md5(md5)?;
+    let _guard = state.lifecycle_lock.lock().await;
+    if state.is_shutting_down() {
+        return Err(DomainError::ShuttingDown.into());
+    }
+    abort_session(state, &md5, "session deleted").await;
+    let removed = state.remove_session(&md5);
+    let paths = state.paths.clone();
+    let md5_clone = md5.clone();
+    let deleted_files = tokio::task::spawn_blocking(move || delete_project(&paths, &md5_clone))
+        .await
+        .map_err(|err| DomainError::Internal {
+            message: format!("project delete task failed: {err}"),
+        })??;
+    if removed.is_none() && !deleted_files {
+        return Err(DomainError::missing_target(&md5, format!("unknown session: {md5}")).into());
+    }
+    Ok((
+        format!("Deleted session {md5}"),
+        json!({ "md5": md5, "deleted": true }),
+    ))
+}
+
+/// Stops the process of a session without a save and detaches its bridge.
+async fn abort_session(state: &McpState, md5: &str, reason: &str) {
+    state.kill_process(md5).await;
+    state.detach_bridge(md5, reason);
+    if let Some(job_id) = state.launch_job(md5) {
+        state.fail_job_error(&job_id, DomainError::disconnected(md5));
+    }
+    state.set_launch_job(md5, None);
 }

@@ -68,6 +68,22 @@ pub enum SessionCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Stop a session without a save and delete its Ghidra project.
+    Reset {
+        /// The MD5 of the session.
+        md5: String,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop a session without a save and delete all its files.
+    Delete {
+        /// The MD5 of the session.
+        md5: String,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// The `job` commands.
@@ -228,13 +244,23 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
                 json,
             )
         }
+        SessionCommand::Reset { md5, json } => (
+            call("ghidra_session", "reset", Some(&md5), json!({})).await?,
+            json,
+        ),
+        SessionCommand::Delete { md5, json } => (
+            call("ghidra_session", "delete", Some(&md5), json!({})).await?,
+            json,
+        ),
     };
     if json {
         print_json(&value)?;
     } else if let Some(sessions) = value["sessions"].as_array() {
         print_sessions(sessions);
-    } else {
+    } else if value["session"].is_object() {
         print_sessions(std::slice::from_ref(&value["session"]));
+    } else if value["deleted"] == true {
+        out!("Deleted session {}.", text(&value, "md5"));
     }
     Ok(ExitCode::SUCCESS)
 }

@@ -252,7 +252,7 @@ Use these commands to manage the shared daemon:
 | `ghidra-mcp daemon logs [-n N] [-f]` | Show the last lines of `daemon.log`. With `-f`, show new lines until Ctrl-C. |
 | `ghidra-mcp paths [--json]` | Show the persistent home, the runtime directory and their files. |
 | `ghidra-mcp config path\|show\|edit\|check` | Find, show, change or check `config.toml`. |
-| `ghidra-mcp session list\|get\|open\|close` | Manage the sessions of the daemon. |
+| `ghidra-mcp session list\|get\|open\|close\|reset\|delete` | Manage the sessions of the daemon. |
 | `ghidra-mcp job list\|get\|wait` | Examine the background jobs of the daemon. |
 
 If a session is live or a job runs, `daemon stop` does not stop the daemon.
@@ -441,7 +441,7 @@ A domain tool has these arguments:
 
 | Tool | Operations | Runs in |
 | --- | --- | --- |
-| `ghidra_session` | `open`, `list`, `get`, `close` | The daemon. |
+| `ghidra_session` | `open`, `list`, `get`, `close`, `reset`, `delete` | The daemon. |
 | `ghidra_upload` | `prepare` | The daemon. |
 | `ghidra_job` | `list`, `get`, `wait` | The daemon. |
 | `ghidra_daemon` | `status`, `shutdown` | The daemon. |

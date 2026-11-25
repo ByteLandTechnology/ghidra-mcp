@@ -361,3 +361,150 @@ pub fn prepare_project(paths: &McpPaths, md5: &str) -> Result<PreparedProject> {
         md5,
     })
 }
+
+/// Deletes `projects/<md5>/ghidra/` under the exclusive binary lock and keeps
+/// `binary` and `binary.json`. Returns the display file name of the binary.
+///
+/// # Errors
+///
+/// Fails if `md5` is not valid, if the saved binary is absent, or if an I/O
+/// error occurs.
+pub fn reset_project(paths: &McpPaths, md5: &str) -> Result<String> {
+    let md5 = normalize_md5(md5)?;
+    let project_dir = paths.project_dir(&md5);
+    if !project_dir.is_dir() {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary first"),
+        )
+        .into());
+    }
+    let _lock = lock_binary(&project_dir, true)?;
+    let Some(metadata) = read_metadata(paths, &md5)? else {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary first"),
+        )
+        .into());
+    };
+    if !project_dir.join(BINARY_NAME).is_file() {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary first"),
+        )
+        .into());
+    }
+    let ghidra_root = paths.ghidra_project_root(&md5);
+    let _ = remove_tree(&ghidra_root)?;
+    let _ = remove_tree(&project_dir.join("recovery-backups"))?;
+    sync_directory(&project_dir)?;
+    Ok(metadata.file_name)
+}
+
+/// Deletes `projects/<md5>/`, `sessions/<md5>/`, and `logs/<md5>/`.
+/// Returns `true` if one or more of these paths existed.
+///
+/// # Errors
+///
+/// Fails if `md5` is not valid or if an I/O error occurs.
+pub fn delete_project(paths: &McpPaths, md5: &str) -> Result<bool> {
+    let md5 = normalize_md5(md5)?;
+    let mut deleted = false;
+    let project_dir = paths.project_dir(&md5);
+    if project_dir.exists() {
+        let lock = lock_binary(&project_dir, true)?;
+        let _ = remove_tree(&paths.ghidra_project_root(&md5))?;
+        let _ = remove_tree(&project_dir.join("recovery-backups"))?;
+        let _ = remove_file_if_present(&project_dir.join(METADATA_NAME))?;
+        let _ = remove_file_if_present(&project_dir.join(BINARY_NAME))?;
+        drop(lock);
+        deleted |= remove_tree(&project_dir)?;
+        if paths.projects_dir.is_dir() {
+            sync_directory(&paths.projects_dir)?;
+        }
+    }
+    deleted |= remove_tree(&paths.session_dir(&md5))?;
+    deleted |= remove_tree(&paths.log_dir(&md5))?;
+    Ok(deleted)
+}
+
+/// Deletes a directory tree if it exists.
+fn remove_tree(path: &Path) -> Result<bool> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(DomainError::Internal {
+            message: format!("removing directory: {}", sanitize_error_path(&error, path)),
+        }
+        .into()),
+    }
+}
+
+/// Deletes a file if it exists.
+fn remove_file_if_present(path: &Path) -> Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(DomainError::Internal {
+            message: format!("removing file: {}", sanitize_error_path(&error, path)),
+        }
+        .into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checks that `reset_project` removes `ghidra/` and keeps `binary` and `binary.json`.
+    #[test]
+    fn reset_project_removes_ghidra_and_keeps_saved_binary() {
+        let root = tempfile::tempdir().unwrap();
+        let state = crate::state::test_state(root.path());
+        let source = root.path().join("sample.bin");
+        let bytes = b"\x7fELFsample";
+        fs::write(&source, bytes).unwrap();
+        let md5 = format!("{:x}", md5::compute(bytes));
+        persist_binary(&state.paths, &source, &md5, "sample.bin").unwrap();
+
+        let ghidra_root = state.paths.ghidra_project_root(&md5);
+        fs::create_dir_all(ghidra_root.join("project.rep")).unwrap();
+        fs::write(ghidra_root.join("project.gpr"), b"gpr").unwrap();
+        assert!(
+            prepare_project(&state.paths, &md5)
+                .unwrap()
+                .existing_project
+        );
+
+        let file_name = reset_project(&state.paths, &md5).unwrap();
+        assert_eq!(file_name, "sample.bin");
+        assert!(!ghidra_root.exists());
+        assert!(state.paths.project_dir(&md5).join(BINARY_NAME).is_file());
+        assert!(state.paths.project_dir(&md5).join(METADATA_NAME).is_file());
+
+        let prepared = prepare_project(&state.paths, &md5).unwrap();
+        assert!(!prepared.existing_project);
+    }
+
+    /// Checks that `delete_project` removes persistent and runtime directories.
+    #[test]
+    fn delete_project_removes_project_session_and_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let state = crate::state::test_state(root.path());
+        let source = root.path().join("sample.bin");
+        let bytes = b"\x7fELFdelete";
+        fs::write(&source, bytes).unwrap();
+        let md5 = format!("{:x}", md5::compute(bytes));
+        persist_binary(&state.paths, &source, &md5, "sample.bin").unwrap();
+        let _ = prepare_project(&state.paths, &md5).unwrap();
+        state
+            .put_session(&SessionRecord::closed(md5.clone(), "sample.bin".into()))
+            .unwrap();
+
+        assert!(delete_project(&state.paths, &md5).unwrap());
+        assert!(!state.paths.project_dir(&md5).exists());
+        assert!(!state.paths.session_dir(&md5).exists());
+        assert!(!state.paths.log_dir(&md5).exists());
+        assert!(!delete_project(&state.paths, &md5).unwrap());
+    }
+}

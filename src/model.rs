@@ -114,6 +114,18 @@ impl SessionRecord {
         }
     }
 
+    /// Makes a closed record without a credential or connection.
+    pub fn closed(md5: String, file_name: String) -> Self {
+        Self {
+            session_id: md5,
+            file_name,
+            agent_token: String::new(),
+            status: SessionStatus::Closed,
+            ws_connected: false,
+            last_error: None,
+        }
+    }
+
     /// Records that `analyzeHeadless` started.
     pub fn mark_starting(&mut self) {
         self.status = SessionStatus::Starting;

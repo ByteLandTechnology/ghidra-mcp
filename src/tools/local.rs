@@ -182,6 +182,54 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         },
     },
     LocalOperation {
+        domain: "session",
+        name: "reset",
+        description: concat!(
+            "Stop the session without a save and delete its Ghidra project. ",
+            "Keep the saved binary so the next open imports a clean copy."
+        ),
+        schema: no_params,
+        md5: Md5Rule::Required,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: true,
+            destructive: true,
+            idempotent: true,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                session::reset(&daemon.state, &md5).await
+            })
+        },
+    },
+    LocalOperation {
+        domain: "session",
+        name: "delete",
+        description: concat!(
+            "Stop the session without a save. Delete the session, ",
+            "its saved binary, its Ghidra project, and its logs."
+        ),
+        schema: no_params,
+        md5: Md5Rule::Required,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: false,
+            destructive: true,
+            idempotent: false,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                session::delete(&daemon.state, &md5).await
+            })
+        },
+    },
+    LocalOperation {
         domain: "upload",
         name: "prepare",
         description: concat!(

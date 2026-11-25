@@ -193,7 +193,12 @@ fn session_md5_is_never_a_parameter() {
     assert!(rule("session", "open") == Md5Rule::Optional);
     assert!(rule("session", "get") == Md5Rule::Required);
     assert!(rule("session", "close") == Md5Rule::Required);
+    assert!(rule("session", "reset") == Md5Rule::Required);
+    assert!(rule("session", "delete") == Md5Rule::Required);
     assert!(rule("session", "list") == Md5Rule::Absent);
+    assert!(rule("program", "history") == Md5Rule::Required);
+    assert!(rule("program", "undo") == Md5Rule::Required);
+    assert!(rule("program", "redo") == Md5Rule::Required);
     assert!(rule("upload", "prepare") == Md5Rule::Required);
     assert!(rule("job", "wait") == Md5Rule::Absent);
 }
@@ -706,4 +711,106 @@ fn bridge_address_error_preserves_target_and_spaces() {
             reason: "unable to parse address: bad (valid spaces: [EXTERNAL, ram])".to_string(),
         }
     );
+}
+
+/// Checks `ghidra_session reset` and `ghidra_session delete` through the tool dispatcher.
+#[tokio::test]
+async fn session_reset_and_delete_manage_saved_files_and_state() {
+    for expected in ["history", "undo", "redo"] {
+        let (_, schema) = help::run(object(json!({
+            "domain": "ghidra_program",
+            "operation": expected
+        })))
+        .unwrap();
+        assert_eq!(schema["operation"], expected);
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let source = root.path().join("sample.bin");
+    let bytes = b"\x7fELFtooltest";
+    std::fs::write(&source, bytes).unwrap();
+    let md5 = format!("{:x}", md5::compute(bytes));
+    crate::project::persist_binary(&daemon.state.paths, &source, &md5, "sample.bin").unwrap();
+    let _ = crate::project::prepare_project(&daemon.state.paths, &md5).unwrap();
+    let ghidra_root = daemon.state.paths.ghidra_project_root(&md5);
+    std::fs::create_dir_all(ghidra_root.join("project.rep")).unwrap();
+    std::fs::write(ghidra_root.join("project.gpr"), b"gpr").unwrap();
+    std::fs::create_dir_all(
+        daemon
+            .state
+            .paths
+            .project_dir(&md5)
+            .join("recovery-backups"),
+    )
+    .unwrap();
+    let record =
+        crate::model::SessionRecord::launching(md5.clone(), "sample.bin".into(), "tok".into());
+    daemon.state.put_session(&record).unwrap();
+
+    #[cfg(unix)]
+    let marker = {
+        let marker = root.path().join("sigterm_saved");
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(format!(
+            "trap 'echo saved > {}' TERM; sleep 30",
+            marker.display()
+        ));
+        let child = crate::process::ManagedChild::spawn(&mut command).unwrap();
+        daemon.state.register_process(&md5, child).unwrap();
+        marker
+    };
+
+    let (_, reset) = super::call(
+        &daemon,
+        "ghidra_session",
+        object(json!({ "operation": "reset", "md5": md5 })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reset["reset"], true);
+    assert_eq!(reset["session"]["status"], "closed");
+    assert!(!ghidra_root.exists());
+    assert!(!daemon
+        .state
+        .paths
+        .project_dir(&md5)
+        .join("recovery-backups")
+        .exists());
+    #[cfg(unix)]
+    assert!(!marker.exists());
+    assert!(daemon
+        .state
+        .paths
+        .project_dir(&md5)
+        .join("binary")
+        .is_file());
+    assert!(daemon
+        .state
+        .paths
+        .project_dir(&md5)
+        .join("binary.json")
+        .is_file());
+
+    let (_, deleted) = super::call(
+        &daemon,
+        "ghidra_session",
+        object(json!({ "operation": "delete", "md5": md5 })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(deleted["deleted"], true);
+    assert!(daemon.state.find_session(&md5).is_none());
+    assert!(!daemon.state.paths.project_dir(&md5).exists());
+    assert!(!daemon.state.paths.session_dir(&md5).exists());
+    assert!(!daemon.state.paths.log_dir(&md5).exists());
+
+    let err = super::call(
+        &daemon,
+        "ghidra_session",
+        object(json!({ "operation": "delete", "md5": md5 })),
+    )
+    .await
+    .unwrap_err();
+    assert!(reason(&err).contains("unknown session"));
 }
