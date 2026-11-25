@@ -58,6 +58,7 @@ pub(super) fn run(arguments: Map<String, Value>) -> Result<Output> {
             .map(|operation| {
                 json!({
                     "name": operation.name,
+                    "tool": operation.tool,
                     "description": operation.description,
                     "md5": operation.md5,
                     "effects": operation.effects,
@@ -76,6 +77,7 @@ pub(super) fn run(arguments: Map<String, Value>) -> Result<Output> {
         json!({
             "domain": tool,
             "operation": operation.name,
+            "tool": operation.tool,
             "description": operation.description,
             "md5": operation.md5,
             "effects": operation.effects,

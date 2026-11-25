@@ -160,10 +160,13 @@ impl ServerHandler for ToolServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, ErrorData> {
-        let upload_url = (request.name == "ghidra_upload")
-            .then(|| context.extensions.get::<axum::http::request::Parts>())
-            .flatten()
-            .and_then(|parts| crate::upload::request_url(&parts.uri, &parts.headers));
+        let upload_url = matches!(
+            request.name.as_ref(),
+            "ghidra_upload_prepare" | "ghidra_upload"
+        )
+        .then(|| context.extensions.get::<axum::http::request::Parts>())
+        .flatten()
+        .and_then(|parts| crate::upload::request_url(&parts.uri, &parts.headers));
         let mut result = self
             .call(
                 request.name.into_owned(),

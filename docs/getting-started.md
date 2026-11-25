@@ -206,41 +206,39 @@ claude mcp get ghidra-mcp
 
 ## First analysis procedure
 
-The daemon shows `ghidra_help` and one MCP tool for each domain.
-Each domain tool takes an `operation` and its `params`.
-An operation that names one session also takes the `md5` of that session.
-This document writes an operation as the tool name and the operation name, for example `ghidra_session open`.
+The daemon publishes 65 underscored tools in `tools/list`: `ghidra_help` and 64 operation tools (`ghidra_<domain>_<operation>`).
+Each operation tool takes its parameters at the top level.
+An operation that names one session also takes the `md5` of that session at the top level.
+For compatibility with earlier clients, `tools/call` also accepts unlisted `ghidra_<domain>` calls with `operation` and `params`.
 
-Before the first call to an operation, call `ghidra_help` with its domain and operation.
-For example, call `ghidra_help` with:
+Each operation tool publishes a flattened `inputSchema` directly in `tools/list`.
+Call `ghidra_help` when you want to inspect all operations of a domain or read a full recursive parameter schema:
 
 ```json
 { "domain": "ghidra_memory", "operation": "read" }
 ```
 
-The result has an `inputSchema` for the contents of `params` and an `md5` rule for the top-level argument.
-For `read`, put `address` in `params.selector`. The optional `length` is in `params` and defaults to 256 bytes.
-When an operation needs `md5`, use the file digest or the MD5 of a session that is available.
+The result shows the `tool` name (`ghidra_memory_read`), the full parameter `inputSchema`, and the `md5` rule.
+For `ghidra_memory_read`, put `address` in `selector`. The optional `length` defaults to 256 bytes.
+When an operation needs `md5`, use the file digest or the MD5 of an available session.
 The MD5 has exactly 32 hexadecimal characters.
 
 ### 1. Open a binary session
 
-Open a local binary file with `ghidra_session`:
+Open a local binary file with `ghidra_session_open`:
 
 ```json
 {
-  "operation": "open",
-  "params": { "path": "/path/to/target_binary" }
+  "path": "/path/to/target_binary"
 }
 ```
 
 The daemon calculates the MD5 hash and copies the binary into persistent storage.
 The call returns a launch job record.
-Check the session status with `ghidra_session`:
+Check the session status with `ghidra_session_get`:
 
 ```json
 {
-  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
@@ -249,11 +247,10 @@ The `status` field shows `ready` when the session is ready.
 
 ### 2. Start background analysis
 
-Start auto-analysis on the opened binary with `ghidra_analysis`:
+Start auto-analysis on the opened binary with `ghidra_analysis_start`:
 
 ```json
 {
-  "operation": "start",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
@@ -262,21 +259,20 @@ The call returns a job record with `status: "running"`.
 
 ### 3. Poll job progress
 
-Poll the job status at intervals of 500 ms with `ghidra_job`:
+Poll the job status at intervals of 500 ms with `ghidra_job_get`:
 
 ```json
 {
-  "operation": "get",
-  "params": { "jobId": "job-12345" }
+  "jobId": "job-12345"
 }
 ```
 
-As an alternative, wait for the job to complete:
+As an alternative, wait for the job to complete with `ghidra_job_wait`:
 
 ```json
 {
-  "operation": "wait",
-  "params": { "jobId": "job-12345", "timeoutMs": 60000 }
+  "jobId": "job-12345",
+  "timeoutMs": 60000
 }
 ```
 
@@ -284,31 +280,28 @@ The job record shows `status: "completed"` when analysis finishes.
 
 ### 4. Inspect symbols and decompile
 
-List the functions in the binary with `ghidra_function`:
+List the functions in the binary with `ghidra_function_list`:
 
 ```json
 {
-  "operation": "list",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-Inspect symbols with `ghidra_symbol`:
+Inspect symbols with `ghidra_symbol_list`:
 
 ```json
 {
-  "operation": "list",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-Decompile a function at an entry point with `ghidra_decompilation`:
+Decompile a function at an entry point with `ghidra_decompilation_get`:
 
 ```json
 {
-  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef",
-  "params": { "selector": { "entry": "ram:140001000" } }
+  "selector": { "entry": "ram:140001000" }
 }
 ```
 
@@ -316,20 +309,18 @@ The bridge returns structured C pseudocode, signatures, and local variables.
 
 ### 5. Save changes and close
 
-Save program changes to the Ghidra project with `ghidra_program`:
+Save program changes to the Ghidra project with `ghidra_program_save`:
 
 ```json
 {
-  "operation": "save",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
 
-Close the active session with `ghidra_session`:
+Close the active session with `ghidra_session_close`:
 
 ```json
 {
-  "operation": "close",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```

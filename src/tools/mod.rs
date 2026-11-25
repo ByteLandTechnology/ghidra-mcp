@@ -1,11 +1,13 @@
 // Copyright 2026 ByteLand Technology Limited
 // SPDX-License-Identifier: MIT
 
-//! The public MCP tools: `ghidra_help` and one tool for each domain.
+//! The public MCP tools: `ghidra_help` and one underscored tool for each
+//! operation.
 //!
-//! The bridge domains and operations use the names of the bridge MCP server.
-//! A domain tool takes `operation` and `params`. An operation that names one
-//! session also takes `md5`, the MD5 of that session.
+//! Each operation tool takes its parameters at the top level. An operation
+//! that names one session also takes `md5` at the top level. For compatibility
+//! with earlier clients, [`call`] also accepts legacy `ghidra_<domain>` calls
+//! with `operation`, optional `md5`, and `params`.
 //!
 //! There are two types of operations:
 //!
@@ -13,9 +15,9 @@
 //! - The bridge methods of the bridge contract. The daemon sends them to the
 //!   bridge of the session.
 //!
-//! [`call`] checks the required and unexpected top-level `params` fields
-//! against the schema of the operation (see [`catalog`]). Local handlers and
-//! the bridge check the other parameters.
+//! [`call`] checks the required and unexpected parameters against the schema of
+//! the operation (see [`catalog`]). Local handlers and the bridge check the
+//! other parameters.
 //!
 //! Each operation returns a short summary text and a structured JSON result.
 //! Bridge methods return `{"response": …}`.
@@ -104,7 +106,7 @@ impl Request {
 /// Runs a local operation.
 type Handler = for<'a> fn(&'a Daemon, Request) -> BoxFuture<'a, Result<Output>>;
 
-/// The arguments of a domain tool.
+/// The arguments of a legacy domain tool.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ToolCall {
@@ -116,6 +118,15 @@ struct ToolCall {
     /// The parameters of the operation.
     #[serde(default, deserialize_with = "deserialize_params")]
     params: Map<String, Value>,
+}
+
+/// The optional `md5` field of a flat operation tool call.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FlatMd5 {
+    /// The session that the operation names.
+    #[serde(default, deserialize_with = "deserialize_optional_md5")]
+    md5: Option<String>,
 }
 
 /// Deserializes `params` from an object, `null`, or a JSON object string.
@@ -183,13 +194,30 @@ pub async fn call(daemon: &Daemon, tool: &str, arguments: Map<String, Value>) ->
     }
 }
 
-/// Finds the operation of a domain tool call and validates its arguments.
+/// Finds the operation of a flat or legacy tool call and validates its arguments.
 ///
 /// # Errors
 ///
 /// Fails if the tool or the operation is unknown. Also fails if the arguments
 /// do not obey the md5 rule or the top-level field rules of the operation.
-fn prepare(tool: &str, arguments: Map<String, Value>) -> Result<(&'static Operation, Request)> {
+fn prepare(tool: &str, mut arguments: Map<String, Value>) -> Result<(&'static Operation, Request)> {
+    if let Some(operation) = catalog::operation_of_tool(tool) {
+        let md5 = match arguments.remove("md5") {
+            Some(raw) => parse::<FlatMd5>(tool, json!({ "md5": raw }))?.md5,
+            None => None,
+        };
+        let label = operation.tool.clone();
+        operation.check_md5(&label, md5.as_deref())?;
+        operation.validate(&label, &arguments)?;
+        return Ok((
+            operation,
+            Request {
+                label,
+                md5,
+                params: Value::Object(arguments),
+            },
+        ));
+    }
     let domain = catalog::domain_of_tool(tool)
         .ok_or_else(|| DomainError::invalid_argument("tool", format!("unknown tool: {tool}")))?;
     let ToolCall {

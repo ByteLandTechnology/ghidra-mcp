@@ -1,24 +1,27 @@
 // Copyright 2026 ByteLand Technology Limited
 // SPDX-License-Identifier: MIT
 
-//! Builds compact, provider-safe `params` schemas for MCP `tools/list`.
+//! Builds compact, provider-safe `inputSchema` objects for MCP `tools/list`.
 //!
 //! Public `tools/list` definitions omit `oneOf`, `anyOf`, `allOf`, `$ref`,
 //! `$defs`, and `additionalProperties` at every depth so strict providers such
 //! as Gemini accept each tool declaration.
 
-use super::catalog::Operation;
+use super::catalog::{Md5Rule, Operation};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
-/// Maximum object depth for single-operation domain tools.
-const SINGLE_OPERATION_MAX_DEPTH: usize = 4;
-
-/// Maximum object depth for multi-operation summaries and `batch`.
-const SUMMARY_MAX_DEPTH: usize = 2;
+/// Maximum object depth for per-operation tool schemas.
+const OPERATION_MAX_DEPTH: usize = 4;
 
 /// Internal reference URI for recursive Ghidra data type references.
 const DATA_TYPE_REF: &str = "#/$defs/data_type_reference";
+
+/// Description of the top-level `md5` argument on session-scoped tools.
+const MD5_DESCRIPTION: &str = concat!(
+    "The binary MD5: exactly 32 hexadecimal characters. Use the actual ",
+    "file digest or the MD5 of an existing session, not a name or label."
+);
 
 /// Scalar JSON Schema keywords copied onto flattened leaf nodes.
 const SCALAR_KEYS: &[&str] = &[
@@ -32,47 +35,43 @@ const SCALAR_KEYS: &[&str] = &[
     "default",
 ];
 
-/// Builds the compact `params` schema for `domain_name` and `operations`.
-pub(super) fn params_schema(domain_name: &str, operations: &[Operation]) -> Value {
-    let max_depth = if operations.len() == 1 && domain_name != "batch" {
-        SINGLE_OPERATION_MAX_DEPTH
-    } else {
-        SUMMARY_MAX_DEPTH
-    };
-    let flattened: Vec<Value> = operations
-        .iter()
-        .map(|operation| flatten(&operation.schema, 0, max_depth))
-        .collect();
-    let merged = if flattened.len() == 1 {
-        flattened.into_iter().next().unwrap_or_default()
-    } else {
-        merge_schemas(&flattened)
-    };
-
-    let description = if operations.len() == 1 {
-        "The parameters for the operation."
-    } else {
-        concat!(
-            "The parameters summary for the domain. Call ghidra_help with the domain ",
-            "for the exact schema of each operation."
-        )
-    };
-
-    let mut params = Map::new();
-    params.insert("type".into(), json!("object"));
-    params.insert("description".into(), json!(description));
-    let properties = merged
-        .get("properties")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    params.insert("properties".into(), Value::Object(properties));
-    if let Some(required) = merged.get("required").and_then(Value::as_array) {
-        if !required.is_empty() {
-            params.insert("required".into(), Value::Array(required.clone()));
+/// Builds the provider-safe `inputSchema` for `operation`.
+pub(super) fn operation_input_schema(operation: &Operation) -> Value {
+    let flattened = flatten(&operation.schema, 0, OPERATION_MAX_DEPTH);
+    let mut properties = Map::new();
+    if operation.md5 != Md5Rule::Absent {
+        properties.insert(
+            "md5".into(),
+            json!({
+                "type": "string",
+                "description": MD5_DESCRIPTION
+            }),
+        );
+    }
+    if let Some(op_properties) = flattened.get("properties").and_then(Value::as_object) {
+        for (key, value) in op_properties {
+            properties.insert(key.clone(), value.clone());
         }
     }
-    Value::Object(params)
+
+    let mut required = Vec::new();
+    if operation.md5 == Md5Rule::Required {
+        required.push(json!("md5"));
+    }
+    if let Some(op_required) = flattened.get("required").and_then(Value::as_array) {
+        required.extend(op_required.iter().cloned());
+    }
+
+    let mut schema = Map::new();
+    schema.insert("type".into(), json!("object"));
+    copy_if_present(&flattened, &mut schema, "description");
+    schema.insert("properties".into(), Value::Object(properties));
+    copy_if_present(&flattened, &mut schema, "minProperties");
+    copy_if_present(&flattened, &mut schema, "maxProperties");
+    if !required.is_empty() {
+        schema.insert("required".into(), Value::Array(required));
+    }
+    Value::Object(schema)
 }
 
 /// Flattens one JSON Schema node without union, reference, or extra-property keys.

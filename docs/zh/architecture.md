@@ -59,7 +59,7 @@
 | `mcp` | MCP 处理程序。它在守护进程中运行调用，或从代理把调用发送给守护进程。 |
 | `mcp_http` | Streamable HTTP、旧式 SSE 会话、CORS 和 HTTP 兼容层。 |
 | `upload` | 上传凭据和 `POST /upload` 端点。 |
-| `tools` | MCP 工具：领域目录、本地操作、调用验证和 `ghidra_help`。 |
+| `tools` | MCP 工具：操作目录、本地操作、调用验证和 `ghidra_help`。 |
 | `session` | 会话的打开、启动、等待、重新启动、调用和关闭。 |
 | `analysis` | 作为后台作业的自动分析。 |
 | `project` | 已保存的二进制文件和 Ghidra 项目的准备。 |
@@ -80,17 +80,18 @@
 
 ![工具调用流程](../img/tool_call.svg)
 
-守护进程提供 `ghidra_help`，并为每个领域提供一个 MCP 工具，例如 `ghidra_function`。
-桥接领域工具使用桥接 MCP 服务器的领域名和操作名。
-守护进程还提供本地操作，但不提供桥接的 shutdown 操作。
-一次调用包含 `operation` 和它的 `params`。指定一个会话的操作还包含该会话的 `md5`，它从不放在 `params` 中。
-`ghidra_help` 显示每个操作的 `params` 模式、md5 规则（`required`、`optional` 或 `absent`）和效果。
-领域工具的描述提示客户端在首次调用操作前获取其模式。
-本文用工具名加操作名表示一个操作，例如 `ghidra_session open`。
+守护进程在 `tools/list` 中发布 65 个下划线命名的 MCP 工具：`ghidra_help` 以及 64 个按操作工具（例如 `ghidra_function_list`）。
+桥接按操作工具使用桥接 MCP 服务器的领域名和操作名。
+守护进程还提供本地操作，并隐藏 `ghidra_bridge_shutdown`。
+每个 `ghidra-mcp` 服务器发布 65 个工具：同时连接两个服务器会发布 130 个工具，超过严格 MCP 客户端的 128 工具上限。
 
-`tools::call` 在目录（`tools/catalog.rs`）中查找领域和操作。
-它检查 `params` 中的顶层必填字段，并在模式不允许额外字段时拒绝意外的顶层字段。
-本地处理程序和桥接负责检查其他参数。
+按操作调用直接在顶层接收操作参数；若操作指定一个会话，也在顶层接收该会话的 `md5`。
+为兼容旧客户端，`tools/call` 也继续接受未列出的旧版 `ghidra_<domain>` 调用（带 `operation`、可选 `md5` 和 `params`）。
+`ghidra_help` 显示每个操作的 `tool` 名称、完整参数 `inputSchema`、md5 规则（`required`、`optional` 或 `absent`）和效果。
+
+`tools::call` 在目录（`tools/catalog.rs`）中按扁平工具名或旧版领域加操作名查找操作。
+它检查顶层必填字段，并在模式不允许额外字段时拒绝意外字段。
+本地处理程序和桥接负责检查嵌套参数。
 然后它执行以下操作之一：
 
 - 运行 `LOCAL_OPERATIONS`（`tools/local.rs`）中的**本地操作**：会话、作业、上传、分析的启动，以及守护进程的状态查询和停止。
@@ -105,12 +106,12 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 
 ### 打开二进制文件
 
-`ghidra_session open` 接受守护进程主机上的 `path`，或守护进程以前保存过的二进制文件的 `md5`。
+`ghidra_session_open` 接受守护进程主机上的 `path`，或守护进程以前保存过的二进制文件的 `md5`。
 对于路径，守护进程计算 MD5，并把文件复制到持久主目录。
 之后的调用只需要 MD5。
 守护进程重用已连接的会话，或加入正在进行的启动，或开始新的启动。
 [会话生命周期](#会话生命周期)描述启动过程。
-`ghidra_session open` 立即返回启动作业。如果客户端设置了 `wait`，它会等待该作业。
+`ghidra_session_open` 立即返回启动作业。如果客户端设置了 `wait`，它会等待该作业。
 
 ### 上传二进制文件
 
@@ -118,13 +119,13 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 
 客户端只能使用凭据一次。
 请求在守护进程读取第一个字节之前使用凭据。
-客户端必须在 `ghidra_upload prepare` 之后十分钟内开始上传。
+客户端必须在 `ghidra_upload_prepare` 之后十分钟内开始上传。
 守护进程不会停止活动上传。
 
 ### 关闭
 
-以下事件会停止守护进程：Ctrl-C、`SIGTERM`、`SIGHUP`、对应的 Windows 控制台事件，以及 `ghidra_daemon shutdown`。
-`ghidra-mcp daemon stop` 使用 `ghidra_daemon shutdown`。
+以下事件会停止守护进程：Ctrl-C、`SIGTERM`、`SIGHUP`、对应的 Windows 控制台事件，以及 `ghidra_daemon_shutdown`。
+`ghidra-mcp daemon stop` 通过关闭操作停止守护进程。
 随后守护进程执行以下步骤：
 
 1. 拒绝新的工作。
@@ -258,7 +259,7 @@ Ghidra 不接受包含隐藏段的项目路径。但默认主目录是一个隐�
 |---|---|---|
 | MCP 工具 `ghidra_*` | 通过 stdio、本地套接字、Streamable HTTP 或旧式 SSE 的 MCP。 | `LOCAL_OPERATIONS` 和桥接契约中的操作。`ghidra_help` 描述它们。 |
 | 桥接 WebSocket `/ws/agent` | 严格的 JSON-RPC 2.0（`jsonrpc.rs`）。 | 桥接构建生成的 `bridge/docs/asyncapi.yaml`。 |
-| 上传 `POST /upload` | 带 bearer 凭据的原始字节。 | `ghidra_upload prepare` 的结果。 |
+| 上传 `POST /upload` | 带 bearer 凭据的原始字节。 | `ghidra_upload_prepare` 的结果。 |
 | `server.json` | 包含 `pid`、`mcpUrl`、`bridgeWsUrl` 和 `localSocket` 的 JSON。 | 本地客户端读取它。 |
 | `config.toml` | TOML。 | README 和 `config.rs`。 |
 | 错误信封 | MCP `structured_content` 内的 JSON。 | 标准 JSON-RPC 错误码（`-32602` 至 `-32603`）与机器可读错误变体。 |
@@ -303,7 +304,7 @@ MCP 工具定义、操作模式、帮助输出和响应格式都是公共契约�
   之后 `ghidra_help`、工具定义和验证会包含该操作。
 - **桥接方法。** 在桥接中添加该方法。
   添加方法后重新生成契约。
-  守护进程在编译时读取契约，并在该方法的领域工具中提供它。
+  守护进程在编译时读取契约，并将该方法发布为下划线命名的按操作工具。
   对于新领域，请把该领域添加到 `src/tools/catalog.rs` 的 `DOMAINS` 中。
   如果桥接的 MCP 服务器把该方法映射到其他领域，请在 `bridge_target` 中添加相同的领域和操作名称。
 - **会话状态或转换。** 在 `model.rs` 中为 `SessionRecord` 添加一个 `mark_*` 方法。

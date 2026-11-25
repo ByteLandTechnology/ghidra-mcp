@@ -45,8 +45,23 @@ fn request(method: Method, path: &str, body: &Value) -> Request {
         .unwrap()
 }
 
-/// Makes a valid upload preparation message.
+/// Makes a valid flat upload preparation message.
 fn prepare(id: u32) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": {
+            "name": "ghidra_upload_prepare",
+            "arguments": {
+                "md5": "0123456789abcdef0123456789abcdef",
+                "fileName": "program.bin",
+                "size": 1024
+            }
+        }
+    })
+}
+
+/// Makes a valid legacy upload preparation message.
+fn prepare_legacy(id: u32) -> Value {
     json!({
         "jsonrpc": "2.0", "id": id, "method": "tools/call",
         "params": {
@@ -119,35 +134,44 @@ async fn returns_absolute_upload_urls_over_http() {
             "https://second.example/reverse/upload",
         ),
     ];
-    futures::future::join_all(cases.iter().map(|(headers, expected)| {
-        let app = app.clone();
-        async move {
-            let mut request = request(Method::POST, "/mcp", &prepare(1));
-            for (name, value) in *headers {
-                request.headers_mut().insert(
-                    name.parse::<header::HeaderName>().unwrap(),
-                    value.parse().unwrap(),
-                );
-            }
-            let response = app.oneshot(request).await.unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            let body = axum::body::to_bytes(response.into_body(), 4096)
-                .await
-                .unwrap();
-            check_result(&serde_json::from_slice(&body).unwrap(), expected);
-        }
-    }))
+    futures::future::join_all(
+        cases
+            .iter()
+            .enumerate()
+            .map(|(index, (headers, expected))| {
+                let app = app.clone();
+                async move {
+                    let base = u32::try_from(index).unwrap() * 2;
+                    for body_json in [prepare(base + 1), prepare_legacy(base + 2)] {
+                        let mut request = request(Method::POST, "/mcp", &body_json);
+                        for (name, value) in *headers {
+                            request.headers_mut().insert(
+                                name.parse::<header::HeaderName>().unwrap(),
+                                value.parse().unwrap(),
+                            );
+                        }
+                        let response = app.clone().oneshot(request).await.unwrap();
+                        assert_eq!(response.status(), StatusCode::OK);
+                        let body = axum::body::to_bytes(response.into_body(), 4096)
+                            .await
+                            .unwrap();
+                        check_result(&serde_json::from_slice(&body).unwrap(), expected);
+                    }
+                }
+            }),
+    )
     .await;
 
-    let arguments = prepare(1)["params"]["arguments"]
-        .as_object()
-        .unwrap()
-        .clone();
-    let result = server.call("ghidra_upload".into(), arguments).await;
-    let structured = result.structured_content.unwrap();
-    assert_eq!(structured["url"], "upload");
-    let content: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
-    assert_eq!(content, structured);
+    for message in [prepare(1), prepare_legacy(2)] {
+        let name = message["params"]["name"].as_str().unwrap().to_string();
+        let arguments = message["params"]["arguments"].as_object().unwrap().clone();
+        let result = server.call(name, arguments).await;
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["url"], "upload");
+        let content: Value =
+            serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+        assert_eq!(content, structured);
+    }
 }
 
 /// Returns the data from the next SSE event.
@@ -196,8 +220,11 @@ async fn returns_absolute_upload_urls_over_legacy_sse() {
     let notification = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
     legacy_post(&app, request(Method::POST, &endpoint, &notification)).await;
 
-    for (id, host) in [(1, "first.example"), (2, "second.example")] {
-        let mut call = request(Method::POST, &endpoint, &prepare(id));
+    for (message, host) in [
+        (prepare(1), "first.example"),
+        (prepare_legacy(2), "second.example"),
+    ] {
+        let mut call = request(Method::POST, &endpoint, &message);
         call.headers_mut().insert(
             header::REFERER,
             format!("https://{host}/ghidra/mcp").parse().unwrap(),

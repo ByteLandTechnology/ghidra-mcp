@@ -76,9 +76,9 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         name: "open",
         description: concat!(
             "Open or reuse a binary session without auto-analysis. Set md5 to load an active ",
-            "or saved project, or params.path to import a daemon-local file. Returns at once ",
+            "or saved project, or path to import a daemon-local file. Returns at once ",
             "by default. Set wait=true to wait until ready. Upload remote files with ",
-            "ghidra_upload prepare."
+            "ghidra_upload_prepare."
         ),
         schema: || {
             json!({

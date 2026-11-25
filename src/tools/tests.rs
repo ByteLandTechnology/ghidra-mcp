@@ -7,7 +7,7 @@ use super::catalog::Md5Rule;
 use super::{help, prepare, tool_definitions, Route};
 use crate::error::DomainError;
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Returns the arguments object of a JSON value.
 fn object(value: Value) -> Map<String, Value> {
@@ -27,123 +27,149 @@ fn reason(error: &anyhow::Error) -> String {
     }
 }
 
-/// Returns the operation names of each tool in their sequence, by tool name.
-fn operations_by_tool(tools: &[Value]) -> BTreeMap<String, Vec<String>> {
+/// Returns the bridge operation tools and their annotations from a tool list.
+fn bridge_operations(tools: &[Value]) -> Vec<(String, Value)> {
     tools
         .iter()
         .filter_map(|tool| {
-            let names = tool["inputSchema"]["properties"]["operation"]["enum"].as_array()?;
-            let names = names
-                .iter()
-                .map(|name| name.as_str().expect("name").to_string());
-            Some((
-                tool["name"].as_str().expect("tool name").to_string(),
-                names.collect(),
-            ))
+            let name = tool["name"].as_str()?;
+            (name != "ghidra_help").then(|| (name.to_string(), tool["annotations"].clone()))
         })
         .collect()
 }
 
-/// Makes sure that the bridge domains are the same as the tools of the bridge MCP server.
+/// Makes sure that the bridge operations match the tools of the bridge MCP server.
 #[test]
 fn bridge_domains_match_the_bridge_mcp_server() {
     let contract: Value =
         serde_json::from_str(include_str!("../../bridge/docs/mcp-tools.json")).expect("contract");
     let bridge_tools = contract["tools"].as_array().expect("bridge tools");
-    let mut expected = operations_by_tool(bridge_tools);
-    // The daemon hides `shutdown`: `ghidra_session close` stops the bridge.
-    let bridge = expected.get_mut("ghidra_bridge").expect("ghidra_bridge");
-    let count = bridge.len();
-    bridge.retain(|operation| operation != "shutdown");
+    let mut expected = bridge_operations(bridge_tools);
+    // The daemon hides `ghidra_bridge_shutdown`: `ghidra_session_close` stops the bridge.
+    let count = expected.len();
+    expected.retain(|(name, _)| name != "ghidra_bridge_shutdown");
     assert_eq!(
-        bridge.len() + 1,
+        expected.len() + 1,
         count,
-        "the bridge has no shutdown operation"
+        "the bridge contract has ghidra_bridge_shutdown"
     );
-    let actual = operations_by_tool(&tool_definitions());
 
-    for (tool, operations) in &expected {
-        assert_eq!(actual.get(tool), Some(operations), "operations of {tool}");
-    }
-    let local: BTreeSet<&str> = actual
-        .keys()
-        .filter(|tool| !expected.contains_key(*tool))
-        .map(String::as_str)
+    let actual = bridge_operations(&tool_definitions());
+    let expected_names: BTreeSet<&str> = expected.iter().map(|(name, _)| name.as_str()).collect();
+    let shared: Vec<(String, Value)> = actual
+        .iter()
+        .filter(|(name, _)| expected_names.contains(name.as_str()))
+        .cloned()
+        .collect();
+    assert_eq!(shared, expected);
+
+    let local: Vec<&str> = actual
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .filter(|name| !expected_names.contains(name))
         .collect();
     assert_eq!(
         local,
-        BTreeSet::from([
-            "ghidra_daemon",
-            "ghidra_job",
-            "ghidra_session",
-            "ghidra_upload"
-        ])
+        vec![
+            "ghidra_session_open",
+            "ghidra_session_list",
+            "ghidra_session_get",
+            "ghidra_session_close",
+            "ghidra_upload_prepare",
+            "ghidra_job_get",
+            "ghidra_job_wait",
+            "ghidra_job_list",
+            "ghidra_daemon_status",
+            "ghidra_daemon_shutdown",
+        ]
     );
 }
 
-/// Makes sure that the help tool is first, and that each domain tool has the
+/// Makes sure that the help tool is first, and that each operation tool has the
 /// correct required arguments and annotations.
 #[test]
 fn tool_definitions_have_routes_and_annotations() {
     let tools = tool_definitions();
     assert_eq!(tools[0]["name"], "ghidra_help");
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 65);
     let tool = |name: &str| {
         tools
             .iter()
             .find(|tool| tool["name"] == name)
             .unwrap_or_else(|| panic!("no tool {name}"))
     };
+    assert!(tool("ghidra_session_open")["inputSchema"]["properties"]["md5"].is_object());
+    assert!(tool("ghidra_session_open")["inputSchema"]
+        .get("required")
+        .is_none());
     assert_eq!(
-        tool("ghidra_session")["inputSchema"]["required"],
-        json!(["operation"])
+        tool("ghidra_session_get")["inputSchema"]["required"],
+        json!(["md5"])
+    );
+    assert!(tool("ghidra_session_list")["inputSchema"]["properties"]
+        .get("md5")
+        .is_none());
+    assert_eq!(
+        tool("ghidra_function_list")["inputSchema"]["required"],
+        json!(["md5"])
     );
     assert_eq!(
-        tool("ghidra_function")["inputSchema"]["required"],
-        json!(["operation", "md5"])
+        tool("ghidra_analysis_start")["inputSchema"]["required"],
+        json!(["md5"])
     );
-    assert_eq!(
-        tool("ghidra_analysis")["inputSchema"]["required"],
-        json!(["operation", "md5"])
-    );
-    assert_eq!(
-        tool("ghidra_decompilation")["annotations"]["readOnlyHint"],
-        true
-    );
-    assert_eq!(
-        tool("ghidra_memory")["annotations"]["destructiveHint"],
-        true
-    );
-    assert_eq!(tool("ghidra_job")["annotations"]["readOnlyHint"], true);
-    assert_eq!(
-        tool("ghidra_session")["annotations"]["destructiveHint"],
-        true
-    );
-
-    assert_eq!(
-        tool("ghidra_daemon")["annotations"]["destructiveHint"],
-        true
-    );
-    assert!(tool("ghidra_daemon")["inputSchema"]["properties"]
+    assert!(tool("ghidra_daemon_status")["inputSchema"]["properties"]
+        .get("md5")
+        .is_none());
+    assert!(tool("ghidra_job_list")["inputSchema"]["properties"]
         .get("md5")
         .is_none());
 
-    let session = &tool("ghidra_session")["inputSchema"]["properties"];
-    assert!(session["md5"].is_object());
-    let job = &tool("ghidra_job")["inputSchema"]["properties"];
-    assert!(job.get("md5").is_none());
+    for read_only in [
+        "ghidra_decompilation_get",
+        "ghidra_reference_list",
+        "ghidra_memory_read",
+        "ghidra_session_list",
+        "ghidra_job_list",
+        "ghidra_daemon_status",
+    ] {
+        assert_eq!(tool(read_only)["annotations"]["readOnlyHint"], true);
+        assert_eq!(tool(read_only)["annotations"]["destructiveHint"], false);
+        assert_eq!(tool(read_only)["annotations"]["openWorldHint"], false);
+    }
+    for additive in [
+        "ghidra_function_create",
+        "ghidra_comment_create",
+        "ghidra_session_open",
+        "ghidra_upload_prepare",
+    ] {
+        assert_eq!(tool(additive)["annotations"]["readOnlyHint"], false);
+        assert_eq!(tool(additive)["annotations"]["destructiveHint"], false);
+        assert_eq!(tool(additive)["annotations"]["openWorldHint"], false);
+    }
+    for destructive in [
+        "ghidra_memory_write",
+        "ghidra_function_delete",
+        "ghidra_session_close",
+        "ghidra_daemon_shutdown",
+    ] {
+        assert_eq!(tool(destructive)["annotations"]["readOnlyHint"], false);
+        assert_eq!(tool(destructive)["annotations"]["destructiveHint"], true);
+        assert_eq!(tool(destructive)["annotations"]["openWorldHint"], false);
+    }
 }
 
-/// Makes sure that each domain tool tells the client how to get its parameters.
+/// Makes sure that each operation tool has a clear description and md5 guidance.
 #[test]
 fn tool_definitions_explain_how_to_call_operations() {
     let tools = tool_definitions();
     for tool in &tools[1..] {
         let name = tool["name"].as_str().expect("tool name");
         let description = tool["description"].as_str().expect("description");
-        assert!(description.contains(&format!("domain=\"{name}\"")));
-        assert!(description.contains("ghidra_help"));
-        assert!(description.contains("inputSchema"));
+        assert!(!description.is_empty(), "{name} description");
+        assert!(
+            tool["inputSchema"]["properties"].get("params").is_none(),
+            "{name} has legacy params wrapper"
+        );
         if let Some(md5) = tool["inputSchema"]["properties"].get("md5") {
             let description = md5["description"].as_str().expect("md5 description");
             assert!(description.contains("32 hexadecimal characters"));
@@ -155,19 +181,21 @@ fn tool_definitions_explain_how_to_call_operations() {
 /// Makes sure that one error gives all absent parameters and the help tool.
 #[test]
 fn missing_parameters_are_reported_together() {
-    let error = prepare(
-        "ghidra_upload",
-        object(json!({
-            "operation": "prepare",
-            "md5": "0123456789abcdef0123456789abcdef",
-            "params": {}
-        })),
-    )
-    .err()
-    .expect("missing parameters");
-    let reason = reason(&error);
-    assert!(reason.contains("`fileName`, `size`"), "{reason}");
-    assert!(reason.contains("ghidra_help"), "{reason}");
+    let md5 = "0123456789abcdef0123456789abcdef";
+    for (tool, arguments) in [
+        ("ghidra_upload_prepare", json!({ "md5": md5 })),
+        (
+            "ghidra_upload",
+            json!({ "operation": "prepare", "md5": md5, "params": {} }),
+        ),
+    ] {
+        let error = prepare(tool, object(arguments))
+            .err()
+            .expect("absent parameters");
+        let reason = reason(&error);
+        assert!(reason.contains("`fileName`, `size`"), "{reason}");
+        assert!(reason.contains("ghidra_help"), "{reason}");
+    }
 }
 
 /// Makes sure that each operation that names one session takes `md5` at the
@@ -202,9 +230,11 @@ fn session_md5_is_never_a_parameter() {
 #[test]
 fn public_tool_contract_is_gemini_compatible() {
     let tools = tool_definitions();
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 65);
+    let mut names = BTreeSet::new();
     for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
+        assert!(names.insert(name), "duplicate tool name {name}");
         assert!(valid_function_name(name), "tool name {name}");
 
         let schema = &tool["inputSchema"];
@@ -212,18 +242,6 @@ fn public_tool_contract_is_gemini_compatible() {
         assert!(schema["properties"].is_object());
         assert_no_unsupported_schema_keys(name, schema);
         assert!(tool.get("outputSchema").is_none());
-
-        if name != "ghidra_help" {
-            let params = &schema["properties"]["params"];
-            assert_eq!(params["type"], "object", "{name} params type");
-            let param_props = params["properties"]
-                .as_object()
-                .unwrap_or_else(|| panic!("{name} params.properties must be an object"));
-            assert!(
-                !param_props.is_empty(),
-                "{name} must publish non-empty params.properties"
-            );
-        }
     }
 
     let tool = |name: &str| {
@@ -232,25 +250,34 @@ fn public_tool_contract_is_gemini_compatible() {
             .find(|item| item["name"] == name)
             .unwrap_or_else(|| panic!("no tool {name}"))
     };
-    assert!(tool("ghidra_listing")["description"]
+    assert!(tool("ghidra_listing_data_unit_list")["description"]
         .as_str()
-        .expect("listing description")
-        .contains("data units"));
+        .expect("data unit list description")
+        .contains("data unit"));
     assert_eq!(
-        tool("ghidra_upload")["inputSchema"]["properties"]["params"]["required"],
-        json!(["fileName", "size"])
+        tool("ghidra_upload_prepare")["inputSchema"]["required"],
+        json!(["md5", "fileName", "size"])
     );
     assert_eq!(
-        tool("ghidra_decompilation")["inputSchema"]["properties"]["params"]["required"],
-        json!(["selector"])
+        tool("ghidra_decompilation_get")["inputSchema"]["required"],
+        json!(["md5", "selector"])
     );
     assert_eq!(
-        tool("ghidra_reference")["inputSchema"]["properties"]["params"]["required"],
-        json!(["filter"])
+        tool("ghidra_reference_list")["inputSchema"]["required"],
+        json!(["md5", "filter"])
     );
     assert_eq!(
-        tool("ghidra_batch")["inputSchema"]["properties"]["params"]["required"],
-        json!(["items"])
+        tool("ghidra_batch_execute")["inputSchema"]["required"],
+        json!(["md5", "items"])
+    );
+    assert_eq!(
+        tool("ghidra_job_wait")["inputSchema"]["required"],
+        json!(["jobId"])
+    );
+    assert!(
+        tool("ghidra_function_parameter_create")["inputSchema"]["properties"]["resource"]
+            ["properties"]["data_type"]["properties"]["target"]["properties"]["kind"]
+            .is_object()
     );
 }
 
@@ -299,43 +326,73 @@ fn valid_function_name(name: &str) -> bool {
 /// Makes sure that `analysis start` is local, has the bridge parameters, and takes `md5`.
 #[test]
 fn local_operation_extends_its_bridge_method() {
-    let prepared = prepare(
-        "ghidra_analysis",
-        object(json!({
-            "operation": "start",
-            "md5": "0123456789ABCDEF0123456789ABCDEF",
-            "params": { "analyzers": ["Stack"], "wait": true }
-        })),
-    )
-    .expect("valid call");
-    let (operation, request) = prepared;
-    assert!(matches!(operation.route, Route::Local(_)));
-    assert_eq!(
-        request.md5.as_deref(),
-        Some("0123456789abcdef0123456789abcdef")
-    );
-    assert_eq!(request.label, "ghidra_analysis start");
+    for (tool, arguments, expected_label) in [
+        (
+            "ghidra_analysis_start",
+            json!({
+                "md5": "0123456789ABCDEF0123456789ABCDEF",
+                "analyzers": ["Stack"],
+                "wait": true
+            }),
+            "ghidra_analysis_start",
+        ),
+        (
+            "ghidra_analysis",
+            json!({
+                "operation": "start",
+                "md5": "0123456789ABCDEF0123456789ABCDEF",
+                "params": { "analyzers": ["Stack"], "wait": true }
+            }),
+            "ghidra_analysis start",
+        ),
+    ] {
+        let (operation, request) = prepare(tool, object(arguments)).expect("valid call");
+        assert!(matches!(operation.route, Route::Local(_)));
+        assert_eq!(
+            request.md5.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(request.label, expected_label);
+        assert_eq!(
+            request.params,
+            json!({ "analyzers": ["Stack"], "wait": true })
+        );
+    }
 }
 
 /// Makes sure that a bridge operation goes to its bridge method.
 #[test]
 fn bridge_operation_uses_its_bridge_method() {
-    let prepared = prepare(
-        "ghidra_bridge",
-        object(json!({ "operation": "get", "md5": "0123456789abcdef0123456789abcdef" })),
-    )
-    .expect("valid call");
-    let (operation, request) = prepared;
-    match &operation.route {
-        Route::Bridge(method) => assert_eq!(method, "session.get"),
-        Route::Local(_) => panic!("ghidra_bridge get must go to the bridge"),
+    for (tool, arguments) in [
+        (
+            "ghidra_bridge_get",
+            json!({ "md5": "0123456789abcdef0123456789abcdef" }),
+        ),
+        (
+            "ghidra_bridge",
+            json!({ "operation": "get", "md5": "0123456789abcdef0123456789abcdef" }),
+        ),
+    ] {
+        let (operation, request) = prepare(tool, object(arguments)).expect("valid call");
+        match &operation.route {
+            Route::Bridge(method) => assert_eq!(method, "session.get"),
+            Route::Local(_) => panic!("{tool} must go to the bridge"),
+        }
+        assert_eq!(request.params, json!({}));
     }
-    assert_eq!(request.params, json!({}));
 }
 
 /// Makes sure that `md5: null` is the same as no `md5`.
 #[test]
 fn null_md5_is_no_md5() {
+    let (_, flat_request) = prepare("ghidra_session_list", object(json!({ "md5": null })))
+        .expect("null md5 on flat tool without md5");
+    assert!(flat_request.md5.is_none());
+    let flat_error = prepare("ghidra_session_get", object(json!({ "md5": null })))
+        .err()
+        .expect("null md5 on flat tool that requires md5");
+    assert!(reason(&flat_error).contains("`ghidra_session_get` requires md5"));
+
     let (_, request) = prepare(
         "ghidra_session",
         object(json!({ "operation": "list", "md5": null })),
@@ -367,6 +424,31 @@ fn prepare_refuses_invalid_calls() {
             "ghidra_bridge",
             json!({ "operation": "shutdown", "md5": md5 }),
             "unknown operation",
+        ),
+        (
+            "ghidra_bridge_shutdown",
+            json!({ "md5": md5 }),
+            "unknown tool",
+        ),
+        (
+            "ghidra_session_list",
+            json!({ "md5": md5 }),
+            "does not accept md5",
+        ),
+        (
+            "ghidra_session_get",
+            json!({}),
+            "`ghidra_session_get` requires md5",
+        ),
+        (
+            "ghidra_function_list",
+            json!({ "md5": "x" }),
+            "invalid arguments",
+        ),
+        (
+            "ghidra_session_list",
+            json!({ "extra": 1 }),
+            "does not accept parameter `extra`",
         ),
         (
             "ghidra_nothing",
@@ -452,6 +534,7 @@ fn help_has_three_levels() {
         .iter()
         .find(|operation| operation["name"] == "block.list")
         .expect("block.list");
+    assert_eq!(block_list["tool"], "ghidra_memory_block_list");
     assert_eq!(block_list["md5"], "required");
     assert_eq!(block_list["effects"]["read_only"], true);
     assert!(block_list["inputSchema"]["properties"].is_object());
@@ -460,6 +543,7 @@ fn help_has_three_levels() {
         json!({ "domain": "ghidra_session", "operation": "open" }),
     ))
     .expect("operation");
+    assert_eq!(open["tool"], "ghidra_session_open");
     assert_eq!(open["md5"], "optional");
     assert_eq!(open["effects"]["mutates_program"], true);
     assert_eq!(open["effects"]["read_only"], false);
@@ -546,11 +630,21 @@ async fn job_list_and_daemon_status_show_jobs() {
         super::call(&daemon, tool, object(json!({ "operation": operation })))
     };
 
-    let (_, listed) = call("ghidra_job", "list").await.unwrap();
+    let (_, listed) = super::call(&daemon, "ghidra_job_list", Map::new())
+        .await
+        .unwrap();
     assert_eq!(listed["jobs"][0]["id"], job.id);
-    let (_, status) = call("ghidra_daemon", "status").await.unwrap();
+    let (_, status) = super::call(&daemon, "ghidra_daemon_status", Map::new())
+        .await
+        .unwrap();
     assert_eq!(status["daemon"]["pid"], std::process::id());
     assert_eq!(status["jobs"][0]["id"], job.id);
+
+    let (_, legacy_listed) = call("ghidra_job", "list").await.unwrap();
+    assert_eq!(legacy_listed["jobs"][0]["id"], job.id);
+    let (_, legacy_status) = call("ghidra_daemon", "status").await.unwrap();
+    assert_eq!(legacy_status["daemon"]["pid"], std::process::id());
+    assert_eq!(legacy_status["jobs"][0]["id"], job.id);
 }
 
 /// Makes sure that `ghidra_daemon shutdown` refuses live work without `force`.

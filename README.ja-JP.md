@@ -47,7 +47,7 @@ MCP クライアントは stdio または HTTP でデーモンに接続します
 - **リモートアップロード。** デーモンホスト上にないクライアントは、別の HTTP エンドポイントでバイナリを送信します。
 - **Ghidra への完全なアクセス。** Java ブリッジが、プログラムデータ、関数、逆コンパイル、シンボル、参照、メモリ、コメントを提供します。
 - **単一の実行ファイル。** 実行ファイルには、ブリッジ JAR とその起動スクリプトが含まれます。
-- **バックグラウンドジョブ。** `ghidra_job list`、`ghidra_job get`、`ghidra_job wait` で長時間の解析を監視します。
+- **バックグラウンドジョブ。** `ghidra_job_list`、`ghidra_job_get`、`ghidra_job_wait` で長時間の解析を監視します。
 
 デフォルトでは、セッションはプログラムを変更できます。
 コーディングエージェントは、プログラムを変更する操作を使用する前に、ユーザーの承認を得る必要があります。
@@ -256,7 +256,7 @@ Unix では、`SIGINT`、`SIGTERM`、`SIGHUP` でも停止します。
 稼働中のセッションや実行中のジョブがある場合、`daemon stop` はデーモンを停止しません。停止するには `--force` を付けます。
 デーモンが実行されていない場合、`daemon status` はステータス 3 で終了し、`daemon stop` は成功します。
 これらのコマンドは既定でテキストを出力します。スクリプトでは `--json` を付けてください。
-MCP クライアントも `ghidra_daemon shutdown` を使用できます。その場合、デーモンはすべてのクライアントに対して停止します。
+MCP クライアントも `ghidra_daemon_shutdown` を使用できます。その場合、デーモンはすべてのクライアントに対して停止します。
 
 ### コマンドラインツール
 
@@ -271,7 +271,7 @@ ghidra-mcp tools
 デーモン経由でツールを呼び出すには、次のコマンドを使用します：
 
 ```sh
-ghidra-mcp call ghidra_session '{"operation":"list"}'
+ghidra-mcp call ghidra_session_list '{}'
 ```
 
 `call TOOL [JSON]` は 1 つの JSON オブジェクトを受け付けます。デフォルトは `{}` です。
@@ -292,10 +292,10 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
 ![リモートアップロードフロー](docs/img/remote_upload.svg)
 
 1. クライアント上で、ファイルの MD5 とバイト単位のサイズを計算します。
-2. `ghidra_upload` ツールを呼び出します：
+2. `ghidra_upload_prepare` ツールを呼び出します：
 
    ```json
-   {"operation":"prepare","md5":"0123456789abcdef0123456789abcdef","params":{"fileName":"program.bin","size":1024}}
+   {"md5":"0123456789abcdef0123456789abcdef","fileName":"program.bin","size":1024}
    ```
 
    `fileName` は表示名です。ディレクトリを含めてはいけません。
@@ -316,16 +316,16 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
 
 5. 応答を読み取ります：
    - HTTP `200`：セッションの準備ができています。
-   - HTTP `202`：セッションは起動中です。返された `jobId` で `ghidra_job wait` を使用します。
+   - HTTP `202`：セッションは起動中です。返された `jobId` で `ghidra_job_wait` を使用します。
 
-別途 `ghidra_session open` を呼び出す必要はありません。
+別途 `ghidra_session_open` を呼び出す必要はありません。
 
 > [!NOTE]
 > - アップロードは直接ディスクに書き込まれます。MCP リクエストのサイズ上限を超えることができます。デーモンは HTTP チャンク転送を受け付けます。
-> - `ghidra_upload prepare` から 10 分以内にアップロードを開始する必要があります。この上限は、アクティブなアップロードには適用されません。
+> - `ghidra_upload_prepare` から 10 分以内にアップロードを開始する必要があります。この上限は、アクティブなアップロードには適用されません。
 > - リクエストは開始時に資格情報を使用します。アップロードが失敗した後は、新しい資格情報を取得します。
 > - デーモンは、バイナリを保存する前にサイズと MD5 を確認します。失敗したアップロードは、ファイルもセッションも残しません。
-> - Ghidra が起動しなかった場合でも、バイナリは保存されたままです。MD5 を指定して `ghidra_session open` を再実行します。
+> - Ghidra が起動しなかった場合でも、バイナリは保存されたままです。MD5 を指定して `ghidra_session_open` を再実行します。
 > - リバースプロキシは、`/mcp` と `/upload` の両方を同じプレフィックスでデーモンに転送する必要があります。
 
 サーバーは `Forwarded` のホストとプロトコルを優先し、次に `X-Forwarded-Host` と
@@ -355,21 +355,21 @@ claude mcp add --transport stdio --scope local ghidra-mcp -- /absolute/path/to/g
 エージェントでは次の手順を使用します：
 
 1. バイナリを開きます：
-   - デーモンが以前に保存したバイナリには、`{"operation":"open","md5":"..."}` で `ghidra_session` を呼び出します。
-   - デーモンホスト上のファイルには、`{"operation":"open","params":{"path":"..."}}` で `ghidra_session` を呼び出します。デーモンが MD5 を計算し、バイナリを保存します。
+   - デーモンが以前に保存したバイナリには、`{"md5":"..."}` で `ghidra_session_open` を呼び出します。
+   - デーモンホスト上のファイルには、`{"path":"..."}` で `ghidra_session_open` を呼び出します。デーモンが MD5 を計算し、バイナリを保存します。
    - リモートクライアント上のファイルは、アップロードします（[リモートクライアントからのバイナリのアップロード](#リモートクライアントからのバイナリのアップロード)を参照）。
-2. セッションが起動中の場合は、`{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}` で `ghidra_job` を呼び出して待ちます。
-   `ghidra_job get` でジョブを監視できます。
-3. `ghidra_session get` で準備完了状態を確認します。
-4. 解析を開始します：`{"operation":"start","md5":"..."}` で `ghidra_analysis` を呼び出します。
-5. `ghidra_job get` または `ghidra_job wait` で解析ジョブを監視します。
-6. `ghidra_program get`、`ghidra_function list`、`ghidra_data_type create` などのブリッジのドメインツールを使用します。
-7. `ghidra_program save` で解析結果と変更を保存します。セッションは開いたままです。
+2. セッションが起動中の場合は、`{"jobId":"...","timeoutMs":...}` で `ghidra_job_wait` を呼び出して待ちます。
+   `ghidra_job_get` でジョブを監視できます。
+3. `ghidra_session_get` で準備完了状態を確認します。
+4. 解析を開始します：`{"md5":"..."}` で `ghidra_analysis_start` を呼び出します。
+5. `ghidra_job_get` または `ghidra_job_wait` で解析ジョブを監視します。
+6. `ghidra_program_get`、`ghidra_function_list`、`ghidra_data_type_create` などのブリッジの操作別ツールを使用します。
+7. `ghidra_program_save` で解析結果と変更を保存します。セッションは開いたままです。
 8. プログラムを変更する操作を使用する前に、ユーザーの承認を得ます。
 
 セッションの要約には、`md5`、`fileName`、`status`、`connected` だけが含まれます。
 1 つのセッションを指定する操作は `md5` を使用します。別のセッション ID はありません。
-`ghidra_session list` は任意です。
+`ghidra_session_list` は任意です。
 デーモンが知らない MD5 に対しては、デーモンはバイナリをアップロードするように伝えます。
 
 ## 設定
@@ -404,7 +404,7 @@ ipc_handshake_timeout_sec = 5
 | `ghidra.analyze_headless` | `analyzeHeadless` のパス。 |
 | `analysis.max_cpu` | `analyzeHeadless -max-cpu` の値。 |
 | `timeouts.process_spawn_timeout_sec` | Ghidra プロセスを起動する時間。 |
-| `timeouts.analysis_import_timeout_sec` | バイナリをインポートする時間。`ghidra_analysis start` のデフォルトの待機時間でもあります。 |
+| `timeouts.analysis_import_timeout_sec` | バイナリをインポートする時間。`ghidra_analysis_start` のデフォルトの待機時間でもあります。 |
 | `timeouts.bridge_connect_timeout_sec` | セッションを起動する合計時間の一部。 |
 | `timeouts.agent_ready_timeout_sec` | ブリッジがハンドシェイクを完了する時間。 |
 | `timeouts.bridge_disconnect_grace_sec` | ブリッジの切断またはセッションのクローズの後に、プロセスが自分で停止する時間。 |
@@ -421,48 +421,49 @@ ipc_handshake_timeout_sec = 5
 
 ## MCP ツール
 
-`tools/list` は 19 個の MCP ツールを表示します：`ghidra_help` と、ドメインごとに 1 つのツールです。
-ブリッジのドメインツールは、ブリッジ MCP サーバーのドメイン名と操作名を使用します。
-デーモンにはローカル操作もありますが、ブリッジの shutdown 操作は公開しません。
-このドキュメントでは、操作をツール名と操作名で表します（例：`ghidra_session open`）。
+`tools/list` は 65 個のアンダースコア区切り MCP ツールを公開します：`ghidra_help` と 64 個の操作別ツール（`ghidra_<domain>_<operation>`、操作名内のドットはアンダースコアに置換）です。
+各操作別ツールは、フラット化されたパラメータスキーマと正確な安全性ヒント（`readOnlyHint`、`destructiveHint`、`idempotentHint`）を `tools/list` に直接公開します。
+デーモンにはローカル操作もあり、`ghidra_bridge_shutdown` は非公開です。
 
-ドメインツールには次の引数があります：
+各 `ghidra-mcp` サーバーは 65 個のツールを公開します。
+2 台同時接続で 130 個、3 台接続で 195 個のツールになります。
+厳格な MCP クライアントの 128 ツール上限を超えないように構成するか、複数のバイナリで 1 つの `ghidra-mcp` デーモンを共有してください。
 
-- `operation`：必須。ドメイン内の操作です（例：`list`）。
-- `md5`：セッションを識別するバイナリの MD5 です。32 桁の 16 進文字で、`params` には入れません。名前ではなく、ファイルの実際のダイジェストか既存セッションの MD5 を使用します。各操作には md5 ルール（`required`、`optional`、`absent`）があります。
-- `params`：操作のパラメータです。デフォルトは `{}` です。
+操作別ツールはトップレベルで引数を受け取ります：
 
-| ツール | 操作 | 実行場所 |
+- `md5`：セッションを識別するバイナリの MD5 です。32 桁の 16 進文字です。名前ではなく、ファイルの実際のダイジェストか既存セッションの MD5 を使用します。各操作には md5 ルール（`required`、`optional`、`absent`）があります。
+- トップレベルの操作パラメータ（例：`selector`、`filter`、`page`、`patch`、`resource`、`fileName`、`jobId`）。
+
+既存クライアントとの互換性のため、`tools/call` は非一覧の旧式 `ghidra_<domain>` 呼び出し（`{"operation", "md5", "params"}`）も引き続き受け付けます。
+
+| ツールパターン | 操作 | 実行場所 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`list`、`get`、`close` | デーモン。 |
-| `ghidra_upload` | `prepare` | デーモン。 |
-| `ghidra_job` | `list`、`get`、`wait` | デーモン。 |
-| `ghidra_daemon` | `status`、`shutdown` | デーモン。 |
-| `ghidra_analysis` | `start`、`get` | `start`：デーモン、次にブリッジ。`get`：ブリッジ。 |
-| `ghidra_bridge`、`ghidra_program`、`ghidra_address`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_decompilation`、`ghidra_symbol`、`ghidra_reference`、`ghidra_comment`、`ghidra_data_type`、`ghidra_batch` | そのドメインのブリッジメソッド。 | セッションのブリッジ。 |
+| `ghidra_session_<op>` | `open`、`list`、`get`、`close` | デーモン。 |
+| `ghidra_upload_prepare` | `prepare` | デーモン。 |
+| `ghidra_job_<op>` | `list`、`get`、`wait` | デーモン。 |
+| `ghidra_daemon_<op>` | `status`、`shutdown` | デーモン。 |
+| `ghidra_analysis_<op>` | `start`、`get` | `start`：デーモン、次にブリッジ。`get`：ブリッジ。 |
+| `ghidra_bridge_<op>`、`ghidra_program_<op>`、`ghidra_address_<op>`、`ghidra_memory_<op>`、`ghidra_listing_<op>`、`ghidra_global_variable_<op>`、`ghidra_function_<op>`、`ghidra_decompilation_<op>`、`ghidra_symbol_<op>`、`ghidra_reference_<op>`、`ghidra_comment_<op>`、`ghidra_data_type_<op>`、`ghidra_batch_execute` | そのドメインのブリッジメソッド。 | セッションのブリッジ。 |
 
-ブリッジ契約 `bridge/docs/asyncapi.yaml` が、ブリッジメソッド、そのスキーマ、`read_only` 効果を定義します。
+ブリッジ契約 `bridge/docs/asyncapi.yaml` が、ブリッジメソッド、そのスキーマ、効果を定義します。
 デーモンは契約にあるメソッドだけを送ります。
-`interface.get` と `session.shutdown` は提供しません。セッションを停止するには、`ghidra_session close` を使用します。
+`interface.get` と `session.shutdown` は提供しません。セッションを停止するには、`ghidra_session_close` を使用します。
 パラメータには、`selector`、`filter`、`page`、`patch`、`resource` などのブリッジのオブジェクトを使用します。
 
-`ghidra_function get` と `ghidra_comment upsert` の例：
+`ghidra_function_get` と `ghidra_comment_upsert` の例：
 
 ```json
-{"operation":"get","md5":"0123456789abcdef0123456789abcdef","params":{"selector":{"entry":"ram:00100000"}}}
-{"operation":"upsert","md5":"0123456789abcdef0123456789abcdef","params":{"resource":{"address":"ram:00100000","type":"eol","text":"checked"}}}
+{"md5":"0123456789abcdef0123456789abcdef","selector":{"entry":"ram:00100000"}}
+{"md5":"0123456789abcdef0123456789abcdef","resource":{"address":"ram:00100000","type":"eol","text":"checked"}}
 ```
 
-関数を作成するには、`ghidra_function` にエントリアドレスを指定します：
+関数を作成するには、`ghidra_function_create` にエントリアドレスを指定します：
 
 ```json
 {
-  "operation": "create",
   "md5": "0123456789abcdef0123456789abcdef",
-  "params": {
-    "resource": { "entry": "ram:00100000", "name": "my_function" },
-    "disassemble": true
-  }
+  "resource": { "entry": "ram:00100000", "name": "my_function" },
+  "disassemble": true
 }
 ```
 
@@ -471,29 +472,25 @@ ipc_handshake_timeout_sec = 5
 エントリまたは関数本体が既存の関数と重なる場合、操作は失敗します。
 通常の関数を作成し、thunk を自動的に識別しません。
 
-関数を削除するには、`selector` にエントリアドレスを指定します：
+関数を削除するには、`ghidra_function_delete` の `selector` にエントリアドレスを指定します：
 
 ```json
 {
-  "operation": "delete",
   "md5": "0123456789abcdef0123456789abcdef",
-  "params": { "selector": { "entry": "ram:00100000" } }
+  "selector": { "entry": "ram:00100000" }
 }
 ```
 
 この操作は関数定義とローカル変数を削除し、命令とデータは保持します。
 
-逆コンパイルビューをエディターの行として取得するには、format を `document` にして `ghidra_decompilation` を使います。
+逆コンパイルビューをエディターの行として取得するには、format を `document` にして `ghidra_decompilation_get` を使います。
 
 ```json
 {
-  "operation": "get",
   "md5": "0123456789abcdef0123456789abcdef",
-  "params": {
-    "selector": { "entry": "ram:00100000" },
-    "format": "document",
-    "include_comments": true
-  }
+  "selector": { "entry": "ram:00100000" },
+  "format": "document",
+  "include_comments": true
 }
 ```
 
@@ -501,28 +498,27 @@ ipc_handshake_timeout_sec = 5
 `include_comments` を設定すると、すべてのコメント種別を表示し、リピータブルコメントを返します。
 `comments_complete` が `false` の場合、コメント一覧は不完全です。
 
-マングルされたすべてのプライマリシンボルに C++ 名を適用するには、`ghidra_symbol` を使います。
+マングルされたすべてのプライマリシンボルに C++ 名を適用するには、`ghidra_symbol_demangle` を使います。
 
 ```json
-{ "operation": "demangle", "md5": "0123456789abcdef0123456789abcdef", "params": {} }
+{ "md5": "0123456789abcdef0123456789abcdef" }
 ```
 
 この操作は名前と名前空間だけを変更し、関数シグネチャとデータ型は保持します。
 関数、シンボル、呼び出しの結果は、プログラムを変更せずに `demangled_name` も返します。
 
-操作を初めて呼び出す前に、ドメインと操作名を指定して `ghidra_help` を呼び出します。
-返される `inputSchema` は、ツールのトップレベル引数ではなく `params` の内容を説明します。
-呼び出す前に必須フィールドとその入れ子構造を確認します。
+`tools/list` は各操作別ツールのフラット化されたパラメータスキーマを公開します。
+再帰的な完全パラメータスキーマや完全な効果フラグが必要な場合は、`ghidra_help` を呼び出します。
 
-`ghidra_help` ツールは、すべてのツールを説明します：
+`ghidra_help` ツールは、すべてのドメインと操作を説明します：
 
-- `{}` は、ドメインツールを一覧表示します。
-- `{"domain":"function"}` は、1 つのドメインの操作と、各操作の説明、md5 ルール、効果、`inputSchema` を一覧表示します。
-- `{"domain":"function","operation":"list"}` は、1 つの操作の完全なパラメータスキーマ、md5 ルール、効果を表示します。効果はブリッジ契約と同じです（例：`read_only`、`mutates_program`、`destructive`）。
+- `{}` は、ドメイン一覧を表示します。
+- `{"domain":"function"}` は、1 つのドメインの操作と、各操作の `tool` 名、説明、md5 ルール、効果、完全なパラメータ `inputSchema` を一覧表示します。
+- `{"domain":"function","operation":"list"}` は、1 つの操作の `tool` 名、完全なパラメータ `inputSchema`、md5 ルール、効果を表示します。効果はブリッジ契約と同じです（例：`read_only`、`mutates_program`、`destructive`）。
 
 Ghidra プロセスが起動しなかった場合、セッションは `error` に、その起動ジョブは `failed` になります。
-`wait=false` の場合、`ghidra_session open` はすぐに戻ります。結果は `ghidra_session get` と `ghidra_job get` で確認します。
-`wait=true` の場合、`ghidra_session open` は待機してエラーを返します。
+`wait=false` の場合、`ghidra_session_open` はすぐに戻ります。結果は `ghidra_session_get` と `ghidra_job_get` で確認します。
+`wait=true` の場合、`ghidra_session_open` は待機してエラーを返します。
 
 バイナリの MD5 が各セッションを識別します。
 デーモンは有限状態機械を通じてセッション状態を管理します：
@@ -601,7 +597,7 @@ Windows のデフォルトのレイアウトは次のとおりです：
 
 - ランタイムディレクトリごとに 1 つのデーモンが実行されます。ファイルロックがこれを保証します。PID ファイルはありません。
 - 各ランタイムディレクトリは 1 つの永続ホームを使用します。`GHIDRA_MCP_HOME` を変更するには、先にデーモンを停止し、ランタイムディレクトリを空にします。古いホームのプロジェクトは引き続き使用できます。
-- デーモンが実行されていないときは、ランタイムディレクトリを削除できます。その後、MD5 を指定した `ghidra_session open` で、保存済みのプロジェクトを再度開きます。
+- デーモンが実行されていないときは、ランタイムディレクトリを削除できます。その後、MD5 を指定した `ghidra_session_open` で、保存済みのプロジェクトを再度開きます。
 - `project.gpr` と `project.rep` が存在する場合、デーモンはプロジェクトを再度開きます。Ghidra は復旧ジャーナルを再生します。
 - デーモンは、認識できないプロジェクトディレクトリを変更しません。エラーを表示します。
 - デーモンはすべてのログファイル（`daemon.log`、`stdout.log`、`stderr.log`）を 10 MiB に制限します。

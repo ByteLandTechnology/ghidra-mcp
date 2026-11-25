@@ -80,7 +80,7 @@ enum Command {
 
     /// Call a tool through the shared daemon.
     Call {
-        /// The tool name, for example `ghidra_session`. `tools` lists all tools.
+        /// The tool name, for example `ghidra_session_list`. `tools` lists all tools.
         tool: String,
         /// A JSON object with the tool arguments.
         #[arg(default_value = "{}", value_parser = parse_arguments)]
