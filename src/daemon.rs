@@ -27,7 +27,9 @@ mod ipc {
     use interprocess::local_socket::tokio::{prelude::*, Listener, Stream};
     use interprocess::local_socket::{ListenerOptions, Name};
     use rmcp::{
-        model::{CallToolRequestParams, CallToolResult},
+        model::{
+            CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
+        },
         service::RunningService,
         RoleClient, ServiceExt,
     };
@@ -138,6 +140,12 @@ mod ipc {
         }
     }
 
+    /// The MCP client name that the proxy and the CLI send on the local socket.
+    pub(crate) const PROXY_CLIENT_NAME: &str = "ghidra-mcp-proxy";
+
+    /// An active MCP client connection from the proxy or the CLI to the daemon.
+    type ProxyClient = RunningService<RoleClient, ClientConfig>;
+
     /// Time limits for the proxy connection manager lifecycle.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ProxyTimeouts {
@@ -152,7 +160,7 @@ mod ipc {
     /// Manages persistent connections from the stdio proxy or CLI to the daemon.
     pub struct ProxyConnectionManager {
         /// The cached active MCP client connection.
-        client: Mutex<Option<Arc<RunningService<RoleClient, ()>>>>,
+        client: Mutex<Option<Arc<ProxyClient>>>,
         /// Time limits for daemon startup and IPC handshakes.
         timeouts: ProxyTimeouts,
         /// The runtime directory that contains `server.json` and the socket endpoints.
@@ -176,6 +184,20 @@ mod ipc {
                 },
                 runtime_dir,
             })
+        }
+
+        /// Creates a connection manager for an isolated test runtime directory.
+        #[cfg(test)]
+        pub(crate) fn with_runtime_dir(runtime_dir: PathBuf) -> Self {
+            Self {
+                client: Mutex::new(None),
+                timeouts: ProxyTimeouts {
+                    daemon_start: Duration::from_secs(2),
+                    handshake: Duration::from_secs(2),
+                    poll_interval: Duration::from_millis(20),
+                },
+                runtime_dir,
+            }
         }
 
         /// Creates a connection manager configured from `McpConfig`.
@@ -250,8 +272,8 @@ mod ipc {
         /// Returns the cached connection, or opens a new connection when necessary.
         async fn get_connection(
             &self,
-            guard: &mut Option<Arc<RunningService<RoleClient, ()>>>,
-        ) -> Result<Arc<RunningService<RoleClient, ()>>> {
+            guard: &mut Option<Arc<ProxyClient>>,
+        ) -> Result<Arc<ProxyClient>> {
             if let Some(ref service) = *guard {
                 if !service.is_closed() {
                     return Ok(service.clone());
@@ -272,7 +294,7 @@ mod ipc {
         }
 
         /// Waits until a daemon that starts serves requests.
-        async fn wait_until_ready(&self) -> Result<RunningService<RoleClient, ()>> {
+        async fn wait_until_ready(&self) -> Result<ProxyClient> {
             let deadline = tokio::time::Instant::now() + self.timeouts.daemon_start;
             loop {
                 if let Some(service) = self.connect_socket().await? {
@@ -409,16 +431,45 @@ mod ipc {
         }
 
         /// Connects to the local socket and performs the MCP handshake.
-        async fn connect_socket(&self) -> Result<Option<RunningService<RoleClient, ()>>> {
+        async fn connect_socket(&self) -> Result<Option<ProxyClient>> {
             let Some(stream) = self.open_stream().await? else {
                 return Ok(None);
             };
-            let client = tokio::time::timeout(self.timeouts.handshake, ().serve(stream))
+            let config = ClientConfig::new(
+                ClientCapabilities::default(),
+                Implementation::new(PROXY_CLIENT_NAME, env!("CARGO_PKG_VERSION")),
+            );
+            let client = tokio::time::timeout(self.timeouts.handshake, config.serve(stream))
                 .await
                 .context("daemon MCP handshake timed out")?
                 .context("initializing daemon MCP connection")?;
             Ok(Some(client))
         }
+    }
+
+    /// Makes a local socket listener and writes `server.json` in `runtime` for unit tests.
+    #[cfg(test)]
+    pub(crate) fn test_listener(runtime: &Path) -> Result<(String, Listener)> {
+        fs::create_dir_all(runtime)?;
+        let endpoint = new_endpoint(runtime);
+        let options = ListenerOptions::new().name(socket_name(&endpoint)?);
+        #[cfg(unix)]
+        let options = options.try_overwrite(true);
+        let listener = options.create_tokio()?;
+        let server = json!({
+            "pid": std::process::id(),
+            "mcpUrl": "http://127.0.0.1:1/mcp",
+            "bridgeWsUrl": "ws://127.0.0.1:1/ws/agent",
+            "localSocket": endpoint,
+        });
+        atomic_write(&runtime.join("server.json"), &serde_json::to_vec(&server)?)?;
+        Ok((endpoint, listener))
+    }
+
+    /// Connects a raw local socket stream to `endpoint` for unit tests.
+    #[cfg(test)]
+    pub(crate) async fn test_connect(endpoint: &str) -> Result<Stream> {
+        Ok(Stream::connect(socket_name(endpoint)?).await?)
     }
 
     /// The maximum time for a daemon to close its sessions and stop.
@@ -543,6 +594,9 @@ mod ipc {
 }
 
 pub use ipc::ProxyConnectionManager;
+pub(crate) use ipc::PROXY_CLIENT_NAME;
+#[cfg(test)]
+pub(crate) use ipc::{test_connect, test_listener};
 
 use crate::bridge::AGENT_WS_PATH;
 use crate::mcp::ToolServer;
