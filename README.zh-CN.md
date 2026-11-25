@@ -296,17 +296,20 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
    ghidra-mcp setup
    ```
 
-2. 为已打开的二进制文件生成 `Bridge.java` 出站连接参数：
+2. 在 CodeBrowser 中打开 Script Manager 并运行 `Bridge.java`。
+   控制台会输出回环监听地址（默认为 `ws://127.0.0.1:8765/ws/agent`）。
+3. 将守护进程挂接到该监听地址：
 
    ```sh
-   ghidra-mcp session attach /path/to/program.bin
+   ghidra-mcp session attach ws://127.0.0.1:8765/ws/agent
    ```
 
-   也可以省略路径，或直接传入 32 位十六进制 MD5。
-   该命令输出 `ws_url=... session_id=... token=...`，不会复制二进制文件。
-3. 在 CodeBrowser 中打开 Script Manager，运行 `Bridge.java`，并把输出的参数粘贴到启动提示框中。
+   也可以传入 `--port 8765`，或同时传入本地文件路径与 `--port 8765` 以复用文件 MD5。
+   该命令不会复制二进制文件。
 4. `Bridge.java` 发送 `ghidra.ready` 后，会话进入 `ready` 状态。
    连接断开时，CodeBrowser 保持打开，守护进程不会启动 `analyzeHeadless`。
+
+如果省略 `--ws-url` 和 `--port`，`session attach` 会改为输出 `ws_url=... session_id=... token=...` 出站连接参数。
 
 ### 从远程客户端上传二进制文件
 

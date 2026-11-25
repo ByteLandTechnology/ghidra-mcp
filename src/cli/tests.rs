@@ -62,11 +62,30 @@ fn management_commands_parse() {
             ..
         }))
     ));
+    let cli = parse(&["job", "wait", "id", "--timeout-ms", "10"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Job(JobCommand::Wait {
+            timeout_ms: Some(10),
+            ..
+        }))
+    ));
+    assert!(parse(&["paths", "--json"]).is_ok());
+    assert!(parse(&["config", "check"]).is_ok());
+    assert!(parse(&["call", "ghidra_help", "[]"]).is_err());
+}
+
+/// Makes sure that `session attach` and `setup` parse their arguments.
+#[test]
+fn attach_and_setup_commands_parse() {
     let cli = parse(&["session", "attach"]).unwrap();
     assert!(matches!(
         cli.command,
         Some(Command::Session(SessionCommand::Attach {
             target: None,
+            ws_url: None,
+            port: None,
+            token: None,
             file_name: None,
             wait: false,
             timeout_ms: None,
@@ -89,10 +108,28 @@ fn management_commands_parse() {
         cli.command,
         Some(Command::Session(SessionCommand::Attach {
             target: Some(_),
+            ws_url: None,
+            port: None,
+            token: None,
             file_name: Some(_),
             wait: true,
             timeout_ms: Some(5000),
             json: true,
+        }))
+    ));
+    let cli = parse(&[
+        "session", "attach", "--port", "8766", "--token", "secret", "--json",
+    ])
+    .unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Attach {
+            target: None,
+            ws_url: None,
+            port: Some(8766),
+            token: Some(_),
+            json: true,
+            ..
         }))
     ));
     let cli = parse(&["setup"]).unwrap();
@@ -111,17 +148,6 @@ fn management_commands_parse() {
             json: true,
         })
     ));
-    let cli = parse(&["job", "wait", "id", "--timeout-ms", "10"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Some(Command::Job(JobCommand::Wait {
-            timeout_ms: Some(10),
-            ..
-        }))
-    ));
-    assert!(parse(&["paths", "--json"]).is_ok());
-    assert!(parse(&["config", "check"]).is_ok());
-    assert!(parse(&["call", "ghidra_help", "[]"]).is_err());
 }
 
 /// Makes sure that `install_user_scripts` writes the GUI scripts and JAR.
@@ -141,8 +167,8 @@ fn setup_extracts_launcher_scripts_and_jar() {
     }
     let bridge_script = std::fs::read_to_string(target.join("Bridge.java")).unwrap();
     let mcp_script = std::fs::read_to_string(target.join("GhidraMcp.java")).unwrap();
-    assert!(bridge_script.contains("askString("));
-    assert!(mcp_script.contains("askString("));
+    assert!(bridge_script.contains("startFromScript"));
+    assert!(mcp_script.contains("startMcpFromScript"));
     assert!(bridge_script.contains("ghidra-bridge.jar"));
     assert!(mcp_script.contains("ghidra-bridge.jar"));
 

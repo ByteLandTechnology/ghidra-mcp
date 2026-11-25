@@ -296,17 +296,20 @@ Ghidra CodeBrowser で開いているプログラムをデーモンに接続す�
    ghidra-mcp setup
    ```
 
-2. 開いているバイナリ用の `Bridge.java` 発信接続引数を発行します：
+2. CodeBrowser で Script Manager を開き、`Bridge.java` を実行します。
+   コンソールにループバックの待受 URL（デフォルトは `ws://127.0.0.1:8765/ws/agent`）が出力されます。
+3. デーモンをその待受アドレスにアタッチします：
 
    ```sh
-   ghidra-mcp session attach /path/to/program.bin
+   ghidra-mcp session attach ws://127.0.0.1:8765/ws/agent
    ```
 
-   パスを省略するか、32 桁の 16 進 MD5 を指定することもできます。
-   このコマンドは `ws_url=... session_id=... token=...` を出力し、バイナリをコピーしません。
-3. CodeBrowser で Script Manager を開き、`Bridge.java` を実行して、出力された引数を起動ダイアログに貼り付けます。
+   `--port 8765` を指定するか、ローカルファイルパスと `--port 8765` を併用して MD5 を使うこともできます。
+   このコマンドはバイナリをコピーしません。
 4. `Bridge.java` が `ghidra.ready` を送ると、セッションは `ready` 状態になります。
    切断しても CodeBrowser は開いたままで、デーモンは `analyzeHeadless` を起動しません。
+
+`--ws-url` と `--port` を省略した場合、`session attach` は代わりに発信用の `ws_url=... session_id=... token=...` 引数を出力します。
 
 ### リモートクライアントからのバイナリのアップロード
 

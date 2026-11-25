@@ -107,9 +107,10 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         domain: "session",
         name: "attach",
         description: concat!(
-            "Issue outbound Bridge.java connection arguments for an open GUI program without ",
-            "file copies. Pass md5, params.path to hash a local file in place, or omit both to ",
-            "allocate a session ID. Set wait=true to wait until the GUI script connects."
+            "Attach an open GUI program without file copies. Set params.wsUrl or params.port ",
+            "to connect directly to a loopback Bridge.java server (default port 8765), or omit ",
+            "both to issue outbound Bridge.java arguments. Pass md5, params.path to hash a ",
+            "local file in place, or omit both to allocate a session ID."
         ),
         schema: || {
             json!({
@@ -117,6 +118,9 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
                 "properties": {
                     "path": { "type": "string" },
                     "fileName": { "type": "string", "minLength": 1 },
+                    "wsUrl": { "type": "string", "minLength": 1 },
+                    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                    "token": { "type": "string", "minLength": 1 },
                     "wait": { "type": "boolean", "default": false },
                     "timeoutMs": { "type": "integer", "minimum": 1 }
                 },
@@ -414,7 +418,13 @@ struct AttachArgs {
     path: Option<String>,
     /// Optional display file name for the session.
     file_name: Option<String>,
-    /// Wait until the GUI script connects.
+    /// Optional loopback `Bridge.java` WebSocket URL (`ws://127.0.0.1:8765/ws/agent`).
+    ws_url: Option<String>,
+    /// Optional loopback `Bridge.java` WebSocket port (`8765` or fallback port).
+    port: Option<u16>,
+    /// Optional bearer token for an embedded `Bridge.java` server.
+    token: Option<String>,
+    /// Wait until an outbound GUI script connects.
     #[serde(default)]
     wait: bool,
     /// Maximum wait in milliseconds, instead of the launch timeout.
@@ -593,21 +603,60 @@ async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
     }
 }
 
-/// Runs `ghidra_session attach`: issues outbound `Bridge.java` arguments without file copies.
+/// Runs `ghidra_session attach`: connects to a loopback `Bridge.java` endpoint or issues arguments.
 async fn attach_session(daemon: &Daemon, request: Request) -> Result<Output> {
     let args: AttachArgs = parse(&request.label, request.params)?;
     let state = &daemon.state;
-    let wait = args
-        .wait
-        .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
-    let (md5, file_name) = match (args.path, request.md5) {
+    let endpoint_url = match (args.ws_url, args.port) {
         (Some(_), Some(_)) => {
             return Err(DomainError::invalid_argument(
-                "path/md5",
-                "`ghidra_session attach` accepts either params.path or md5, not both",
+                "wsUrl/port",
+                "`ghidra_session attach` accepts either params.wsUrl or params.port, not both",
             )
             .into());
         }
+        (Some(url), None) => Some(url),
+        (None, Some(port)) => Some(crate::bridge::gui_ws_url_for_port(port)?),
+        (None, None) => None,
+    };
+    if endpoint_url.is_none() && args.token.is_some() {
+        return Err(DomainError::invalid_argument(
+            "token",
+            "`params.token` requires `params.wsUrl` or `params.port`",
+        )
+        .into());
+    }
+    let (md5, file_name) = resolve_attach_identity(args.path, request.md5, args.file_name).await?;
+    if let Some(ws_url) = endpoint_url {
+        let timeout = millis_or(args.timeout_ms, state.config.launch_timeout());
+        return session::attach_endpoint(
+            state,
+            md5,
+            file_name,
+            &ws_url,
+            args.token.as_deref(),
+            timeout,
+        )
+        .await;
+    }
+    let wait = args
+        .wait
+        .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
+    session::attach(state, md5, file_name, wait).await
+}
+
+/// Resolves the `(md5, file_name)` pair for `ghidra_session attach`.
+async fn resolve_attach_identity(
+    path: Option<String>,
+    md5: Option<String>,
+    file_name: Option<String>,
+) -> Result<(String, Option<String>)> {
+    match (path, md5) {
+        (Some(_), Some(_)) => Err(DomainError::invalid_argument(
+            "path/md5",
+            "`ghidra_session attach` accepts either params.path or md5, not both",
+        )
+        .into()),
         (Some(raw), None) => {
             let path = PathBuf::from(raw).canonicalize().map_err(|err| {
                 DomainError::missing_target(
@@ -627,18 +676,16 @@ async fn attach_session(daemon: &Daemon, request: Request) -> Result<Output> {
                     DomainError::invalid_argument("path", "binary filename must be valid UTF-8")
                 })?
                 .to_string();
-            let path_buf = path.clone();
-            let md5 = tokio::task::spawn_blocking(move || crate::ghidra::file_md5(&path_buf))
+            let md5 = tokio::task::spawn_blocking(move || crate::ghidra::file_md5(&path))
                 .await
                 .map_err(|err| DomainError::Internal {
                     message: format!("file_md5 task panicked: {err}"),
                 })??;
-            (md5, Some(args.file_name.unwrap_or(inferred_name)))
+            Ok((md5, Some(file_name.unwrap_or(inferred_name))))
         }
-        (None, Some(md5)) => (md5, args.file_name),
-        (None, None) => (uuid::Uuid::new_v4().simple().to_string(), args.file_name),
-    };
-    session::attach(state, md5, file_name, wait).await
+        (None, Some(md5)) => Ok((md5, file_name)),
+        (None, None) => Ok((uuid::Uuid::new_v4().simple().to_string(), file_name)),
+    }
 }
 
 /// Runs `ghidra_analysis start`.

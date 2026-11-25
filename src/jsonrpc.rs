@@ -176,6 +176,32 @@ fn decode_notification(message: Message, session_id: &str) -> Result<Incoming> {
     })
 }
 
+/// Decodes the initial `ghidra.ready` frame from an embedded GUI `Bridge.java` server.
+///
+/// # Errors
+///
+/// Fails if `text` is not a valid `ghidra.ready` notification with non-empty fields.
+pub fn decode_endpoint_ready(text: &str) -> Result<(String, String)> {
+    let message: Message = serde_json::from_str(text)?;
+    ensure!(message.jsonrpc == VERSION, "jsonrpc must equal 2.0");
+    ensure!(
+        message.method.as_deref() == Some(READY_METHOD)
+            && message.id.is_none()
+            && message.result.is_none()
+            && message.error.is_none(),
+        "first bridge frame must be ghidra.ready"
+    );
+    let Some(params @ Value::Object(_)) = message.params else {
+        bail!("ghidra.ready params must be an object");
+    };
+    let ready = ReadyParams::deserialize(params)?;
+    ensure!(
+        !ready.session_id.is_empty() && !ready.program_name.is_empty(),
+        "ghidra.ready must include session_id and program_name"
+    );
+    Ok((ready.session_id, ready.program_name))
+}
+
 /// Decodes a message without a `method`. It must be a response.
 fn decode_response(message: Message, session_id: &str) -> Result<Incoming> {
     ensure!(message.params.is_none(), "response cannot contain params");

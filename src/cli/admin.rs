@@ -57,17 +57,26 @@ pub enum SessionCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Issue Bridge.java connection arguments to attach an open GUI program.
+    /// Attach an open GUI program by Bridge.java endpoint or outbound arguments.
     Attach {
-        /// Optional local binary path or 32-character MD5.
+        /// Optional local binary path, 32-character MD5, or ws:// endpoint URL.
         target: Option<String>,
+        /// Loopback Bridge.java WebSocket URL, such as <ws://127.0.0.1:8765/ws/agent>.
+        #[arg(long)]
+        ws_url: Option<String>,
+        /// Loopback Bridge.java WebSocket port, such as 8765.
+        #[arg(long)]
+        port: Option<u16>,
+        /// Bearer token for a Bridge.java server.
+        #[arg(long)]
+        token: Option<String>,
         /// Display file name for the session.
         #[arg(long)]
         file_name: Option<String>,
-        /// Wait until Bridge.java connects and completes the handshake.
+        /// Wait until an outbound Bridge.java client connects.
         #[arg(long)]
         wait: bool,
-        /// Maximum wait in milliseconds when --wait is set.
+        /// Maximum wait in milliseconds.
         #[arg(long)]
         timeout_ms: Option<u64>,
         /// Write JSON instead of text.
@@ -266,16 +275,22 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
         }
         SessionCommand::Attach {
             target,
+            ws_url,
+            port,
+            token,
             file_name,
             wait,
             timeout_ms,
             json,
         } => {
-            let value = attach_session(target, file_name, wait, timeout_ms).await?;
+            let value =
+                attach_session(target, ws_url, port, token, file_name, wait, timeout_ms).await?;
             if json {
                 print_json(&value)?;
+            } else if let Some(args) = value["bridgeArgs"].as_str() {
+                out!("{args}");
             } else {
-                out!("{}", text(&value, "bridgeArgs"));
+                print_sessions(std::slice::from_ref(&value["session"]));
             }
             return Ok(ExitCode::SUCCESS);
         }
@@ -297,9 +312,23 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Returns `true` when `raw` starts with `ws://` or `wss://`.
+fn looks_like_ws_url(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    trimmed
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("ws://"))
+        || trimmed
+            .get(..6)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("wss://"))
+}
+
 /// Resolves `session attach` arguments and calls `ghidra_session attach`.
 async fn attach_session(
     target: Option<String>,
+    mut ws_url: Option<String>,
+    port: Option<u16>,
+    token: Option<String>,
     file_name: Option<String>,
     wait: bool,
     timeout_ms: Option<u64>,
@@ -308,20 +337,36 @@ async fn attach_session(
     let mut params = Map::new();
     params.insert("wait".into(), wait.into());
     if let Some(raw) = target {
-        let candidate = Path::new(&raw);
-        if candidate.exists() {
-            let canonical = candidate
-                .canonicalize()
-                .with_context(|| format!("cannot find {raw}"))?;
-            params.insert("path".into(), canonical.display().to_string().into());
-        } else if crate::project::normalize_md5(&raw).is_ok() {
-            md5 = Some(raw);
+        if looks_like_ws_url(&raw) {
+            if ws_url.is_some() {
+                bail!("pass a WebSocket URL either as TARGET or with `--ws-url`, not both");
+            }
+            ws_url = Some(raw);
         } else {
-            let canonical = candidate
-                .canonicalize()
-                .with_context(|| format!("cannot find {raw}"))?;
-            params.insert("path".into(), canonical.display().to_string().into());
+            let candidate = Path::new(&raw);
+            if candidate.exists() {
+                let canonical = candidate
+                    .canonicalize()
+                    .with_context(|| format!("cannot find {raw}"))?;
+                params.insert("path".into(), canonical.display().to_string().into());
+            } else if crate::project::normalize_md5(&raw).is_ok() {
+                md5 = Some(raw);
+            } else {
+                let canonical = candidate
+                    .canonicalize()
+                    .with_context(|| format!("cannot find {raw}"))?;
+                params.insert("path".into(), canonical.display().to_string().into());
+            }
         }
+    }
+    if let Some(url) = ws_url {
+        params.insert("wsUrl".into(), url.into());
+    }
+    if let Some(port) = port {
+        params.insert("port".into(), port.into());
+    }
+    if let Some(token) = token {
+        params.insert("token".into(), token.into());
     }
     if let Some(name) = file_name {
         params.insert("fileName".into(), name.into());

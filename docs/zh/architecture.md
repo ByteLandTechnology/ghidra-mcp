@@ -114,9 +114,10 @@ MCP 处理器将错误映射为类型化 `DomainError` 变体与 JSON-RPC 错误
 
 ### 挂接 GUI 会话
 
-`ghidra_session attach` 为已在 Ghidra CodeBrowser 中打开的程序生成会话凭据。
-它接受 `md5`，或就地计算本地 `path` 的哈希而不复制文件，或自动分配 32 位十六进制 ID。
-返回的 `bridgeArgs` 省略 `exit_deadline_sec`，因此连接断开时 CodeBrowser JVM 保持打开。
+`ghidra_session attach` 在不复制文件的情况下连接已在 Ghidra CodeBrowser 中打开的程序。
+指定 `wsUrl` 或 `port` 时，守护进程作为客户端连接回环 `Bridge.java` 监听器（默认 `ws://127.0.0.1:8765/ws/agent`）。
+省略 `wsUrl` 和 `port` 时，守护进程生成会话凭据并返回不含 `exit_deadline_sec` 的出站 `bridgeArgs`。
+它接受 `md5`，或就地计算本地 `path` 的哈希，或自动分配 32 位十六进制 ID。
 当已挂接的会话断开连接时，守护进程将其标记为 `disconnected`，且不会启动 `analyzeHeadless`。
 
 ### 上传二进制文件

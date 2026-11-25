@@ -114,9 +114,10 @@ MCP ハンドラーはエラーを型付けされた `DomainError` と JSON-RPC 
 
 ### GUI セッションのアタッチ
 
-`ghidra_session attach` は、Ghidra CodeBrowser で開いているプログラム用のセッション資格情報を作成します。
-`md5` を受け取るか、ファイルをコピーせずにローカル `path` のハッシュを計算するか、32 桁の 16 進 ID を割り当てます。
-返される `bridgeArgs` は `exit_deadline_sec` を省略するため、切断しても CodeBrowser の JVM は開いたままになります。
+`ghidra_session attach` は、ファイルをコピーせずに Ghidra CodeBrowser で開いているプログラムを接続します。
+`wsUrl` または `port` を指定すると、デーモンはクライアントとしてループバックの `Bridge.java` 待受アドレス（デフォルトは `ws://127.0.0.1:8765/ws/agent`）に接続します。
+`wsUrl` と `port` を省略すると、デーモンはセッション資格情報を作成し、`exit_deadline_sec` を省いた発信用の `bridgeArgs` を返します。
+`md5` を受け取るか、ローカル `path` のハッシュをその場で計算するか、32 桁の 16 進 ID を割り当てます。
 アタッチされたセッションが切断された場合、デーモンは `disconnected` と記録し、`analyzeHeadless` を起動しません。
 
 ### バイナリのアップロード

@@ -763,6 +763,36 @@ async fn session_attach_validates_target_and_skips_project_copy() {
     let snapshot = std::fs::read_to_string(daemon.state.paths.session_json(&expected_md5)).unwrap();
     assert!(!snapshot.contains(token));
     assert!(!snapshot.contains("agent_token"));
+
+    let url_and_port = super::call(
+        &daemon,
+        "ghidra_session",
+        object(json!({
+            "operation": "attach",
+            "params": { "wsUrl": "ws://127.0.0.1:8765/ws/agent", "port": 8765 }
+        })),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        reason(&url_and_port).contains("either params.wsUrl or params.port, not both"),
+        "{url_and_port:#}"
+    );
+
+    let orphan_token = super::call(
+        &daemon,
+        "ghidra_session",
+        object(json!({
+            "operation": "attach",
+            "params": { "token": "secret" }
+        })),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        reason(&orphan_token).contains("requires `params.wsUrl` or `params.port`"),
+        "{orphan_token:#}"
+    );
 }
 
 /// Makes sure that `Route::Bridge` moves `RpcEnvelope.result` into the output map without clones.

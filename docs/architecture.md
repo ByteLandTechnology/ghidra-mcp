@@ -118,9 +118,10 @@ The daemon uses a connected session again, or joins a launch in progress, or sta
 
 ### Attach a GUI session
 
-`ghidra_session attach` creates a session credential for a program that is open in Ghidra CodeBrowser.
-It accepts an `md5`, hashes a local `path` in place without file copies, or allocates a 32-character hexadecimal ID.
-The returned `bridgeArgs` string omits `exit_deadline_sec` so a disconnect leaves the CodeBrowser JVM open.
+`ghidra_session attach` connects a program that is open in Ghidra CodeBrowser without file copies.
+With `wsUrl` or `port`, the daemon connects as a client to the loopback `Bridge.java` listener (`ws://127.0.0.1:8765/ws/agent` by default).
+Without `wsUrl` or `port`, the daemon creates a session credential and returns outbound `bridgeArgs` without `exit_deadline_sec`.
+It accepts an `md5`, hashes a local `path` in place, or allocates a 32-character hexadecimal ID.
 When an attached session disconnects, the daemon marks it `disconnected` and does not start `analyzeHeadless`.
 
 ### Upload a binary

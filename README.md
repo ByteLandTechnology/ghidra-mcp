@@ -300,17 +300,20 @@ To connect an open Ghidra CodeBrowser program to the daemon, use this procedure:
    ghidra-mcp setup
    ```
 
-2. Issue outbound `Bridge.java` arguments for the open binary:
+2. Open the Script Manager in CodeBrowser and run `Bridge.java`.
+   The Console prints the loopback listener URL (`ws://127.0.0.1:8765/ws/agent` by default).
+3. Attach the daemon to that listener:
 
    ```sh
-   ghidra-mcp session attach /path/to/program.bin
+   ghidra-mcp session attach ws://127.0.0.1:8765/ws/agent
    ```
 
-   You can also omit the path or give a 32-character MD5.
-   The command prints `ws_url=... session_id=... token=...` and does not copy the binary.
-3. Open the Script Manager in CodeBrowser, run `Bridge.java`, and paste the printed arguments into the startup prompt.
+   You can also pass `--port 8765`, or pass a local file path with `--port 8765` to use its MD5.
+   The command does not copy the binary.
 4. When `Bridge.java` sends `ghidra.ready`, the session enters the `ready` state.
    A disconnect leaves CodeBrowser open and does not start `analyzeHeadless`.
+
+If you omit `--ws-url` and `--port`, `session attach` prints outbound `ws_url=... session_id=... token=...` arguments instead.
 
 ### Upload a binary from a remote client
 

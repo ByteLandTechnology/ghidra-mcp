@@ -675,3 +675,108 @@ async fn attach_wait_and_close_send_shutdown_and_invalidate_token() {
     server.abort();
     let _ = server.await;
 }
+
+/// Starts a mock embedded `Bridge.java` WebSocket listener on loopback for `attach_endpoint`.
+#[allow(clippy::result_large_err)]
+async fn spawn_mock_gui_bridge_server(
+    expected_auth: &'static str,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+    use tokio_tungstenite::tungstenite::Message as WsMsg;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_hdr_async(tcp, |req: &Request, resp: Response| {
+            assert_eq!(req.uri().path(), AGENT_WS_PATH);
+            let auth = req
+                .headers()
+                .get("authorization")
+                .and_then(|val| val.to_str().ok());
+            assert_eq!(auth, Some(expected_auth));
+            Ok(resp)
+        })
+        .await
+        .unwrap();
+        ws.send(WsMsg::Text(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "ghidra.ready",
+                "params": {
+                    "session_id": "gui-prog-id",
+                    "program_name": "codebrowser_gui.exe"
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        for expected_method in ["program.get", "session.shutdown"] {
+            let Some(Ok(WsMsg::Text(raw))) = ws.next().await else {
+                panic!("expected text request for {expected_method}");
+            };
+            let req: Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(req["method"], expected_method);
+            let id = req["id"].as_str().unwrap();
+            ws.send(WsMsg::Text(
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": { "program_name": "codebrowser_gui.exe" }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        }
+    });
+    (addr, handle)
+}
+
+/// Makes sure that `attach_endpoint` validates loopback URLs and connects to an embedded server.
+#[tokio::test]
+async fn attach_endpoint_connects_to_embedded_gui_server_and_validates_urls() {
+    assert!(bridge::parse_gui_ws_url("ws://192.168.1.10:8765/ws/agent").is_err());
+    assert!(bridge::parse_gui_ws_url("http://127.0.0.1:8765/ws/agent").is_err());
+    assert!(bridge::parse_gui_ws_url("ws://127.0.0.1:8765/ws/agent?token=secret").is_err());
+
+    let root = tempfile::tempdir().unwrap();
+    let state = test_state(root.path());
+    let md5 = "fedcba9876543210fedcba9876543210";
+    let (addr, server_task) = spawn_mock_gui_bridge_server("Bearer gui-secret").await;
+    let bare_url = format!("ws://127.0.0.1:{}", addr.port());
+
+    let (_, attached) = attach_endpoint(
+        &state,
+        md5.into(),
+        None,
+        &bare_url,
+        Some("gui-secret"),
+        Duration::from_secs(3),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        attached["wsUrl"],
+        format!("ws://127.0.0.1:{}{AGENT_WS_PATH}", addr.port())
+    );
+    assert_eq!(attached["bridgeSessionId"], "gui-prog-id");
+    assert_eq!(attached["session"]["status"], "ready");
+    assert_eq!(attached["session"]["connected"], true);
+    assert_eq!(attached["session"]["fileName"], "codebrowser_gui.exe");
+    assert_eq!(attached["job"]["status"], "completed");
+
+    let envelope = call(&state, md5, "program.get", json!({})).await.unwrap();
+    assert_eq!(
+        envelope.result,
+        Some(json!({ "program_name": "codebrowser_gui.exe" }))
+    );
+
+    close(&state, md5, false).await.unwrap();
+    server_task.await.unwrap();
+    assert_eq!(state.session(md5).unwrap().status, SessionStatus::Closed);
+}
