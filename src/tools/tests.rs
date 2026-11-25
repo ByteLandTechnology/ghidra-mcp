@@ -193,6 +193,11 @@ fn session_md5_is_never_a_parameter() {
     assert!(rule("session", "open") == Md5Rule::Optional);
     assert!(rule("session", "get") == Md5Rule::Required);
     assert!(rule("session", "close") == Md5Rule::Required);
+    assert!(rule("session", "checkpoint.create") == Md5Rule::Required);
+    assert!(rule("session", "checkpoint.list") == Md5Rule::Required);
+    assert!(rule("session", "checkpoint.restore") == Md5Rule::Required);
+    assert!(rule("session", "reset") == Md5Rule::Required);
+    assert!(rule("session", "delete") == Md5Rule::Required);
     assert!(rule("session", "list") == Md5Rule::Absent);
     assert!(rule("upload", "prepare") == Md5Rule::Required);
     assert!(rule("job", "wait") == Md5Rule::Absent);
@@ -708,6 +713,61 @@ fn bridge_address_error_preserves_target_and_spaces() {
     );
 }
 
+/// Makes sure that `Route::Bridge` moves `RpcEnvelope.result` into the output map without clones.
+#[tokio::test]
+async fn bridge_call_moves_envelope_result_without_clones() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let mut record = crate::model::SessionRecord::launching(md5.into(), "bin".into(), "t".into());
+    record.mark_ready();
+    daemon.state.put_session(&record).unwrap();
+
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    assert!(daemon.state.attach_bridge(
+        md5,
+        crate::state::ConnectionHandle {
+            conn_id: "conn-1".into(),
+            sender,
+        },
+    ));
+
+    let payload = String::from("0x00401000 entry_point");
+    let payload_ptr = payload.as_ptr();
+    let state = daemon.state.clone();
+    let responder = tokio::spawn(async move {
+        let Some(axum::extract::ws::Message::Text(frame)) = receiver.recv().await else {
+            panic!("expected bridge text frame");
+        };
+        let req: Value = serde_json::from_str(&frame).unwrap();
+        let req_id = req["id"].as_str().unwrap().to_string();
+        let mut envelope = crate::model::RpcEnvelope::response(req_id.clone(), md5.into(), 200);
+        envelope.result = Some(Value::Object(Map::from_iter([(
+            "function".to_string(),
+            Value::String(payload),
+        )])));
+        state.deliver_response(md5, "conn-1", &req_id, envelope);
+    });
+
+    let (summary, structured) = super::call(
+        &daemon,
+        "ghidra_function",
+        object(json!({ "operation": "list", "md5": md5 })),
+    )
+    .await
+    .unwrap();
+    responder.await.unwrap();
+    assert_eq!(summary, "ghidra_function list completed");
+    assert_eq!(structured["response"]["status"], 200);
+    assert_eq!(
+        structured["response"]["result"]["function"]
+            .as_str()
+            .unwrap()
+            .as_ptr(),
+        payload_ptr
+    );
+}
+
 /// Makes sure that `window.get` and `control_flow_graph.get` go to the bridge.
 #[test]
 fn composite_view_and_graph_operations_use_their_bridge_methods() {
@@ -818,3 +878,5 @@ fn reference_context_and_composite_help_entries_match_catalog() {
         assert_eq!(doc["inputSchema"]["type"], "object");
     }
 }
+
+mod checkpoints;

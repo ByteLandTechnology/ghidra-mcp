@@ -182,6 +182,168 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         },
     },
     LocalOperation {
+        domain: "session",
+        name: "checkpoint.create",
+        description: concat!(
+            "Save the active program and copy project.gpr and project.rep into ",
+            "projects/<md5>/checkpoints/. Set params.name to attach a checkpoint label."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "description": "Optional label for the checkpoint"
+                    }
+                },
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Required,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: false,
+            destructive: false,
+            idempotent: false,
+            allowed_during_analysis: false,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                let CheckpointCreateArgs { name } = parse(&request.label, request.params)?;
+                session::checkpoint_create(&daemon.state, &md5, name).await
+            })
+        },
+    },
+    LocalOperation {
+        domain: "session",
+        name: "checkpoint.list",
+        description: "List saved checkpoints for one binary session, from newest to oldest.",
+        schema: no_params,
+        md5: Md5Rule::Required,
+        basis: Basis::Own(READ),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                session::checkpoint_list(&daemon.state, &md5).await
+            })
+        },
+    },
+    LocalOperation {
+        domain: "session",
+        name: "checkpoint.restore",
+        description: concat!(
+            "Stop the active Ghidra process without save, replace projects/<md5>/ghidra/ from a ",
+            "checkpoint, and relaunch the session. Omit id and name to restore the newest ",
+            "checkpoint. Set wait=false to return before Ghidra is ready."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Checkpoint identifier from checkpoint.list"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Checkpoint label when id is omitted"
+                    },
+                    "wait": { "type": "boolean", "default": true },
+                    "timeoutMs": { "type": "integer", "minimum": 1 }
+                },
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Required,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: true,
+            destructive: true,
+            idempotent: false,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                let args: CheckpointRestoreArgs = parse(&request.label, request.params)?;
+                let state = &daemon.state;
+                let wait = args
+                    .wait
+                    .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
+                session::checkpoint_restore(state, &md5, args.id, args.name, wait).await
+            })
+        },
+    },
+    LocalOperation {
+        domain: "session",
+        name: "reset",
+        description: concat!(
+            "Stop the active Ghidra process without save, delete projects/<md5>/ghidra/ and ",
+            "checkpoints, and keep binary and binary.json. Set open=true to import the binary ",
+            "into a fresh project."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "open": { "type": "boolean", "default": false },
+                    "wait": { "type": "boolean", "default": true },
+                    "timeoutMs": { "type": "integer", "minimum": 1 }
+                },
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Required,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: true,
+            destructive: true,
+            idempotent: true,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                let args: ResetArgs = parse(&request.label, request.params)?;
+                let state = &daemon.state;
+                let wait = (args.open && args.wait)
+                    .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
+                session::reset(state, &md5, args.open, wait).await
+            })
+        },
+    },
+    LocalOperation {
+        domain: "session",
+        name: "delete",
+        description: concat!(
+            "Stop the active Ghidra process without save and remove projects/<md5>/, ",
+            "sessions/<md5>/, and logs/<md5>/."
+        ),
+        schema: no_params,
+        md5: Md5Rule::Required,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: true,
+            destructive: true,
+            idempotent: false,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| {
+            Box::pin(async move {
+                let md5 = request.session();
+                let _: Map<String, Value> = parse(&request.label, request.params)?;
+                session::delete(&daemon.state, &md5).await
+            })
+        },
+    },
+    LocalOperation {
         domain: "upload",
         name: "prepare",
         description: concat!(
@@ -395,6 +557,48 @@ struct CloseArgs {
     /// Kill the process. Do not tell the bridge to save and stop.
     #[serde(default)]
     force: bool,
+}
+
+/// The parameters of `ghidra_session checkpoint.create`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckpointCreateArgs {
+    /// Optional human-readable label for the checkpoint.
+    name: Option<String>,
+}
+
+/// Returns `true` as the default `wait` value for restore and reopen calls.
+const fn default_true() -> bool {
+    true
+}
+
+/// The parameters of `ghidra_session checkpoint.restore`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckpointRestoreArgs {
+    /// Target checkpoint identifier.
+    id: Option<String>,
+    /// Target checkpoint label when `id` is omitted.
+    name: Option<String>,
+    /// Wait until the relaunched session is ready.
+    #[serde(default = "default_true")]
+    wait: bool,
+    /// Maximum wait in milliseconds, instead of the launch timeout.
+    timeout_ms: Option<u64>,
+}
+
+/// The parameters of `ghidra_session reset`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResetArgs {
+    /// Launch a fresh import after deletion of the saved Ghidra project.
+    #[serde(default)]
+    open: bool,
+    /// Wait until the fresh import session is ready when `open` is `true`.
+    #[serde(default = "default_true")]
+    wait: bool,
+    /// Maximum wait in milliseconds, instead of the launch timeout.
+    timeout_ms: Option<u64>,
 }
 
 /// The parameters of `ghidra_job get` and `ghidra_job wait`.

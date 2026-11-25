@@ -27,7 +27,9 @@ mod ipc {
     use interprocess::local_socket::tokio::{prelude::*, Listener, Stream};
     use interprocess::local_socket::{ListenerOptions, Name};
     use rmcp::{
-        model::{CallToolRequestParams, CallToolResult},
+        model::{
+            CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
+        },
         service::RunningService,
         RoleClient, ServiceExt,
     };
@@ -138,6 +140,12 @@ mod ipc {
         }
     }
 
+    /// The MCP client name that the proxy and the CLI send on the local socket.
+    pub(crate) const PROXY_CLIENT_NAME: &str = "ghidra-mcp-proxy";
+
+    /// An active MCP client connection from the proxy or the CLI to the daemon.
+    type ProxyClient = RunningService<RoleClient, ClientConfig>;
+
     /// Time limits for the proxy connection manager lifecycle.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ProxyTimeouts {
@@ -149,10 +157,18 @@ mod ipc {
         pub poll_interval: Duration,
     }
 
+    /// A cached MCP client connection and the daemon process ID that owns it.
+    struct CachedClient {
+        /// Process ID from `server.json` when this connection started.
+        pid: Option<u32>,
+        /// Active MCP client service.
+        service: Arc<ProxyClient>,
+    }
+
     /// Manages persistent connections from the stdio proxy or CLI to the daemon.
     pub struct ProxyConnectionManager {
         /// The cached active MCP client connection.
-        client: Mutex<Option<Arc<RunningService<RoleClient, ()>>>>,
+        client: Mutex<Option<CachedClient>>,
         /// Time limits for daemon startup and IPC handshakes.
         timeouts: ProxyTimeouts,
         /// The runtime directory that contains `server.json` and the socket endpoints.
@@ -176,6 +192,20 @@ mod ipc {
                 },
                 runtime_dir,
             })
+        }
+
+        /// Creates a connection manager for an isolated test runtime directory.
+        #[cfg(test)]
+        pub(crate) fn with_runtime_dir(runtime_dir: PathBuf) -> Self {
+            Self {
+                client: Mutex::new(None),
+                timeouts: ProxyTimeouts {
+                    daemon_start: Duration::from_secs(2),
+                    handshake: Duration::from_secs(2),
+                    poll_interval: Duration::from_millis(20),
+                },
+                runtime_dir,
+            }
         }
 
         /// Creates a connection manager configured from `McpConfig`.
@@ -236,7 +266,7 @@ mod ipc {
                         let mut guard = self.client.lock().await;
                         if guard
                             .as_ref()
-                            .is_some_and(|current| Arc::ptr_eq(current, &service))
+                            .is_some_and(|current| Arc::ptr_eq(&current.service, &service))
                         {
                             *guard = None;
                         }
@@ -247,36 +277,51 @@ mod ipc {
             }
         }
 
+        /// Returns `true` when `cached` still points to the live daemon in `server.json`.
+        fn is_cached_live(&self, cached: &CachedClient) -> Result<bool> {
+            if cached.service.is_closed() {
+                return Ok(false);
+            }
+            let current_pid = self.daemon_pid()?;
+            Ok(current_pid.is_some()
+                && cached.pid == current_pid
+                && current_pid.is_some_and(process_alive))
+        }
+
         /// Returns the cached connection, or opens a new connection when necessary.
         async fn get_connection(
             &self,
-            guard: &mut Option<Arc<RunningService<RoleClient, ()>>>,
-        ) -> Result<Arc<RunningService<RoleClient, ()>>> {
-            if let Some(ref service) = *guard {
-                if !service.is_closed() {
-                    return Ok(service.clone());
+            guard: &mut Option<CachedClient>,
+        ) -> Result<Arc<ProxyClient>> {
+            if let Some(ref cached) = *guard {
+                if self.is_cached_live(cached)? {
+                    return Ok(cached.service.clone());
                 }
+                cached.service.cancellation_token().cancel();
                 *guard = None;
             }
 
-            let service = if let Some(service) = self.connect_socket().await? {
-                service
+            let (pid, service) = if let Some(connected) = self.connect_socket().await? {
+                connected
             } else {
                 spawn_daemon(None)?;
                 self.wait_until_ready().await?
             };
 
             let service = Arc::new(service);
-            *guard = Some(service.clone());
+            *guard = Some(CachedClient {
+                pid,
+                service: service.clone(),
+            });
             Ok(service)
         }
 
         /// Waits until a daemon that starts serves requests.
-        async fn wait_until_ready(&self) -> Result<RunningService<RoleClient, ()>> {
+        async fn wait_until_ready(&self) -> Result<(Option<u32>, ProxyClient)> {
             let deadline = tokio::time::Instant::now() + self.timeouts.daemon_start;
             loop {
-                if let Some(service) = self.connect_socket().await? {
-                    return Ok(service);
+                if let Some(connected) = self.connect_socket().await? {
+                    return Ok(connected);
                 }
                 if tokio::time::Instant::now() >= deadline {
                     bail!(
@@ -296,10 +341,20 @@ mod ipc {
         /// Fails if the daemon metadata cannot be read or the handshake fails.
         pub async fn connect_existing(&self) -> Result<bool> {
             let mut guard = self.client.lock().await;
-            if guard.as_ref().is_some_and(|service| !service.is_closed()) {
-                return Ok(true);
+            if let Some(ref cached) = *guard {
+                if self.is_cached_live(cached)? {
+                    return Ok(true);
+                }
+                cached.service.cancellation_token().cancel();
+                *guard = None;
             }
-            *guard = self.connect_socket().await?.map(Arc::new);
+            *guard = self
+                .connect_socket()
+                .await?
+                .map(|(pid, service)| CachedClient {
+                    pid,
+                    service: Arc::new(service),
+                });
             Ok(guard.is_some())
         }
 
@@ -314,8 +369,11 @@ mod ipc {
                 return Ok(false);
             }
             spawn_daemon(listen)?;
-            let service = self.wait_until_ready().await?;
-            *self.client.lock().await = Some(Arc::new(service));
+            let (pid, service) = self.wait_until_ready().await?;
+            *self.client.lock().await = Some(CachedClient {
+                pid,
+                service: Arc::new(service),
+            });
             Ok(true)
         }
 
@@ -329,8 +387,8 @@ mod ipc {
         /// after [`STOP_TIMEOUT`].
         pub async fn wait_until_stopped(&self) -> Result<()> {
             let original = self.daemon_pid()?;
-            if let Some(service) = self.client.lock().await.take() {
-                service.cancellation_token().cancel();
+            if let Some(cached) = self.client.lock().await.take() {
+                cached.service.cancellation_token().cancel();
             }
             let deadline = tokio::time::Instant::now() + STOP_TIMEOUT;
             loop {
@@ -371,8 +429,8 @@ mod ipc {
                 .and_then(|pid| u32::try_from(pid).ok()))
         }
 
-        /// Returns the local socket name from `server.json`, if a daemon wrote one.
-        fn endpoint(&self) -> Result<Option<String>> {
+        /// Returns the daemon process ID and local socket name from `server.json`.
+        fn endpoint(&self) -> Result<Option<(Option<u32>, String)>> {
             let server_path = self.runtime_dir.join("server.json");
             let server = match fs::read(&server_path) {
                 Ok(bytes) => bytes,
@@ -381,20 +439,24 @@ mod ipc {
             };
             let server: Value =
                 serde_json::from_slice(&server).context("reading daemon metadata")?;
+            let pid = server
+                .get("pid")
+                .and_then(Value::as_u64)
+                .and_then(|pid| u32::try_from(pid).ok());
             // The metadata of an older daemon has no local socket. Start a new daemon.
             Ok(server
                 .get("localSocket")
                 .and_then(Value::as_str)
-                .map(str::to_owned))
+                .map(|socket| (pid, socket.to_owned())))
         }
 
         /// Opens a stream to the local socket. Returns `None` if no daemon listens.
-        async fn open_stream(&self) -> Result<Option<Stream>> {
-            let Some(endpoint) = self.endpoint()? else {
+        async fn open_stream(&self) -> Result<Option<(Option<u32>, Stream)>> {
+            let Some((pid, endpoint)) = self.endpoint()? else {
                 return Ok(None);
             };
             match Stream::connect(socket_name(&endpoint)?).await {
-                Ok(stream) => Ok(Some(stream)),
+                Ok(stream) => Ok(Some((pid, stream))),
                 // The daemon that wrote the metadata stopped.
                 Err(error)
                     if matches!(
@@ -409,16 +471,45 @@ mod ipc {
         }
 
         /// Connects to the local socket and performs the MCP handshake.
-        async fn connect_socket(&self) -> Result<Option<RunningService<RoleClient, ()>>> {
-            let Some(stream) = self.open_stream().await? else {
+        async fn connect_socket(&self) -> Result<Option<(Option<u32>, ProxyClient)>> {
+            let Some((pid, stream)) = self.open_stream().await? else {
                 return Ok(None);
             };
-            let client = tokio::time::timeout(self.timeouts.handshake, ().serve(stream))
+            let config = ClientConfig::new(
+                ClientCapabilities::default(),
+                Implementation::new(PROXY_CLIENT_NAME, env!("CARGO_PKG_VERSION")),
+            );
+            let client = tokio::time::timeout(self.timeouts.handshake, config.serve(stream))
                 .await
                 .context("daemon MCP handshake timed out")?
                 .context("initializing daemon MCP connection")?;
-            Ok(Some(client))
+            Ok(Some((pid, client)))
         }
+    }
+
+    /// Makes a local socket listener and writes `server.json` in `runtime` for unit tests.
+    #[cfg(test)]
+    pub(crate) fn test_listener(runtime: &Path) -> Result<(String, Listener)> {
+        fs::create_dir_all(runtime)?;
+        let endpoint = new_endpoint(runtime);
+        let options = ListenerOptions::new().name(socket_name(&endpoint)?);
+        #[cfg(unix)]
+        let options = options.try_overwrite(true);
+        let listener = options.create_tokio()?;
+        let server = json!({
+            "pid": std::process::id(),
+            "mcpUrl": "http://127.0.0.1:1/mcp",
+            "bridgeWsUrl": "ws://127.0.0.1:1/ws/agent",
+            "localSocket": endpoint,
+        });
+        atomic_write(&runtime.join("server.json"), &serde_json::to_vec(&server)?)?;
+        Ok((endpoint, listener))
+    }
+
+    /// Connects a raw local socket stream to `endpoint` for unit tests.
+    #[cfg(test)]
+    pub(crate) async fn test_connect(endpoint: &str) -> Result<Stream> {
+        Ok(Stream::connect(socket_name(endpoint)?).await?)
     }
 
     /// The maximum time for a daemon to close its sessions and stop.
@@ -543,6 +634,9 @@ mod ipc {
 }
 
 pub use ipc::ProxyConnectionManager;
+pub(crate) use ipc::PROXY_CLIENT_NAME;
+#[cfg(test)]
+pub(crate) use ipc::{test_connect, test_listener};
 
 use crate::bridge::AGENT_WS_PATH;
 use crate::mcp::ToolServer;

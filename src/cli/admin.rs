@@ -68,6 +68,72 @@ pub enum SessionCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Create, list, or restore checkpoints of a session.
+    #[command(subcommand)]
+    Checkpoint(CheckpointCommand),
+    /// Reset a session to a clean binary import.
+    Reset {
+        /// The MD5 of the session.
+        md5: String,
+        /// Start a fresh Ghidra project after the reset.
+        #[arg(long)]
+        open: bool,
+        /// Wait until the reopened session is ready.
+        #[arg(long)]
+        wait: bool,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a session, its project, its checkpoints, and its logs.
+    Delete {
+        /// The MD5 of the session.
+        md5: String,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// The `session checkpoint` subcommands.
+#[derive(Subcommand)]
+pub enum CheckpointCommand {
+    /// Save the active session and create a checkpoint snapshot.
+    Create {
+        /// The MD5 of the session.
+        md5: String,
+        /// Optional human-readable label for the checkpoint.
+        #[arg(long)]
+        name: Option<String>,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List checkpoints of a session from newest to oldest.
+    List {
+        /// The MD5 of the session.
+        md5: String,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore a checkpoint and relaunch the session.
+    Restore {
+        /// The MD5 of the session.
+        md5: String,
+        /// Checkpoint ID to restore. Omit to restore the newest checkpoint.
+        #[arg(long, conflicts_with = "name")]
+        id: Option<String>,
+        /// Checkpoint name to restore when `--id` is omitted.
+        #[arg(long)]
+        name: Option<String>,
+        /// Do not wait for the relaunched session.
+        #[arg(long)]
+        no_wait: bool,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// The `job` commands.
@@ -228,6 +294,28 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
                 json,
             )
         }
+        SessionCommand::Checkpoint(subcommand) => return session_checkpoint(subcommand).await,
+        SessionCommand::Reset {
+            md5,
+            open,
+            wait,
+            json,
+        } => {
+            let params = json!({ "open": open, "wait": wait });
+            (
+                call("ghidra_session", "reset", Some(&md5), params).await?,
+                json,
+            )
+        }
+        SessionCommand::Delete { md5, json } => {
+            let value = call("ghidra_session", "delete", Some(&md5), json!({})).await?;
+            if json {
+                print_json(&value)?;
+            } else {
+                out!("Deleted session {}.", text(&value, "md5"));
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
     };
     if json {
         print_json(&value)?;
@@ -237,6 +325,81 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
         print_sessions(std::slice::from_ref(&value["session"]));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Runs one `session checkpoint` subcommand.
+async fn session_checkpoint(command: CheckpointCommand) -> Result<ExitCode> {
+    match command {
+        CheckpointCommand::Create { md5, name, json } => {
+            let mut params = json!({});
+            if let Some(label) = name {
+                params["name"] = label.into();
+            }
+            let value = call("ghidra_session", "checkpoint.create", Some(&md5), params).await?;
+            if json {
+                print_json(&value)?;
+            } else {
+                print_checkpoints(std::slice::from_ref(&value["checkpoint"]));
+            }
+        }
+        CheckpointCommand::List { md5, json } => {
+            let value = call("ghidra_session", "checkpoint.list", Some(&md5), json!({})).await?;
+            if json {
+                print_json(&value)?;
+            } else if let Some(items) = value["items"].as_array() {
+                print_checkpoints(items);
+            }
+        }
+        CheckpointCommand::Restore {
+            md5,
+            id,
+            name,
+            no_wait,
+            json,
+        } => {
+            let mut params = json!({ "wait": !no_wait });
+            if let Some(target_id) = id {
+                params["id"] = target_id.into();
+            }
+            if let Some(target_name) = name {
+                params["name"] = target_name.into();
+            }
+            let value = call("ghidra_session", "checkpoint.restore", Some(&md5), params).await?;
+            if json {
+                print_json(&value)?;
+            } else {
+                out!(
+                    "Restored checkpoint {} for session {}.",
+                    text(&value["checkpoint"], "id"),
+                    text(&value, "md5")
+                );
+                print_sessions(std::slice::from_ref(&value["session"]));
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Writes checkpoint summaries as a table.
+fn print_checkpoints(items: &[Value]) {
+    if items.is_empty() {
+        out!("No checkpoints.");
+        return;
+    }
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|item| {
+            vec![
+                text(item, "id"),
+                text(item, "createdAt"),
+                item.get("sizeBytes")
+                    .and_then(Value::as_u64)
+                    .map_or_else(|| "-".to_string(), |size| format!("{size} B")),
+                text(item, "name"),
+            ]
+        })
+        .collect();
+    print_table(&["ID", "CREATED", "SIZE", "NAME"], &rows);
 }
 
 /// Writes session summaries as a table.
