@@ -10,7 +10,7 @@
 //! field names and the value spellings are part of the public contract.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::fmt;
 
 /// The lifecycle status of a session.
@@ -267,6 +267,33 @@ impl RpcEnvelope {
             error_data: None,
         }
     }
+
+    /// Changes this envelope into a JSON object and moves its fields.
+    #[must_use]
+    pub fn into_value(self) -> Value {
+        let mut map = Map::new();
+        map.insert("v".to_string(), Value::from(self.v));
+        map.insert("type".to_string(), Value::String(self.r#type.to_string()));
+        if let Some(id) = self.id {
+            map.insert("id".to_string(), Value::String(id));
+        }
+        if let Some(session_id) = self.session_id {
+            map.insert("md5".to_string(), Value::String(session_id));
+        }
+        if let Some(status) = self.status {
+            map.insert("status".to_string(), Value::from(status));
+        }
+        if let Some(result) = self.result {
+            map.insert("result".to_string(), result);
+        }
+        if let Some(error) = self.error {
+            map.insert("error".to_string(), error.into_value());
+        }
+        if let Some(error_data) = self.error_data {
+            map.insert("error_data".to_string(), error_data);
+        }
+        Value::Object(map)
+    }
 }
 
 /// A bridge error.
@@ -278,4 +305,98 @@ pub struct RpcError {
     pub message: String,
     /// The argument or the object of the error, for example `/selector`.
     pub target: Option<String>,
+}
+
+impl RpcError {
+    /// Changes this bridge error into a JSON object.
+    #[must_use]
+    pub fn into_value(self) -> Value {
+        let mut map = Map::new();
+        map.insert("code".to_string(), Value::String(self.code));
+        map.insert("message".to_string(), Value::String(self.message));
+        map.insert(
+            "target".to_string(),
+            self.target.map_or(Value::Null, Value::String),
+        );
+        Value::Object(map)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Makes sure that `RpcEnvelope::into_value` matches `Serialize` and moves payloads.
+    #[test]
+    fn rpc_envelope_into_value_matches_serialize_without_clones() {
+        let result_text = String::from("0x00401000 main");
+        let result_ptr = result_text.as_ptr();
+        let mut success = RpcEnvelope::response("req-1".into(), "0123456789abcdef".into(), 200);
+        success.result = Some(Value::Object(Map::from_iter([
+            ("symbol".to_string(), Value::String(result_text)),
+            ("count".to_string(), Value::from(3)),
+            ("items".to_string(), json!([true, null, { "offset": 16 }])),
+        ])));
+        let expected_success =
+            serde_json::to_vec(&serde_json::to_value(&success).unwrap()).unwrap();
+        let actual_success = success.into_value();
+        assert_eq!(
+            serde_json::to_vec(&actual_success).unwrap(),
+            expected_success
+        );
+        assert_eq!(
+            actual_success["result"]["symbol"]
+                .as_str()
+                .unwrap()
+                .as_ptr(),
+            result_ptr
+        );
+
+        let detail_text = String::from("bad selector syntax");
+        let detail_ptr = detail_text.as_ptr();
+        let mut with_error_data =
+            RpcEnvelope::response("req-2".into(), "0123456789abcdef".into(), 400);
+        with_error_data.error = Some(RpcError {
+            code: "invalid_request".into(),
+            message: "bad selector".into(),
+            target: Some("/selector".into()),
+        });
+        with_error_data.error_data = Some(Value::Object(Map::from_iter([(
+            "reason".to_string(),
+            Value::String(detail_text),
+        )])));
+        let expected_error =
+            serde_json::to_vec(&serde_json::to_value(&with_error_data).unwrap()).unwrap();
+        let actual_error = with_error_data.into_value();
+        assert_eq!(serde_json::to_vec(&actual_error).unwrap(), expected_error);
+        assert_eq!(
+            actual_error["error_data"]["reason"]
+                .as_str()
+                .unwrap()
+                .as_ptr(),
+            detail_ptr
+        );
+
+        let minimal = RpcEnvelope {
+            v: 1,
+            r#type: "response",
+            id: None,
+            session_id: None,
+            status: None,
+            result: Some(Value::Null),
+            error: Some(RpcError {
+                code: "BRIDGE_DISCONNECTED".into(),
+                message: "bridge closed".into(),
+                target: None,
+            }),
+            error_data: None,
+        };
+        let expected_minimal =
+            serde_json::to_vec(&serde_json::to_value(&minimal).unwrap()).unwrap();
+        let actual_minimal = minimal.into_value();
+        assert_eq!(
+            serde_json::to_vec(&actual_minimal).unwrap(),
+            expected_minimal
+        );
+    }
 }
