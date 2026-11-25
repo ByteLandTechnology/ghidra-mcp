@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.1.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v2.0.0...v2.1.0) (2026-11-24)
+
+
+### Features
+
+* publish compact tool schemas and enriched domain help ([#42](https://github.com/ByteLandTechnology/ghidra-mcp/issues/42)) ([7178453](https://github.com/ByteLandTechnology/ghidra-mcp/commit/717845323924c5f2f67681b82c4be00a66774b3c))
+
+
+### Bug Fixes
+
+* reject external origins on the mcp http endpoint ([#43](https://github.com/ByteLandTechnology/ghidra-mcp/issues/43)) ([7784b0c](https://github.com/ByteLandTechnology/ghidra-mcp/commit/7784b0c7e6d2c506fcc1ebb8f8f9a18421a2a2e8))
+* **tools:** coerce JSON string params and list valid parameters ([#40](https://github.com/ByteLandTechnology/ghidra-mcp/issues/40)) ([95aa390](https://github.com/ByteLandTechnology/ghidra-mcp/commit/95aa3906befda2f30ce7ec03f6b5bc9256ff3a10))
+
 ## [2.0.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v1.2.0...v2.0.0) (2026-11-16)
 
 
