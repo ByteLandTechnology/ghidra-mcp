@@ -1,7 +1,7 @@
 // Copyright 2026 ByteLand Technology Limited
 // SPDX-License-Identifier: MIT
 
-//! The `paths`, `config`, `session` and `job` commands.
+//! The `setup`, `paths`, `config`, `session` and `job` commands.
 //!
 //! The session and job commands call the domain tools through the daemon,
 //! the same as `call`. If necessary, they start the daemon.
@@ -72,6 +72,32 @@ pub enum SessionCommand {
         /// Wait until the session is ready.
         #[arg(long)]
         wait: bool,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Attach an open GUI program by Bridge.java endpoint or outbound arguments.
+    Attach {
+        /// Optional local binary path, 32-character MD5, or ws:// endpoint URL.
+        target: Option<String>,
+        /// Loopback Bridge.java WebSocket URL, such as <ws://127.0.0.1:8765/ws/agent>.
+        #[arg(long)]
+        ws_url: Option<String>,
+        /// Loopback Bridge.java WebSocket port, such as 8765.
+        #[arg(long)]
+        port: Option<u16>,
+        /// Bearer token for a Bridge.java server.
+        #[arg(long)]
+        token: Option<String>,
+        /// Display file name for the session.
+        #[arg(long)]
+        file_name: Option<String>,
+        /// Wait until an outbound Bridge.java client connects.
+        #[arg(long)]
+        wait: bool,
+        /// Maximum wait in milliseconds.
+        #[arg(long)]
+        timeout_ms: Option<u64>,
         /// Write JSON instead of text.
         #[arg(long)]
         json: bool,
@@ -183,6 +209,32 @@ pub enum JobCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Extracts the bundled Ghidra scripts and JAR into a user script directory.
+pub fn setup(dir: Option<PathBuf>, json: bool) -> Result<ExitCode> {
+    let target = match dir {
+        Some(path) => path,
+        None => crate::paths::default_ghidra_scripts_dir()?,
+    };
+    let installed = crate::bridge::install_user_scripts(&target)?;
+    if json {
+        let files: Vec<String> = installed
+            .files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        print_json(&json!({
+            "scriptDir": installed.directory.display().to_string(),
+            "files": files,
+        }))?;
+    } else {
+        out!("script_dir: {}", installed.directory.display());
+        for file in &installed.files {
+            out!("installed:  {}", file.display());
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Runs `paths`.
@@ -375,6 +427,27 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
             )?;
             (call("ghidra_session", "open", None, params).await?, json)
         }
+        SessionCommand::Attach {
+            target,
+            ws_url,
+            port,
+            token,
+            file_name,
+            wait,
+            timeout_ms,
+            json,
+        } => {
+            let value =
+                attach_session(target, ws_url, port, token, file_name, wait, timeout_ms).await?;
+            if json {
+                print_json(&value)?;
+            } else if let Some(args) = value["bridgeArgs"].as_str() {
+                out!("{args}");
+            } else {
+                print_sessions(std::slice::from_ref(&value["session"]));
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
         SessionCommand::Close { md5, force, json } => {
             let params = json!({ "force": force });
             (
@@ -413,6 +486,77 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
         print_sessions(std::slice::from_ref(&value["session"]));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Returns `true` when `raw` starts with `ws://` or `wss://`.
+fn looks_like_ws_url(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    trimmed
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("ws://"))
+        || trimmed
+            .get(..6)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("wss://"))
+}
+
+/// Resolves `session attach` arguments and calls `ghidra_session attach`.
+async fn attach_session(
+    target: Option<String>,
+    mut ws_url: Option<String>,
+    port: Option<u16>,
+    token: Option<String>,
+    file_name: Option<String>,
+    wait: bool,
+    timeout_ms: Option<u64>,
+) -> Result<Value> {
+    let mut md5 = None;
+    let mut params = Map::new();
+    params.insert("wait".into(), wait.into());
+    if let Some(raw) = target {
+        if looks_like_ws_url(&raw) {
+            if ws_url.is_some() {
+                bail!("pass a WebSocket URL either as TARGET or with `--ws-url`, not both");
+            }
+            ws_url = Some(raw);
+        } else {
+            let candidate = Path::new(&raw);
+            if candidate.exists() {
+                let canonical = candidate
+                    .canonicalize()
+                    .with_context(|| format!("cannot find {raw}"))?;
+                params.insert("path".into(), canonical.display().to_string().into());
+            } else if crate::project::normalize_md5(&raw).is_ok() {
+                md5 = Some(raw);
+            } else {
+                let canonical = candidate
+                    .canonicalize()
+                    .with_context(|| format!("cannot find {raw}"))?;
+                params.insert("path".into(), canonical.display().to_string().into());
+            }
+        }
+    }
+    if let Some(url) = ws_url {
+        params.insert("wsUrl".into(), url.into());
+    }
+    if let Some(port) = port {
+        params.insert("port".into(), port.into());
+    }
+    if let Some(token) = token {
+        params.insert("token".into(), token.into());
+    }
+    if let Some(name) = file_name {
+        params.insert("fileName".into(), name.into());
+    }
+    if let Some(timeout) = timeout_ms {
+        params.insert("timeoutMs".into(), timeout.into());
+    }
+    call(
+        "ghidra_session",
+        "attach",
+        md5.as_deref(),
+        Value::Object(params),
+    )
+    .await
 }
 
 /// Runs one `session checkpoint` subcommand.

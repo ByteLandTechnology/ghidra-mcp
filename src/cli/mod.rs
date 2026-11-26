@@ -27,6 +27,7 @@ use clap::{Parser, Subcommand};
 use serde_json::{Map, Value};
 use std::io;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::mcp::ToolServer;
@@ -55,6 +56,15 @@ enum Command {
     /// Run, start, stop or examine the shared daemon.
     #[command(subcommand)]
     Daemon(daemon::DaemonCommand),
+
+    /// Extract `Bridge.java`, `GhidraMcp.java` and `ghidra-bridge.jar` into a script directory.
+    Setup {
+        /// Target script directory. The default is `~/ghidra_scripts`.
+        dir: Option<PathBuf>,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Write the locations of the files and directories of ghidra-mcp.
     Paths {
@@ -118,6 +128,7 @@ async fn execute(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Daemon(command)) => daemon::run(command).await,
+        Some(Command::Setup { dir, json }) => admin::setup(dir, json),
         Some(Command::Paths { json }) => admin::paths(json),
         Some(Command::Config(command)) => admin::config(command),
         Some(Command::Session(command)) => admin::session(command).await,
