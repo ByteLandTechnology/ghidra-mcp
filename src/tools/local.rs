@@ -7,15 +7,14 @@
 
 use super::catalog::{Effects, Md5Rule};
 use super::{parse, Daemon, Handler, Output, Request};
-use crate::error::DomainError;
-use crate::import::{is_gpr_path, OpenOptions};
-use crate::model::{JobStatus, SessionRecord};
-use crate::{analysis, session};
-use anyhow::Result;
+use crate::model::SessionRecord;
+use crate::session;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+
+mod handlers;
+use handlers::{attach_session, daemon_status, open_session, shutdown_daemon, start_analysis};
 
 /// An operation that the daemon runs.
 pub(super) struct LocalOperation {
@@ -128,6 +127,41 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
             requires_transaction: false,
         }),
         run: |daemon, request| Box::pin(open_session(daemon, request)),
+    },
+    LocalOperation {
+        domain: "session",
+        name: "attach",
+        description: concat!(
+            "Attach an open GUI program without file copies. Set params.wsUrl or params.port ",
+            "to connect directly to a loopback Bridge.java server (default port 8765), or omit ",
+            "both to issue outbound Bridge.java arguments. Pass md5, params.path to hash a ",
+            "local file in place, or omit both to allocate a session ID."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "fileName": { "type": "string", "minLength": 1 },
+                    "wsUrl": { "type": "string", "minLength": 1 },
+                    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                    "token": { "type": "string", "minLength": 1 },
+                    "wait": { "type": "boolean", "default": false },
+                    "timeoutMs": { "type": "integer", "minimum": 1 }
+                },
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Optional,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: false,
+            destructive: false,
+            idempotent: false,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| Box::pin(attach_session(daemon, request)),
     },
     LocalOperation {
         domain: "session",
@@ -597,6 +631,27 @@ struct OpenArgs {
     timeout_ms: Option<u64>,
 }
 
+/// The parameters of `ghidra_session attach`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachArgs {
+    /// Optional local file to hash in place without a copy.
+    path: Option<String>,
+    /// Optional display file name for the session.
+    file_name: Option<String>,
+    /// Optional loopback `Bridge.java` WebSocket URL (`ws://127.0.0.1:8765/ws/agent`).
+    ws_url: Option<String>,
+    /// Optional loopback `Bridge.java` WebSocket port (`8765` or fallback port).
+    port: Option<u16>,
+    /// Optional bearer token for an embedded `Bridge.java` server.
+    token: Option<String>,
+    /// Wait until an outbound GUI script connects.
+    #[serde(default)]
+    wait: bool,
+    /// Maximum wait in milliseconds, instead of the launch timeout.
+    timeout_ms: Option<u64>,
+}
+
 /// The parameters of `ghidra_analysis start`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -677,147 +732,4 @@ struct ShutdownArgs {
     /// Stop the daemon also if a session is live or a job runs.
     #[serde(default)]
     force: bool,
-}
-
-/// Returns the MD5 of each live session and the ID of each job that runs.
-fn live_work(daemon: &Daemon) -> (Vec<String>, Vec<String>) {
-    let mut sessions: Vec<String> = daemon
-        .state
-        .sessions()
-        .into_iter()
-        .filter(|session| session.status.is_live())
-        .map(|session| session.session_id)
-        .collect();
-    let mut jobs: Vec<String> = daemon
-        .state
-        .jobs()
-        .into_iter()
-        .filter(|job| job.status == JobStatus::Running)
-        .map(|job| job.id)
-        .collect();
-    sessions.sort();
-    jobs.sort();
-    (sessions, jobs)
-}
-
-/// Runs `ghidra_daemon status`.
-fn daemon_status(daemon: &Daemon) -> Output {
-    let control = &daemon.control;
-    let started = control
-        .started_at
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let uptime = control.started_at.elapsed().unwrap_or_default();
-    let sessions: Vec<Value> = daemon
-        .state
-        .sessions()
-        .iter()
-        .map(SessionRecord::summary)
-        .collect();
-    let jobs: Vec<_> = daemon
-        .state
-        .jobs()
-        .into_iter()
-        .filter(|job| job.status == JobStatus::Running)
-        .collect();
-    let pid = std::process::id();
-    (
-        format!("Daemon {pid} runs with {} session(s)", sessions.len()),
-        json!({
-            "daemon": {
-                "pid": pid,
-                "version": env!("CARGO_PKG_VERSION"),
-                "startedAt": started.as_secs(),
-                "uptimeSeconds": uptime.as_secs(),
-                "mcpUrl": control.mcp_url,
-            },
-            "sessions": sessions,
-            "jobs": jobs,
-        }),
-    )
-}
-
-/// The time between the reply of `ghidra_daemon shutdown` and the start of the shutdown.
-/// Then the reply gets to the client before the daemon closes the connections.
-const SHUTDOWN_DELAY: Duration = Duration::from_millis(200);
-
-/// Runs `ghidra_daemon shutdown`.
-fn shutdown_daemon(daemon: &Daemon, request: Request) -> Result<Output> {
-    let ShutdownArgs { force } = parse(&request.label, request.params)?;
-    let (sessions, jobs) = live_work(daemon);
-    if !force && (!sessions.is_empty() || !jobs.is_empty()) {
-        return Err(DomainError::invalid_argument(
-            "force",
-            format!(
-                "the daemon has {} live session(s) {sessions:?} and {} running job(s) {jobs:?}; \
-                 set force=true to stop it",
-                sessions.len(),
-                jobs.len()
-            ),
-        )
-        .into());
-    }
-    let shutdown = daemon.control.shutdown.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(SHUTDOWN_DELAY).await;
-        shutdown.cancel();
-    });
-    Ok((
-        "The daemon is shutting down".to_string(),
-        json!({ "shuttingDown": true, "sessions": sessions, "jobs": jobs }),
-    ))
-}
-
-/// Runs `ghidra_session open`: imports a binary, attaches a `.gpr` project, or reopens an MD5.
-async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
-    let args: OpenArgs = parse(&request.label, request.params)?;
-    let options = OpenOptions::from_raw(
-        args.processor.as_deref(),
-        args.compiler_spec.as_deref(),
-        args.loader.as_deref(),
-        args.base_address.as_deref(),
-        args.reimport,
-        args.program_name.as_deref(),
-    )?;
-    let state = &daemon.state;
-    let wait = args
-        .wait
-        .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
-    match (args.path, request.md5) {
-        (Some(path), None) => {
-            let raw = PathBuf::from(path);
-            options.validate_for_target(is_gpr_path(&raw))?;
-            session::open_with_options(state, None, Some(&raw), options, wait).await
-        }
-        (None, Some(md5)) => {
-            session::open_with_options(state, Some(md5), None, options, wait).await
-        }
-        (None, None) => Err(DomainError::invalid_argument(
-            "path/md5",
-            "`ghidra_session open` requires either params.path or md5",
-        )
-        .into()),
-        (Some(_), Some(_)) => Err(DomainError::invalid_argument(
-            "path/md5",
-            "`ghidra_session open` accepts either params.path or md5, not both",
-        )
-        .into()),
-    }
-}
-
-/// Runs `ghidra_analysis start`.
-async fn start_analysis(daemon: &Daemon, request: Request) -> Result<Output> {
-    let md5 = request.session();
-    let args: AnalysisArgs = parse(&request.label, request.params)?;
-    let state = &daemon.state;
-    let wait = args
-        .wait
-        .then(|| millis_or(args.timeout_ms, state.config.timeouts.analysis_import));
-    let job = analysis::start(state, md5.clone(), args.params, wait).await?;
-    let text = if wait.is_some() && job.status == JobStatus::Completed {
-        format!("Analysis completed for session {md5}")
-    } else {
-        format!("Analysis started for session {md5}")
-    };
-    Ok((text, json!({ "job": job })))
 }
