@@ -11,7 +11,9 @@
 
 use crate::error::DomainError;
 use crate::paths::{atomic_write, sync_directory, McpPaths};
-use crate::project::{lock_binary, normalize_md5, remove_entry, sanitize_error_path};
+use crate::project::{
+    is_attached_gpr_session, lock_binary, normalize_md5, remove_entry, sanitize_error_path,
+};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -399,6 +401,13 @@ pub fn create_checkpoint(
 ) -> Result<CreatedCheckpoint> {
     paths.ensure_layout()?;
     let md5 = normalize_md5(md5)?;
+    if is_attached_gpr_session(paths, &md5)? {
+        return Err(DomainError::invalid_argument(
+            "md5",
+            "project checkpoints are not supported for attached .gpr projects",
+        )
+        .into());
+    }
     let normalized_name = normalize_name(name)?;
     let max_retained = max_per_binary.max(1);
     let project_dir = paths.project_dir(&md5);
@@ -496,6 +505,13 @@ pub fn create_checkpoint(
 /// Lists all saved checkpoints for `md5` from newest to oldest under exclusive `binary.lock`.
 pub fn list_checkpoints(paths: &McpPaths, md5: &str) -> Result<Vec<CheckpointSummary>> {
     let md5 = normalize_md5(md5)?;
+    if is_attached_gpr_session(paths, &md5)? {
+        return Err(DomainError::invalid_argument(
+            "md5",
+            "project checkpoints are not supported for attached .gpr projects",
+        )
+        .into());
+    }
     let project_dir = paths.project_dir(&md5);
     if !project_dir.is_dir() {
         return Err(
@@ -614,6 +630,13 @@ fn recover_interrupted_swap(project_dir: &Path, ghidra_root: &Path) -> Result<()
 pub fn restore_checkpoint(paths: &McpPaths, md5: &str, id: &str) -> Result<CheckpointSummary> {
     paths.ensure_layout()?;
     let md5 = normalize_md5(md5)?;
+    if is_attached_gpr_session(paths, &md5)? {
+        return Err(DomainError::invalid_argument(
+            "md5",
+            "project checkpoints are not supported for attached .gpr projects",
+        )
+        .into());
+    }
     validate_checkpoint_id(id)?;
     let project_dir = paths.project_dir(&md5);
     if !project_dir.is_dir() {

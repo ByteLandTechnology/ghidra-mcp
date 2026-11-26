@@ -109,6 +109,95 @@ fn durations_are_short() {
     assert_eq!(super::output::duration(3725), "1h 2m 5s");
 }
 
+/// Checks CLI `session open` arguments and validation for firmware flags and `.gpr` paths.
+#[test]
+fn session_open_flags_parse_and_validate() {
+    let cli = parse(&[
+        "session",
+        "open",
+        "firmware.bin",
+        "--processor",
+        "ARM:LE:32:Cortex",
+        "--compiler-spec",
+        "default",
+        "--loader",
+        "BinaryLoader",
+        "--base-address",
+        "08000000",
+        "--reimport",
+        "--wait",
+        "--json",
+    ])
+    .unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Open {
+            reimport: true,
+            wait: true,
+            json: true,
+            ..
+        }))
+    ));
+
+    let temp = tempfile::tempdir().unwrap();
+    let bin = temp.path().join("fw.bin");
+    std::fs::write(&bin, [0u8; 4]).unwrap();
+    let gpr = temp.path().join("board.gpr");
+    std::fs::write(&gpr, "<project/>").unwrap();
+
+    let params = super::admin::build_open_params(
+        &bin,
+        None,
+        Some("ARM:LE:32:Cortex"),
+        Some("default"),
+        Some("BinaryLoader"),
+        Some("08000000"),
+        true,
+        true,
+    )
+    .unwrap();
+    assert_eq!(params["processor"], "ARM:LE:32:Cortex");
+    assert_eq!(params["compilerSpec"], "default");
+    assert_eq!(params["loader"], "BinaryLoader");
+    assert_eq!(params["baseAddress"], "0x08000000");
+    assert_eq!(params["reimport"], true);
+
+    assert!(super::admin::build_open_params(
+        &bin,
+        Some("app"),
+        None,
+        None,
+        None,
+        None,
+        false,
+        false,
+    )
+    .is_err());
+    assert!(super::admin::build_open_params(
+        &gpr,
+        Some("bootloader"),
+        Some("ARM:LE:32:Cortex"),
+        None,
+        None,
+        None,
+        false,
+        false,
+    )
+    .is_err());
+    let gpr_params = super::admin::build_open_params(
+        &gpr,
+        Some("bootloader"),
+        None,
+        None,
+        None,
+        None,
+        false,
+        true,
+    )
+    .unwrap();
+    assert_eq!(gpr_params["programName"], "bootloader");
+}
+
 /// Makes sure that `tool_value` reads structured data without `content` and keeps text fallbacks.
 #[test]
 fn tool_value_handles_empty_content_and_unstructured_fallback() {
