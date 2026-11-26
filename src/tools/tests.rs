@@ -326,51 +326,17 @@ fn local_operation_extends_its_bridge_method() {
 /// Makes sure that a bridge operation goes to its bridge method.
 #[test]
 fn bridge_operation_uses_its_bridge_method() {
-    let md5 = "0123456789abcdef0123456789abcdef";
-    let (operation, request) = prepare(
+    let prepared = prepare(
         "ghidra_bridge",
-        object(json!({ "operation": "get", "md5": md5 })),
+        object(json!({ "operation": "get", "md5": "0123456789abcdef0123456789abcdef" })),
     )
     .expect("valid call");
+    let (operation, request) = prepared;
     match &operation.route {
         Route::Bridge(method) => assert_eq!(method, "session.get"),
         Route::Local(_) => panic!("ghidra_bridge get must go to the bridge"),
     }
     assert_eq!(request.params, json!({}));
-
-    for (tool, op_name, bridge_method, params) in [
-        (
-            "ghidra_listing",
-            "string.list",
-            "string.list",
-            json!({ "filter": { "regex": "https?://", "include_candidates": true } }),
-        ),
-        (
-            "ghidra_memory",
-            "find",
-            "memory.find",
-            json!({ "filter": { "pattern": "48 8B ?? ??" } }),
-        ),
-    ] {
-        let (op, req) = prepare(
-            tool,
-            object(json!({ "operation": op_name, "md5": md5, "params": params })),
-        )
-        .expect("valid search call");
-        assert!(op.md5 == Md5Rule::Required);
-        assert!(op.effects.read_only);
-        match &op.route {
-            Route::Bridge(method) => assert_eq!(method, bridge_method),
-            Route::Local(_) => panic!("{tool} {op_name} must go to the bridge"),
-        }
-        assert_eq!(req.md5.as_deref(), Some(md5));
-        let (_, schema) =
-            help::run(object(json!({ "domain": tool, "operation": op_name }))).expect("help");
-        assert_eq!(schema["md5"], "required");
-        assert!(schema["inputSchema"]["properties"]["filter"].is_object());
-        assert!(schema["inputSchema"]["properties"]["scan"].is_object());
-        assert!(schema["inputSchema"]["properties"]["page"].is_object());
-    }
 }
 
 /// Makes sure that `md5: null` is the same as no `md5`.
@@ -623,6 +589,108 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     .expect("shutdown starts after the reply");
 }
 
+/// Checks `ghidra_session open` and `ghidra_upload prepare` validation for import and `.gpr` flags.
+#[tokio::test]
+async fn validates_import_flags_and_gpr_options() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let gpr_dir = root.path().join("sample");
+    std::fs::create_dir_all(gpr_dir.join("board.rep")).unwrap();
+    let gpr_path = gpr_dir.join("board.gpr");
+    std::fs::write(&gpr_path, "<project/>").unwrap();
+    let bin_path = root.path().join("fw.bin");
+    std::fs::write(&bin_path, [1u8, 2, 3, 4]).unwrap();
+
+    let (_, open_help) = help::run(object(
+        json!({ "domain": "ghidra_session", "operation": "open" }),
+    ))
+    .unwrap();
+    for field in [
+        "programName",
+        "processor",
+        "compilerSpec",
+        "loader",
+        "baseAddress",
+        "reimport",
+    ] {
+        assert!(
+            open_help["inputSchema"]["properties"][field].is_object(),
+            "absent field {field}"
+        );
+    }
+
+    let invalid_open_cases = [
+        (
+            json!({ "path": bin_path, "processor": "invalid" }),
+            "processor",
+        ),
+        (
+            json!({ "path": bin_path, "compilerSpec": "default" }),
+            "compilerSpec requires processor",
+        ),
+        (
+            json!({ "path": bin_path, "loader": "../BadLoader" }),
+            "loader",
+        ),
+        (
+            json!({ "path": bin_path, "baseAddress": "0xZZ" }),
+            "baseAddress",
+        ),
+        (
+            json!({ "path": bin_path, "programName": "app" }),
+            "programName",
+        ),
+        (
+            json!({ "path": gpr_path, "processor": "ARM:LE:32:Cortex" }),
+            "not valid when attaching a .gpr project",
+        ),
+        (
+            json!({ "path": gpr_path, "reimport": true }),
+            "not valid when attaching a .gpr project",
+        ),
+        (
+            json!({ "path": gpr_path, "programName": "../escape" }),
+            "programName",
+        ),
+    ];
+    for (params, expected) in invalid_open_cases {
+        let err = super::call(
+            &daemon,
+            "ghidra_session",
+            object(json!({ "operation": "open", "params": params })),
+        )
+        .await
+        .unwrap_err();
+        assert!(reason(&err).contains(expected), "{params}: {err:#}");
+    }
+
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let invalid_upload_cases = [
+        (
+            json!({ "fileName": "fw.bin", "size": 4, "compilerSpec": "gcc" }),
+            "compilerSpec requires processor",
+        ),
+        (
+            json!({ "fileName": "fw.bin", "size": 4, "baseAddress": "-0x100" }),
+            "baseAddress",
+        ),
+        (
+            json!({ "fileName": "board.gpr", "size": 4 }),
+            ".gpr projects",
+        ),
+    ];
+    for (params, expected) in invalid_upload_cases {
+        let err = super::call(
+            &daemon,
+            "ghidra_upload",
+            object(json!({ "operation": "prepare", "md5": md5, "params": params })),
+        )
+        .await
+        .unwrap_err();
+        assert!(reason(&err).contains(expected), "{params}: {err:#}");
+    }
+}
+
 /// Makes sure that `params` accepts `null` and a JSON object string.
 #[tokio::test]
 async fn params_accepts_null_and_json_object_string() {
@@ -711,7 +779,10 @@ fn unknown_parameter_lists_valid_parameters_and_help() {
         "{upload_reason}"
     );
     assert!(
-        upload_reason.contains("Valid parameters: `fileName`, `size`."),
+        upload_reason.contains(concat!(
+            "Valid parameters: `baseAddress`, `compilerSpec`, `fileName`, ",
+            "`loader`, `processor`, `reimport`, `size`."
+        )),
         "{upload_reason}"
     );
     assert!(upload_reason.contains("ghidra_help"), "{upload_reason}");
@@ -804,3 +875,4 @@ async fn bridge_call_moves_envelope_result_without_clones() {
 }
 
 mod checkpoints;
+mod search;
