@@ -65,7 +65,8 @@ A module uses only the modules in the layers below it:
 | `session` | Open, launch, wait, relaunch, call, checkpoint, reset, delete, and close for sessions. |
 | `checkpoint` | Synchronized snapshots of `project.gpr` and `project.rep/`, retention limits, and atomic restore. |
 | `analysis` | Auto-analysis as a background job. |
-| `project` | Saved binaries, project reset, project deletion, and the preparation of Ghidra projects. |
+| `project` | Saved binaries, attached `.gpr` projects, project reset, deletion, and preparation. |
+| `import` | Validation and persistence types for firmware import flags and `.gpr` attachment. |
 | `bridge` | The bridge contract, the embedded runtime, the WebSocket and single requests. |
 | `jsonrpc` | The strict JSON-RPC 2.0 codec of the bridge WebSocket. |
 | `state` | The shared state: one entry for each session, and the jobs. |
