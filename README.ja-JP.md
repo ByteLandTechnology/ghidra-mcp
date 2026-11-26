@@ -45,6 +45,8 @@ MCP クライアントは stdio または HTTP でデーモンに接続します
 - **MD5 によるセッション識別。** デーモンはセッションを再利用するか、保存済みの解析を再度開きます。
 - **永続的なセッションとジョブ。** クライアントが切断した後も、セッションと解析ジョブは継続します。
 - **リモートアップロード。** デーモンホスト上にないクライアントは、別の HTTP エンドポイントでバイナリを送信します。
+- **生ファームウェアのインポート。** デーモンは、プロセッサ、コンパイラ仕様、ローダー、ベースアドレスのフラグを指定して `.bin`、`.hex`、`.ihex`、`.srec` ファイルをインポートします。
+- **ローカル `.gpr` プロジェクト。** デーモンは、ローカルの Ghidra `.gpr` プロジェクトをその場でアタッチし、カスタムメモリマップを保持します。
 - **Ghidra への完全なアクセス。** Java ブリッジが、プログラムデータ、関数、逆コンパイル、シンボル、参照、メモリ、コメントを提供します。
 - **単一の実行ファイル。** 実行ファイルには、ブリッジ JAR とその起動スクリプトが含まれます。
 - **バックグラウンドジョブ。** `ghidra_job list`、`ghidra_job get`、`ghidra_job wait` で長時間の解析を監視します。
@@ -285,6 +287,81 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
 | 引数が無効。 | 使用方法を stderr に出力。 | 2 |
 | `--help` または `--version`。 | テキストを stdout に出力。 | 0 |
 
+### 生ファームウェアのインポート
+
+`.bin`、`.hex`、`.ihex`、`.srec` などのヘッダーのないファームウェアファイルには、アーキテクチャヘッダーがありません。
+`ghidra_session open`、`ghidra_upload prepare`、または `ghidra-mcp session open` に任意のインポートフラグを渡します：
+
+| MCP `params` フィールド | CLI フラグ | 用途 |
+| --- | --- | --- |
+| `processor` | `--processor <ID>` | `-processor` に渡す Ghidra 言語 ID（例：`ARM:LE:32:Cortex`）。 |
+| `compilerSpec` | `--compiler-spec <ID>` | `-cspec` に渡す Ghidra コンパイラ仕様 ID。`processor` が必要です。 |
+| `loader` | `--loader <CLASS>` | `-loader` に渡す Ghidra ローダークラス名（例：`BinaryLoader`、`IntelHexLoader`）。 |
+| `baseAddress` | `--base-address <ADDR>` | `-loader-baseAddr` に渡す 16 進数のロードアドレス（例：`0x08000000`、`ram:0x08000000`）。 |
+| `reimport` | `--reimport` | このバイナリの保存済み Ghidra プロジェクトを削除し、`-import` を再実行します。 |
+
+`ghidra_session open` の例：
+
+```json
+{
+  "operation": "open",
+  "params": {
+    "path": "/path/to/firmware.bin",
+    "processor": "ARM:LE:32:Cortex",
+    "baseAddress": "0x08000000",
+    "wait": true
+  }
+}
+```
+
+コマンドラインツールの例：
+
+```sh
+ghidra-mcp session open /path/to/firmware.bin \
+  --processor ARM:LE:32:Cortex \
+  --base-address 0x08000000 \
+  --wait
+```
+
+- ファイル名が `.bin`、`.hex`、`.ihex`、または `.srec` で終わる場合、デーモンは `binary.<ext>` にその小文字の拡張子を保持します。
+- `.srec` ファイルでは、`loader` が未指定の場合にデーモンは `MotorolaHexLoader` を選択します。
+- `ImportBinary.java` は、`Bridge.java` を開始する前にプログラムのイメージベースと既定メモリブロックを `baseAddress` に合わせます。
+- デーモンはインポートフラグを `binary.json` に保存します。
+- 保存済みプロジェクトが既に存在し、呼び出しで異なるインポートフラグを指定する場合は、`reimport` を `true`（`--reimport`）に設定します。
+
+### ローカル .gpr プロジェクトのアタッチ
+
+デーモンホスト上の Ghidra `.gpr` プロジェクトを、ファイルをコピーせずにアタッチできます。
+この手順は、Ghidra GUI で設定したカスタムイメージベース、メモリマップ、保存済みシンボルを保持します。
+
+`ghidra_session open` の例：
+
+```json
+{
+  "operation": "open",
+  "params": {
+    "path": "/path/to/board.gpr",
+    "programName": "firmware/app",
+    "wait": true
+  }
+}
+```
+
+コマンドラインツールの例：
+
+```sh
+ghidra-mcp session open /path/to/board.gpr --program-name firmware/app --wait
+```
+
+- `.gpr` ファイルの隣に `<name>.rep` ディレクトリが必要であり、`<name>` は `.` で始まってはいけません。
+- デーモンは正規化した `.gpr` パスから決定論的な 32 桁 16 進数の `md5` を計算し、`projects/<md5>/attached.json` を書き込みます。
+- 以降のツール呼び出しや、プロジェクトの再オープンおよび `programName` の切り替えのための `ghidra_session open` では、その `md5` を使用します。
+- プロジェクト内の `Program` が 1 つだけの場合、`programName`（`--program-name`）は省略できます。
+- プロジェクトに複数のプログラムがあり `programName` がない場合、`open` は失敗し、候補プログラムのパスを一覧表示します。
+- `OpenSavedProject.java` の実行前に、デーモンは `<name>.lock` と `<name>.lock~` を読み取り専用で確認し、プロジェクトファイルを一切変更しません。
+- Ghidra GUI または別のプロセスがプロジェクトロックを保持している場合、`open` は直ちに失敗します。先に Ghidra GUI でプロジェクトを閉じてください。
+- バイナリのインポートフラグ（`processor`、`compilerSpec`、`loader`、`baseAddress`、`reimport`）および `ghidra_upload prepare` は、`.gpr` プロジェクトには適用されません。
+
 ### リモートクライアントからのバイナリのアップロード
 
 クライアントがデーモンホスト上にない場合は、この手順を使用します。
@@ -299,6 +376,8 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
    ```
 
    `fileName` は表示名です。ディレクトリを含めてはいけません。
+   生ファームウェアでは、`params` に `processor`、`compilerSpec`、`loader`、`baseAddress`、`reimport` も指定できます（[生ファームウェアのインポート](#生ファームウェアのインポート)を参照）。
+   デーモンは `fileName` の `.bin`、`.hex`、`.ihex`、`.srec` 拡張子を保持します。
 3. 結果を読み取ります。結果には次のフィールドがあります：
    - `method`：`POST`。
    - `url`：HTTP 呼び出しでは `https://host/ghidra/upload` などの絶対 URL。
@@ -354,9 +433,11 @@ claude mcp add --transport stdio --scope local ghidra-mcp -- /absolute/path/to/g
 
 エージェントでは次の手順を使用します：
 
-1. バイナリを開きます：
-   - デーモンが以前に保存したバイナリには、`{"operation":"open","md5":"..."}` で `ghidra_session` を呼び出します。
-   - デーモンホスト上のファイルには、`{"operation":"open","params":{"path":"..."}}` で `ghidra_session` を呼び出します。デーモンが MD5 を計算し、バイナリを保存します。
+1. バイナリまたはプロジェクトを開きます：
+   - デーモンが以前に保存したセッションには、`{"operation":"open","md5":"..."}` で `ghidra_session` を呼び出します。
+   - デーモンホスト上のバイナリには、`{"operation":"open","params":{"path":"..."}}` で `ghidra_session` を呼び出します。デーモンが MD5 を計算し、バイナリを保存します。
+   - 生ファームウェアには、`params` に `processor` と `baseAddress` を追加します（[生ファームウェアのインポート](#生ファームウェアのインポート)を参照）。
+   - ローカルの Ghidra プロジェクトには、`params.path` に `.gpr` パスを指定します（[ローカル .gpr プロジェクトのアタッチ](#ローカル-gpr-プロジェクトのアタッチ)を参照）。
    - リモートクライアント上のファイルは、アップロードします（[リモートクライアントからのバイナリのアップロード](#リモートクライアントからのバイナリのアップロード)を参照）。
 2. セッションが起動中の場合は、`{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}` で `ghidra_job` を呼び出して待ちます。
    `ghidra_job get` でジョブを監視できます。
@@ -584,15 +665,18 @@ Unix では、永続データとランタイムデータは別の場所にあり
 GHIDRA_MCP_HOME/                 # デフォルト：~/.ghidra-mcp
 |-- config.toml
 `-- projects/<md5>/
-    |-- binary                  # 保存済みのバイナリ（固定の名前）
-    |-- binary.json             # 元のファイル名
+    |-- binary                  # 保存済みのバイナリ（または binary.bin、.hex、.ihex、.srec）
+    |-- binary.json             # ファイル名とファームウェアインポートフラグ
+    |-- attached.json           # アタッチした .gpr パスとプログラム名
     |-- checkpoints/            # 保存済みのプロジェクトスナップショット
+    |-- recovery-backups/       # クラッシュ復旧バックアップ
     `-- ghidra/
         |-- project.gpr
         `-- project.rep/
 
 <runtime-base>/ghidra-mcp-<uid>/
 |-- projects -> GHIDRA_MCP_HOME/projects
+|-- attached/<md5> -> <gpr-parent>
 |-- sessions/<md5>/session.json
 |-- logs/<md5>/
 |-- tmp/
@@ -609,6 +693,7 @@ GHIDRA_MCP_HOME/                 # デフォルト：~/.ghidra-mcp
 - ランタイムディレクトリのモードは `0700` です。デーモンのログとロックファイルのモードは `0600` です。
 - Ghidra は、隠しディレクトリにあるプロジェクトを開けません。そのため、デーモンは Ghidra に `projects` シンボリックリンクを渡します。プロジェクトファイルは永続ホームに残ります。
 - `projects` のパスを別のオブジェクトが占有している場合、デーモンはエラーで停止します。そのオブジェクトを置き換えることはありません。
+- アタッチした `.gpr` セッションでは、デーモンは `.gpr` ファイルの親ディレクトリへの非隠しシンボリックリンク `attached/<md5>` を作成します。
 
 Windows のデフォルトのレイアウトは次のとおりです：
 
@@ -618,7 +703,9 @@ Windows のデフォルトのレイアウトは次のとおりです：
 |-- projects\<md5>\
 |   |-- binary
 |   |-- binary.json
+|   |-- attached.json
 |   |-- checkpoints\
+|   |-- recovery-backups\
 |   `-- ghidra\
 |       |-- project.gpr
 |       `-- project.rep\

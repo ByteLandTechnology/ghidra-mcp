@@ -63,7 +63,8 @@
 | `session` | 会话的打开、启动、等待、重新启动、调用、检查点、重置、删除和关闭。 |
 | `checkpoint` | `project.gpr` 和 `project.rep/` 的同步快照、保留上限和原子恢复。 |
 | `analysis` | 作为后台作业的自动分析。 |
-| `project` | 已保存的二进制文件、项目重置、项目删除和 Ghidra 项目的准备。 |
+| `project` | 已保存的二进制文件、附加的 `.gpr` 项目、项目重置、项目删除和项目准备。 |
+| `import` | 固件导入标志和 `.gpr` 附加的验证与持久化类型。 |
 | `bridge` | 桥接契约、嵌入的运行时、WebSocket 和单个请求。 |
 | `jsonrpc` | 桥接 WebSocket 的严格 JSON-RPC 2.0 编解码器。 |
 | `state` | 共享状态：每个会话一个条目，以及作业。 |
