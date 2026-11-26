@@ -193,6 +193,11 @@ fn session_md5_is_never_a_parameter() {
     assert!(rule("session", "open") == Md5Rule::Optional);
     assert!(rule("session", "get") == Md5Rule::Required);
     assert!(rule("session", "close") == Md5Rule::Required);
+    assert!(rule("session", "checkpoint.create") == Md5Rule::Required);
+    assert!(rule("session", "checkpoint.list") == Md5Rule::Required);
+    assert!(rule("session", "checkpoint.restore") == Md5Rule::Required);
+    assert!(rule("session", "reset") == Md5Rule::Required);
+    assert!(rule("session", "delete") == Md5Rule::Required);
     assert!(rule("session", "list") == Md5Rule::Absent);
     assert!(rule("upload", "prepare") == Md5Rule::Required);
     assert!(rule("job", "wait") == Md5Rule::Absent);
@@ -811,3 +816,5 @@ fn program_import_export_and_entry_point_operations_are_read_only_with_md5() {
         assert_eq!(request.md5.as_deref(), Some(md5));
     }
 }
+
+mod checkpoints;
