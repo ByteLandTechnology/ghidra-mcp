@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.2.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v2.1.0...v2.2.0) (2026-11-25)
+
+
+### Features
+
+* add project checkpoints and session reset ([#55](https://github.com/ByteLandTechnology/ghidra-mcp/issues/55)) ([132827b](https://github.com/ByteLandTechnology/ghidra-mcp/commit/132827b4f4c453e48a95887463b59cb94e454094))
+
+
+### Performance Improvements
+
+* format text blocks only at mcp edges ([#63](https://github.com/ByteLandTechnology/ghidra-mcp/issues/63)) ([3d75443](https://github.com/ByteLandTechnology/ghidra-mcp/commit/3d754438de14770cb0f9814950ff6a1634903f0e))
+* isolate session lifecycle locks by binary md5 ([#65](https://github.com/ByteLandTechnology/ghidra-mcp/issues/65)) ([e738310](https://github.com/ByteLandTechnology/ghidra-mcp/commit/e7383102583acf94465e7489f0f3e06ccb778308))
+
 ## [2.1.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v2.0.0...v2.1.0) (2026-11-24)
 
 

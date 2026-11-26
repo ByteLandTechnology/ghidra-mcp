@@ -136,6 +136,25 @@ pub async fn request(
         }
         .into());
     }
+    request_locked(state, md5, method, params, remaining, timeout.as_secs()).await
+}
+
+/// Sends one request when the caller already holds the `request_lock` of `md5`.
+pub async fn request_locked(
+    state: &McpState,
+    md5: &str,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+    reported_timeout_secs: u64,
+) -> Result<RpcEnvelope> {
+    if !METHODS.contains_key(method) {
+        return Err(DomainError::invalid_argument(
+            "method",
+            format!("method is not on the ghidra-mcp allowlist: {method}"),
+        )
+        .into());
+    }
     let request_id = Uuid::new_v4().to_string();
     let wire = jsonrpc::encode_request(&request_id, method, params)?;
     let (sender, receiver) = oneshot::channel();
@@ -144,7 +163,7 @@ pub async fn request(
     if connection.sender.send(Message::Text(wire.into())).is_err() {
         return Err(DomainError::disconnected(md5).into());
     }
-    match tokio::time::timeout(remaining, receiver).await {
+    match tokio::time::timeout(timeout, receiver).await {
         Ok(Ok(response)) => {
             guard.defuse();
             Ok(response)
@@ -152,7 +171,7 @@ pub async fn request(
         outcome => match outcome {
             Err(_) => Err(DomainError::AgentTimeout {
                 md5: md5.to_string(),
-                timeout_seconds: Some(timeout.as_secs()),
+                timeout_seconds: Some(reported_timeout_secs),
             }
             .into()),
             _ => Err(DomainError::disconnected(md5).into()),
