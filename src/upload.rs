@@ -27,7 +27,9 @@ mod tests;
 
 pub use url::request_url;
 
-use crate::project::{persist_binary, validate_file_name};
+use crate::error::DomainError;
+use crate::import::{is_gpr_path, ImportOptions, OpenOptions};
+use crate::project::{persist_binary_with_options, validate_file_name};
 use crate::state::McpState;
 use anyhow::{Context, Result};
 use axum::{
@@ -68,6 +70,17 @@ pub struct PrepareParams {
     file_name: String,
     /// The exact size of the upload in bytes.
     size: NonZeroU64,
+    /// Ghidra language ID for `-processor`.
+    processor: Option<String>,
+    /// Ghidra compiler specification ID for `-cspec`.
+    compiler_spec: Option<String>,
+    /// Ghidra loader class name for `-loader`.
+    loader: Option<String>,
+    /// Hexadecimal base address for `-loader-baseAddr`.
+    base_address: Option<String>,
+    /// Re-import the binary and replace its saved internal project.
+    #[serde(default)]
+    reimport: bool,
 }
 
 /// The data that an upload credential is for.
@@ -78,6 +91,10 @@ struct UploadGrant {
     file_name: String,
     /// The exact size of the upload in bytes.
     size: u64,
+    /// Validated binary import flags.
+    import_options: ImportOptions,
+    /// Re-import flag for the uploaded binary.
+    reimport: bool,
     /// The time after which the daemon refuses the credential.
     deadline: Instant,
 }
@@ -138,10 +155,32 @@ impl UploadService {
     /// Fails during the shutdown, or for a file name that is not valid.
     pub fn prepare(&self, md5: String, params: PrepareParams) -> Result<(String, Value)> {
         if self.state.is_shutting_down() {
-            return Err(crate::error::DomainError::ShuttingDown.into());
+            return Err(DomainError::ShuttingDown.into());
         }
-        let PrepareParams { file_name, size } = params;
+        let PrepareParams {
+            file_name,
+            size,
+            processor,
+            compiler_spec,
+            loader,
+            base_address,
+            reimport,
+        } = params;
         validate_file_name(&file_name)?;
+        if is_gpr_path(std::path::Path::new(&file_name)) {
+            return Err(DomainError::invalid_argument(
+                "fileName",
+                "upload prepare supports binary files, not .gpr projects",
+            )
+            .into());
+        }
+        let import_options = ImportOptions::from_raw(
+            processor.as_deref(),
+            compiler_spec.as_deref(),
+            loader.as_deref(),
+            base_address.as_deref(),
+        )?;
+        import_options.validate_complete()?;
         let size = size.get();
         let now = Instant::now();
         let expires_at = SystemTime::now()
@@ -158,6 +197,8 @@ impl UploadService {
                 md5,
                 file_name,
                 size,
+                import_options,
+                reimport,
                 deadline: now + GRANT_LIFETIME,
             },
         );
@@ -269,9 +310,59 @@ impl UploadService {
             "upload Content-Length does not match the prepared size",
         )?;
 
-        // The daemon makes the file before it starts an asynchronous task.
-        // Thus, cancellation cannot leave a file from a detached file system task.
-        // The drop of `temporary` deletes the file.
+        let temporary = self.stream_verified_upload(&grant, stream).await?;
+        let paths = self.state.paths.clone();
+        let temp_path = temporary.path().to_path_buf();
+        let md5 = grant.md5.clone();
+        let file_name = grant.file_name.clone();
+        let import_options = grant.import_options.clone();
+        let reimport = grant.reimport;
+        tokio::task::spawn_blocking(move || {
+            persist_binary_with_options(
+                &paths,
+                &temp_path,
+                &md5,
+                &file_name,
+                &import_options,
+                reimport,
+            )
+        })
+        .await
+        .map_err(internal("binary persistence task panicked"))?
+        .map_err(internal("cannot persist uploaded binary"))?;
+        let open_options = OpenOptions {
+            import: grant.import_options,
+            reimport: grant.reimport,
+            program_name: None,
+        };
+        let (_, result) = crate::session::open_with_options(
+            &self.state,
+            Some(grant.md5),
+            None,
+            open_options,
+            None,
+        )
+        .await
+        .map_err(internal(
+            "binary was saved, but the session failed to open; retry session.open with MD5",
+        ))?;
+        let status = match result.pointer("/session/status").and_then(Value::as_str) {
+            Some("ready") => StatusCode::OK,
+            Some("launching" | "starting") => StatusCode::ACCEPTED,
+            _ => return Err(UploadError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "binary was saved, but the session is unavailable; retry session.open with its MD5",
+            )),
+        };
+        Ok((status, result))
+    }
+
+    /// Writes `stream` into a temporary file and checks its byte count and MD5 digest.
+    async fn stream_verified_upload(
+        &self,
+        grant: &UploadGrant,
+        stream: &mut BodyDataStream,
+    ) -> UploadResult<tempfile::NamedTempFile> {
         let temporary = tempfile::Builder::new()
             .prefix("upload-")
             .suffix(".tmp")
@@ -313,28 +404,7 @@ impl UploadService {
         file.sync_all()
             .await
             .map_err(internal("cannot save temporary upload"))?;
-        let paths = self.state.paths.clone();
-        let temp_path = temporary.path().to_path_buf();
-        let md5 = grant.md5.clone();
-        let file_name = grant.file_name.clone();
-        tokio::task::spawn_blocking(move || persist_binary(&paths, &temp_path, &md5, &file_name))
-            .await
-            .map_err(internal("binary persistence task panicked"))?
-            .map_err(internal("cannot persist uploaded binary"))?;
-        let (_, result) = crate::session::open(&self.state, grant.md5, None, None)
-      .await
-      .map_err(internal(
-        "binary was saved, but the session could not be opened; retry session.open with its MD5",
-      ))?;
-        let status = match result.pointer("/session/status").and_then(Value::as_str) {
-            Some("ready") => StatusCode::OK,
-            Some("launching" | "starting") => StatusCode::ACCEPTED,
-            _ => return Err(UploadError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "binary was saved, but the session is unavailable; retry session.open with its MD5",
-            )),
-        };
-        Ok((status, result))
+        Ok(temporary)
     }
 }
 

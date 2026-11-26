@@ -1,23 +1,31 @@
 // Copyright 2026 ByteLand Technology Limited
 // SPDX-License-Identifier: MIT
 
-//! Saved binaries and their Ghidra projects. The MD5 identifies each binary.
+//! Saved binaries, attached `.gpr` projects, and their launch preparation.
 //!
 //! Each binary has a persistent directory `projects/<md5>/`:
 //!
 //! ```text
 //! projects/<md5>/
-//! ├── binary        the saved binary, with a fixed name
+//! ├── binary(.ext)  the saved binary, with .bin, .hex, .ihex, or .srec extensions
 //! ├── binary.json   {"fileName": …}, written last: it shows that the copy is complete
 //! ├── binary.lock   serializes persistence for this MD5 and remains after lock release
 //! ├── checkpoints/  bounded project snapshots for rollback
 //! └── ghidra/       the Ghidra project: project.gpr and project.rep/
 //! ```
 //!
-//! The daemon saves a binary one time. After that, it opens the project again
-//! by the MD5, without the original path.
+//! Attached `.gpr` projects store `attached.json` in `projects/<md5>/` and keep
+//! `<name>.gpr` and `<name>.rep/` in place through a non-hidden Unix alias.
+
+mod gpr;
+
+pub use gpr::{
+    attached_program_name, check_gpr_not_locked, is_attached_gpr_session, persist_attached_gpr,
+    resolve_gpr_path, update_attached_program_name, ResolvedGpr,
+};
 
 use crate::error::DomainError;
+use crate::import::{saved_binary_name, ImportOptions};
 use crate::model::SessionRecord;
 use crate::paths::{atomic_write, persist_synced, sync_directory, McpPaths};
 use anyhow::Result;
@@ -28,19 +36,39 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-/// The file name of the saved binary in its project directory.
+/// Default file name of the saved binary in its project directory.
 const BINARY_NAME: &str = "binary";
 /// The file name of the metadata of the binary in its project directory.
 const METADATA_NAME: &str = "binary.json";
 /// The stable file on which readers and writers lock one binary.
 pub(crate) const BINARY_LOCK_NAME: &str = "binary.lock";
+/// Default Ghidra project name for internal binary projects.
+const INTERNAL_PROJECT_NAME: &str = "project";
 
 /// The contents of `binary.json`.
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BinaryMetadata {
     /// The original file name of the binary, for display.
     file_name: String,
+    /// Saved file name inside `projects/<md5>/` (`binary` or `binary.<ext>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    saved_name: Option<String>,
+    /// Optional Ghidra language and loader flags for `-import`.
+    #[serde(default, skip_serializing_if = "ImportOptions::is_empty")]
+    import_options: ImportOptions,
+    /// True when the next launch must discard `ghidra/` and run `-import` again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    reimport_pending: bool,
+}
+
+impl BinaryMetadata {
+    /// Returns the persisted binary file name in `projects/<md5>/`.
+    fn effective_saved_name(&self) -> String {
+        self.saved_name
+            .clone()
+            .unwrap_or_else(|| saved_binary_name(&self.file_name))
+    }
 }
 
 /// Validates an MD5 and returns it in lowercase, its canonical form.
@@ -95,46 +123,79 @@ pub fn validate_file_name(value: &str) -> Result<()> {
     Ok(())
 }
 
-/// Saves `source` as the binary `md5` with the display name `file_name`. If
-/// the project already has the binary, the function does nothing.
-///
-/// The function copies the binary. It does not move it. Then the source can be
-/// on a different file system. After the copy, the function examines the MD5.
-///
-/// It stages and synchronizes the binary before it publishes it.
-/// Then it writes `binary.json` atomically as the completion marker.
-/// A per-MD5 file lock prevents reads during publication.
-/// Failed copies do not alter saved files.
+/// Saves `source` as the binary `md5`. It keeps `.bin`, `.hex`, `.ihex`, and `.srec`
+/// extensions on the import path and stores `import_options` and `reimport`.
 ///
 /// # Errors
 ///
-/// Fails for an incorrect MD5 or file name.
-/// Also fails if the source changes during the copy or an I/O error occurs.
-/// Rust removes temporary files on drop.
-/// A failure after binary publication leaves it available for the next metadata write.
-pub fn persist_binary(paths: &McpPaths, source: &Path, md5: &str, file_name: &str) -> Result<()> {
+/// Fails for an incorrect MD5, file name, or incomplete import options, or on I/O failure.
+pub fn persist_binary_with_options(
+    paths: &McpPaths,
+    source: &Path,
+    md5: &str,
+    file_name: &str,
+    import_options: &ImportOptions,
+    reimport: bool,
+) -> Result<()> {
     let md5 = normalize_md5(md5)?;
     validate_file_name(file_name)?;
     paths.ensure_layout()?;
     let project_dir = paths.project_dir(&md5);
     let _lock = lock_binary(&project_dir, true)?;
-    // The daemon persists the MD5 directory and new home or project ancestors.
-    // It does this before it commits files inside that directory.
     for directory in paths.projects_dir.ancestors() {
         if !directory.as_os_str().is_empty() {
             sync_directory(directory)?;
         }
     }
-    let binary_path = project_dir.join(BINARY_NAME);
     let metadata_path = project_dir.join(METADATA_NAME);
-    let metadata = read_metadata(paths, &md5)?;
-    if metadata.is_some() && binary_path.is_file() {
-        return Ok(());
+    let requested_saved_name = saved_binary_name(file_name);
+
+    if let Some(mut existing) = read_metadata(paths, &md5)? {
+        let current_name = existing.effective_saved_name();
+        let current_path = project_dir.join(&current_name);
+        let fallback_path = project_dir.join(BINARY_NAME);
+        if current_path.is_file() || fallback_path.is_file() {
+            if requested_saved_name != BINARY_NAME
+                && !project_dir.join(&requested_saved_name).is_file()
+            {
+                let src = if current_path.is_file() {
+                    &current_path
+                } else {
+                    &fallback_path
+                };
+                fs::copy(src, project_dir.join(&requested_saved_name))?;
+                existing.saved_name = Some(requested_saved_name);
+                existing.file_name = file_name.to_string();
+            } else if existing.saved_name.is_none() && current_path.is_file() {
+                existing.saved_name = Some(current_name);
+            }
+            let mut next_options = existing.import_options.clone();
+            next_options.merge_from(import_options);
+            next_options.validate_complete()?;
+            if !reimport
+                && !existing.reimport_pending
+                && next_options != existing.import_options
+                && has_saved_internal_project(paths, &md5)
+            {
+                return Err(DomainError::invalid_argument(
+                    "reimport",
+                    "saved project already exists with different import options; \
+                     set reimport=true to replace it",
+                )
+                .into());
+            }
+            existing.import_options = next_options;
+            if reimport {
+                existing.reimport_pending = true;
+            }
+            return atomic_write(&metadata_path, &serde_json::to_vec(&existing)?);
+        }
     }
-    // A binary with metadata keeps its first display name.
-    let metadata = metadata.unwrap_or_else(|| BinaryMetadata {
-        file_name: file_name.to_string(),
-    });
+
+    let mut merged = ImportOptions::default();
+    merged.merge_from(import_options);
+    merged.validate_complete()?;
+    let target_path = project_dir.join(&requested_saved_name);
     let mut staged = tempfile::Builder::new()
         .prefix(".binary-")
         .suffix(".tmp")
@@ -146,10 +207,107 @@ pub fn persist_binary(paths: &McpPaths, source: &Path, md5: &str, file_name: &st
             ),
         })?;
     copy_verified(source, staged.as_file_mut(), &md5)?;
-    // Commit the binary and its directory entry before publication of the marker.
-    // A publication failure must not remove shared persistent paths.
-    persist_synced(staged, &binary_path)?;
+    persist_synced(staged, &target_path)?;
+    if requested_saved_name != BINARY_NAME {
+        let plain = project_dir.join(BINARY_NAME);
+        if !plain.exists() {
+            let _ = fs::hard_link(&target_path, &plain);
+        }
+    }
+    let metadata = BinaryMetadata {
+        file_name: file_name.to_string(),
+        saved_name: Some(requested_saved_name),
+        import_options: merged,
+        reimport_pending: reimport,
+    };
     atomic_write(&metadata_path, &serde_json::to_vec(&metadata)?)
+}
+
+/// Updates saved binary import flags or sets `reimport` for an `md5` session open.
+///
+/// # Errors
+///
+/// Fails when the binary is absent or the merged options have `compilerSpec` without `processor`.
+pub fn update_binary_import_options(
+    paths: &McpPaths,
+    md5: &str,
+    import_options: &ImportOptions,
+    reimport: bool,
+) -> Result<()> {
+    let md5 = normalize_md5(md5)?;
+    let project_dir = paths.project_dir(&md5);
+    let _lock = lock_binary(&project_dir, true)?;
+    let Some(mut metadata) = read_metadata(paths, &md5)? else {
+        import_options.validate_complete()?;
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before opening it"),
+        )
+        .into());
+    };
+    if import_options.is_empty() && !reimport {
+        return Ok(());
+    }
+    let mut next_options = metadata.import_options.clone();
+    next_options.merge_from(import_options);
+    next_options.validate_complete()?;
+    if !reimport
+        && !metadata.reimport_pending
+        && next_options != metadata.import_options
+        && has_saved_internal_project(paths, &md5)
+    {
+        return Err(DomainError::invalid_argument(
+            "reimport",
+            "saved project already exists with different import options; \
+             set reimport=true to replace it",
+        )
+        .into());
+    }
+    metadata.import_options = next_options;
+    if reimport {
+        metadata.reimport_pending = true;
+    }
+    atomic_write(
+        &project_dir.join(METADATA_NAME),
+        &serde_json::to_vec(&metadata)?,
+    )
+}
+
+/// Returns `true` when `projects/<md5>/ghidra` holds a saved internal `.gpr` project.
+fn has_saved_internal_project(paths: &McpPaths, md5: &str) -> bool {
+    let ghidra_root = paths.ghidra_project_root(md5);
+    ghidra_root.join("project.gpr").is_file() && ghidra_root.join("project.rep").is_dir()
+}
+
+/// Returns `true` when `binary.json` sets `reimport_pending`.
+pub fn is_reimport_pending(paths: &McpPaths, md5: &str) -> Result<bool> {
+    let md5 = normalize_md5(md5)?;
+    Ok(read_metadata(paths, &md5)?.is_some_and(|metadata| metadata.reimport_pending))
+}
+
+/// Removes `projects/<md5>/ghidra` and clears `reimport_pending` after the JVM stops.
+///
+/// # Errors
+///
+/// Fails if directory removal or metadata update fails.
+pub fn reset_binary_ghidra_project(paths: &McpPaths, md5: &str) -> Result<()> {
+    let md5 = normalize_md5(md5)?;
+    let project_dir = paths.project_dir(&md5);
+    let _lock = lock_binary(&project_dir, true)?;
+    let ghidra_root = paths.ghidra_project_root(&md5);
+    if ghidra_root.exists() {
+        fs::remove_dir_all(&ghidra_root)?;
+    }
+    if let Some(mut metadata) = read_metadata(paths, &md5)? {
+        if metadata.reimport_pending {
+            metadata.reimport_pending = false;
+            atomic_write(
+                &project_dir.join(METADATA_NAME),
+                &serde_json::to_vec(&metadata)?,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Masks sensitive server filesystem paths from error messages before exposure.
@@ -161,23 +319,26 @@ pub(crate) fn sanitize_error_path(err: &io::Error, path: &Path) -> String {
     } else {
         err_str
     };
+    sanitize_text_paths(&sanitized)
+}
+
+/// Masks absolute Unix and Windows filesystem paths in diagnostic text.
+pub(crate) fn sanitize_text_paths(raw: &str) -> String {
     let mut words = Vec::new();
-    for word in sanitized.split_whitespace() {
+    for word in raw.split_whitespace() {
         let trimmed =
-            word.trim_matches(|c: char| c == '\'' || c == '"' || c == '(' || c == ')' || c == ':');
-        if trimmed.starts_with('/')
-            || (trimmed.len() >= 3
-                && trimmed.as_bytes().get(1) == Some(&b':')
-                && (trimmed.as_bytes().get(2) == Some(&b'\\')
-                    || trimmed.as_bytes().get(2) == Some(&b'/')))
-        {
+            word.trim_matches(|c: char| matches!(c, '\'' | '"' | '(' | ')' | ':' | ',' | ';'));
+        let is_windows_abs = trimmed.len() >= 3
+            && trimmed.as_bytes().get(1) == Some(&b':')
+            && matches!(trimmed.as_bytes().get(2), Some(&b'\\' | &b'/'));
+        if trimmed.starts_with('/') || is_windows_abs {
             words.push(word.replace(trimmed, "<masked-path>"));
         } else {
             words.push(word.to_string());
         }
     }
     if words.is_empty() {
-        sanitized
+        raw.to_string()
     } else {
         words.join(" ")
     }
@@ -187,8 +348,6 @@ pub(crate) fn sanitize_error_path(err: &io::Error, path: &Path) -> String {
 /// Project preparation uses a shared lock.
 pub(crate) fn lock_binary(project_dir: &Path, exclusive: bool) -> Result<File> {
     fs::create_dir_all(project_dir)?;
-    // Keep the lock file in place. If you remove it, a later writer can lock a
-    // different file while another writer still holds or waits on this one.
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -265,7 +424,6 @@ fn read_metadata(paths: &McpPaths, md5: &str) -> Result<Option<BinaryMetadata>> 
                 validate_file_name(&metadata.file_name)?;
                 Ok(Some(metadata))
             }
-            // Older versions can leave metadata that is not complete after a shutdown.
             Err(_) => Ok(None),
         },
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -273,21 +431,42 @@ fn read_metadata(paths: &McpPaths, md5: &str) -> Result<Option<BinaryMetadata>> 
     }
 }
 
-/// All the data that the daemon needs to launch Ghidra for one saved binary.
+/// Selects how `analyzeHeadless` opens or imports the target session.
+#[derive(Debug, Clone)]
+pub enum LaunchMode {
+    /// Import a persisted binary with optional processor, compiler, loader, and base address.
+    ImportBinary {
+        /// Launch path to the persisted binary (`binary` or `binary.<ext>`).
+        input_path: PathBuf,
+        /// Validated import flags.
+        options: ImportOptions,
+    },
+    /// Open a saved internal or attached `.gpr` project with `OpenSavedProject.java`.
+    OpenSaved {
+        /// True when the target is an external `.gpr` project.
+        attached_gpr: bool,
+        /// Optional target program name or project path.
+        program_name: Option<String>,
+        /// Crash recovery backup directory under `projects/<md5>/`.
+        backup_dir: PathBuf,
+    },
+}
+
+/// All the data that the daemon needs to launch Ghidra for one session.
 #[derive(Debug, Clone)]
 pub struct PreparedProject {
-    /// The binary, and the session, of the launch.
+    /// The 32-hex session identifier.
     pub md5: String,
-    /// The display name of the binary.
+    /// The display file name.
     pub file_name: String,
-    /// The project root for `analyzeHeadless`. On Unix, it is the launch alias.
+    /// The project root for `analyzeHeadless`. On Unix, it is a non-hidden alias.
     pub ghidra_launch_root: PathBuf,
-    /// The saved binary. Ghidra imports it if no project exists.
-    pub input_path: PathBuf,
+    /// The Ghidra project name (`project` for binaries, `<stem>` for `.gpr`).
+    pub ghidra_project_name: String,
     /// A new 256-bit bridge credential for this launch.
     pub agent_token: String,
-    /// `true` to open the saved program with recovery enabled, `false` to import the binary.
-    pub existing_project: bool,
+    /// Import vs saved-project launch mode.
+    pub launch_mode: LaunchMode,
 }
 
 impl PreparedProject {
@@ -299,22 +478,28 @@ impl PreparedProject {
             self.agent_token.clone(),
         )
     }
+
+    /// Returns `true` when this launch performs a fresh binary import.
+    pub fn is_fresh_binary_import(&self) -> bool {
+        matches!(self.launch_mode, LaunchMode::ImportBinary { .. })
+    }
 }
 
-/// Prepares the launch of Ghidra for a saved binary. It makes the project and
-/// log directories. It also decides if Ghidra opens the project again or
-/// imports the binary.
+/// Prepares the launch of Ghidra for a saved binary or an attached `.gpr` project.
 ///
 /// # Errors
 ///
-/// Fails if the binary is not saved. Also fails if the project directory
-/// contains an object that Ghidra cannot open as a project. The function does
-/// not change that directory.
+/// Fails if the binary or `.gpr` project is absent, locked, or corrupted.
 pub fn prepare_project(paths: &McpPaths, md5: &str) -> Result<PreparedProject> {
     paths.ensure_layout()?;
     let md5 = normalize_md5(md5)?;
     let project_dir = paths.project_dir(&md5);
     let _lock = lock_binary(&project_dir, false)?;
+
+    if let Some(attached) = gpr::read_attached_metadata(paths, &md5)? {
+        return gpr::prepare_attached_gpr(paths, &md5, attached);
+    }
+
     let Some(metadata) = read_metadata(paths, &md5)? else {
         return Err(DomainError::missing_target(
             &md5,
@@ -331,11 +516,14 @@ pub fn prepare_project(paths: &McpPaths, md5: &str) -> Result<PreparedProject> {
         OpenOptions::new().create(true).append(true).open(log)?;
     }
 
-    // These files identify the project layout, not its database health. The
-    // saved-program script permits Ghidra to open it with recovery enabled.
     let existing_project =
         ghidra_root.join("project.gpr").is_file() && ghidra_root.join("project.rep").is_dir();
-    let has_binary = project_dir.join(BINARY_NAME).is_file();
+    let saved_name = if project_dir.join(metadata.effective_saved_name()).is_file() {
+        metadata.effective_saved_name()
+    } else {
+        BINARY_NAME.to_string()
+    };
+    let has_binary = project_dir.join(&saved_name).is_file();
     if !existing_project && !has_binary {
         return Err(DomainError::missing_target(
             md5.clone(),
@@ -353,26 +541,80 @@ pub fn prepare_project(paths: &McpPaths, md5: &str) -> Result<PreparedProject> {
     }
     fs::create_dir_all(&ghidra_root)?;
 
+    let launch_mode = if existing_project {
+        LaunchMode::OpenSaved {
+            attached_gpr: false,
+            program_name: None,
+            backup_dir: paths.recovery_backups_dir(&md5),
+        }
+    } else {
+        metadata.import_options.validate_complete()?;
+        LaunchMode::ImportBinary {
+            input_path: paths.binary_launch_file(&md5, &saved_name),
+            options: metadata.import_options,
+        }
+    };
+
     Ok(PreparedProject {
         ghidra_launch_root: paths.ghidra_launch_root(&md5),
-        input_path: paths.binary_launch_path(&md5),
+        ghidra_project_name: INTERNAL_PROJECT_NAME.to_string(),
         file_name: metadata.file_name,
         agent_token: format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
-        existing_project,
+        launch_mode,
         md5,
     })
 }
 
-/// Removes `ghidra/`, `checkpoints/`, and `recovery-backups/` for one binary while
-/// it keeps `binary`, `binary.json`, and `binary.lock`.
+/// Checks that `md5` has a saved binary that [`reset_project`] can reset.
 ///
 /// # Errors
 ///
-/// Fails if `md5` is invalid, if `binary` or `binary.json` is absent, or if a
-/// file deletion fails.
+/// Fails if `md5` is an attached `.gpr` project or has no saved binary.
+pub fn ensure_resettable_binary(paths: &McpPaths, md5: &str) -> Result<()> {
+    let md5 = normalize_md5(md5)?;
+    if is_attached_gpr_session(paths, &md5)? {
+        return Err(DomainError::invalid_argument(
+            "md5",
+            "session reset is not supported for attached .gpr projects",
+        )
+        .into());
+    }
+    let project_dir = paths.project_dir(&md5);
+    let Some(metadata) = read_metadata(paths, &md5)? else {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before resetting it"),
+        )
+        .into());
+    };
+    let saved_name = metadata.effective_saved_name();
+    if !project_dir.join(&saved_name).is_file() && !project_dir.join(BINARY_NAME).is_file() {
+        return Err(DomainError::missing_target(
+            &md5,
+            format!("binary {md5} is not available; upload the binary before resetting it"),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Removes `ghidra/`, `checkpoints/`, and `recovery-backups/` for one binary while
+/// it keeps `binary` (and `binary.<ext>`), `binary.json`, and `binary.lock`.
+///
+/// # Errors
+///
+/// Fails if `md5` is invalid or an attached `.gpr` session, if `binary` or
+/// `binary.json` is absent, or if a file deletion fails.
 pub fn reset_project(paths: &McpPaths, md5: &str) -> Result<String> {
     paths.ensure_layout()?;
     let md5 = normalize_md5(md5)?;
+    if is_attached_gpr_session(paths, &md5)? {
+        return Err(DomainError::invalid_argument(
+            "md5",
+            "session reset is not supported for attached .gpr projects",
+        )
+        .into());
+    }
     let project_dir = paths.project_dir(&md5);
     if !project_dir.is_dir() {
         return Err(DomainError::missing_target(
@@ -382,13 +624,14 @@ pub fn reset_project(paths: &McpPaths, md5: &str) -> Result<String> {
         .into());
     }
     let _lock = lock_binary(&project_dir, true)?;
-    let metadata = read_metadata(paths, &md5)?.ok_or_else(|| {
+    let mut metadata = read_metadata(paths, &md5)?.ok_or_else(|| {
         DomainError::missing_target(
             &md5,
             format!("binary {md5} is not available; upload the binary before resetting it"),
         )
     })?;
-    if !project_dir.join(BINARY_NAME).is_file() {
+    let saved_name = metadata.effective_saved_name();
+    if !project_dir.join(&saved_name).is_file() && !project_dir.join(BINARY_NAME).is_file() {
         return Err(DomainError::missing_target(
             &md5,
             format!("binary {md5} is not available; upload the binary before resetting it"),
@@ -412,17 +655,26 @@ pub fn reset_project(paths: &McpPaths, md5: &str) -> Result<String> {
             remove_entry(&entry.path())?;
             continue;
         };
-        if matches!(name_str, BINARY_NAME | METADATA_NAME | BINARY_LOCK_NAME) {
+        if matches!(name_str, BINARY_NAME | METADATA_NAME | BINARY_LOCK_NAME)
+            || name_str == saved_name
+        {
             continue;
         }
         remove_entry(&entry.path())?;
+    }
+    if metadata.reimport_pending {
+        metadata.reimport_pending = false;
+        atomic_write(
+            &project_dir.join(METADATA_NAME),
+            &serde_json::to_vec(&metadata)?,
+        )?;
     }
     sync_directory(&project_dir)?;
     Ok(metadata.file_name)
 }
 
-/// Removes `projects/<md5>/`, `sessions/<md5>/`, and `logs/<md5>/` for one binary.
-/// Returns `true` if at least one directory existed on disk.
+/// Removes `projects/<md5>/`, `sessions/<md5>/`, `logs/<md5>/`, and any attached
+/// `.gpr` symbolic link for one session. Returns `true` if at least one directory existed.
 ///
 /// # Errors
 ///
@@ -462,6 +714,8 @@ pub fn delete_project(paths: &McpPaths, md5: &str) -> Result<bool> {
             sync_directory(&paths.projects_dir)?;
         }
     }
+
+    paths.remove_gpr_launch_alias(&md5)?;
 
     for dir in [&session_dir, &log_dir] {
         if dir.exists() {
@@ -515,3 +769,6 @@ fn remove_dir_if_exists(path: &Path) -> Result<()> {
         .into()),
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -14,7 +14,9 @@ use crate::checkpoint::{
 };
 use crate::error::DomainError;
 use crate::model::{job_kind, JobStatus, SessionRecord};
-use crate::project::{delete_project, normalize_md5, reset_project};
+use crate::project::{
+    delete_project, ensure_resettable_binary, is_attached_gpr_session, normalize_md5, reset_project,
+};
 use crate::state::McpState;
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -68,6 +70,13 @@ pub async fn checkpoint_create(
 ) -> Result<(String, Value)> {
     let md5 = normalize_md5(md5)?;
     let _guards = lock_session_mutation(state, &md5).await?;
+    if is_attached_gpr_session(&state.paths, &md5)? {
+        return Err(DomainError::invalid_argument(
+            "md5",
+            "project checkpoints are not supported for attached .gpr projects",
+        )
+        .into());
+    }
     let mut saved_live = false;
     if let Some(session) = state.find_session(&md5) {
         if session.status.is_launching() {
@@ -242,14 +251,13 @@ pub async fn reset(
         if open && state.is_shutting_down() {
             return Err(DomainError::ShuttingDown.into());
         }
-        let project_dir = state.paths.project_dir(&md5);
-        if !project_dir.join("binary").is_file() || !project_dir.join("binary.json").is_file() {
-            return Err(DomainError::missing_target(
-                &md5,
-                format!("binary {md5} is not available; upload the binary before resetting it"),
-            )
-            .into());
-        }
+        let paths_check = state.paths.clone();
+        let md5_check = md5.clone();
+        tokio::task::spawn_blocking(move || ensure_resettable_binary(&paths_check, &md5_check))
+            .await
+            .map_err(|err| DomainError::Internal {
+                message: format!("project reset validation task failed: {err}"),
+            })??;
 
         force_stop_without_save(state, &md5, "session reset").await;
 
