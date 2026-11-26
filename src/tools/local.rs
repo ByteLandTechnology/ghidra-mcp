@@ -8,6 +8,7 @@
 use super::catalog::{Effects, Md5Rule};
 use super::{parse, Daemon, Handler, Output, Request};
 use crate::error::DomainError;
+use crate::import::{is_gpr_path, OpenOptions};
 use crate::model::{JobStatus, SessionRecord};
 use crate::{analysis, session};
 use anyhow::Result;
@@ -75,9 +76,9 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         domain: "session",
         name: "open",
         description: concat!(
-            "Open or reuse a binary session without auto-analysis. Set md5 to load an active ",
-            "or saved project, or params.path to import a daemon-local file. Returns at once ",
-            "by default. Set wait=true to wait until ready. Upload remote files with ",
+            "Open or reuse a session without auto-analysis. Set md5 to load a saved session, or ",
+            "params.path to import a daemon-local binary or attach a local .gpr project. Returns ",
+            "at once by default. Set wait=true to wait until ready. Upload remote files with ",
             "ghidra_upload prepare."
         ),
         schema: || {
@@ -85,6 +86,31 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
                 "type": "object",
                 "properties": {
                     "path": { "type": "string" },
+                    "programName": {
+                        "type": "string",
+                        "description": "Program name or folder path in an attached .gpr project"
+                    },
+                    "processor": {
+                        "type": "string",
+                        "description": "Ghidra language ID for -processor during binary import"
+                    },
+                    "compilerSpec": {
+                        "type": "string",
+                        "description": "Ghidra compiler specification ID for -cspec"
+                    },
+                    "loader": {
+                        "type": "string",
+                        "description": "Ghidra loader class name for -loader"
+                    },
+                    "baseAddress": {
+                        "type": "string",
+                        "description": "Hexadecimal load address for -loader-baseAddr"
+                    },
+                    "reimport": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Replace the saved binary project and run -import again"
+                    },
                     "wait": { "type": "boolean", "default": false },
                     "timeoutMs": { "type": "integer", "minimum": 1 }
                 },
@@ -369,6 +395,27 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
                         "type": "integer",
                         "minimum": 1,
                         "description": "The exact file size in bytes"
+                    },
+                    "processor": {
+                        "type": "string",
+                        "description": "Ghidra language ID for -processor during binary import"
+                    },
+                    "compilerSpec": {
+                        "type": "string",
+                        "description": "Ghidra compiler specification ID for -cspec"
+                    },
+                    "loader": {
+                        "type": "string",
+                        "description": "Ghidra loader class name for -loader"
+                    },
+                    "baseAddress": {
+                        "type": "string",
+                        "description": "Hexadecimal load address for -loader-baseAddr"
+                    },
+                    "reimport": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Replace the saved binary project and run -import again"
                     }
                 },
                 "required": ["fileName", "size"],
@@ -528,8 +575,21 @@ fn millis_or(millis: Option<u64>, default: Duration) -> Duration {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenArgs {
-    /// A file on the daemon host.
+    /// A binary or `.gpr` file on the daemon host.
     path: Option<String>,
+    /// Target program name or project path inside an attached `.gpr` project.
+    program_name: Option<String>,
+    /// Ghidra language ID for `-processor`.
+    processor: Option<String>,
+    /// Ghidra compiler specification ID for `-cspec`.
+    compiler_spec: Option<String>,
+    /// Ghidra loader class name for `-loader`.
+    loader: Option<String>,
+    /// Hexadecimal base address for `-loader-baseAddr`.
+    base_address: Option<String>,
+    /// Re-import the binary and discard its saved internal project.
+    #[serde(default)]
+    reimport: bool,
     /// Wait until the session is ready.
     #[serde(default)]
     wait: bool,
@@ -708,9 +768,17 @@ fn shutdown_daemon(daemon: &Daemon, request: Request) -> Result<Output> {
     ))
 }
 
-/// Runs `ghidra_session open`: imports a file on the daemon host, or opens a saved binary.
+/// Runs `ghidra_session open`: imports a binary, attaches a `.gpr` project, or reopens an MD5.
 async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
     let args: OpenArgs = parse(&request.label, request.params)?;
+    let options = OpenOptions::from_raw(
+        args.processor.as_deref(),
+        args.compiler_spec.as_deref(),
+        args.loader.as_deref(),
+        args.base_address.as_deref(),
+        args.reimport,
+        args.program_name.as_deref(),
+    )?;
     let state = &daemon.state;
     let wait = args
         .wait
@@ -718,26 +786,12 @@ async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
     match (args.path, request.md5) {
         (Some(path), None) => {
             let raw = PathBuf::from(path);
-            let path = raw.canonicalize().map_err(|err| {
-                DomainError::missing_target(
-                    "path",
-                    format!("target path cannot be resolved: {err}"),
-                )
-            })?;
-            if !path.is_file() {
-                return Err(
-                    DomainError::missing_target("path", "target path is not a file").into(),
-                );
-            }
-            let path_buf = path.clone();
-            let md5 = tokio::task::spawn_blocking(move || crate::ghidra::file_md5(&path_buf))
-                .await
-                .map_err(|err| DomainError::Internal {
-                    message: format!("file_md5 task panicked: {err}"),
-                })??;
-            session::open(state, md5, Some(&path), wait).await
+            options.validate_for_target(is_gpr_path(&raw))?;
+            session::open_with_options(state, None, Some(&raw), options, wait).await
         }
-        (None, Some(md5)) => session::open(state, md5, None, wait).await,
+        (None, Some(md5)) => {
+            session::open_with_options(state, Some(md5), None, options, wait).await
+        }
         (None, None) => Err(DomainError::invalid_argument(
             "path/md5",
             "`ghidra_session open` requires either params.path or md5",
