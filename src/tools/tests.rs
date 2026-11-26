@@ -193,6 +193,11 @@ fn session_md5_is_never_a_parameter() {
     assert!(rule("session", "open") == Md5Rule::Optional);
     assert!(rule("session", "get") == Md5Rule::Required);
     assert!(rule("session", "close") == Md5Rule::Required);
+    assert!(rule("session", "checkpoint.create") == Md5Rule::Required);
+    assert!(rule("session", "checkpoint.list") == Md5Rule::Required);
+    assert!(rule("session", "checkpoint.restore") == Md5Rule::Required);
+    assert!(rule("session", "reset") == Md5Rule::Required);
+    assert!(rule("session", "delete") == Md5Rule::Required);
     assert!(rule("session", "list") == Md5Rule::Absent);
     assert!(rule("upload", "prepare") == Md5Rule::Required);
     assert!(rule("job", "wait") == Md5Rule::Absent);
@@ -859,3 +864,5 @@ fn list_scopes_and_relation_schemas_are_published() {
         json!("function")
     );
 }
+
+mod checkpoints;
