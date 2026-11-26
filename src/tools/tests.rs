@@ -588,6 +588,108 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     .expect("shutdown starts after the reply");
 }
 
+/// Checks `ghidra_session open` and `ghidra_upload prepare` validation for import and `.gpr` flags.
+#[tokio::test]
+async fn validates_import_flags_and_gpr_options() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let gpr_dir = root.path().join("sample");
+    std::fs::create_dir_all(gpr_dir.join("board.rep")).unwrap();
+    let gpr_path = gpr_dir.join("board.gpr");
+    std::fs::write(&gpr_path, "<project/>").unwrap();
+    let bin_path = root.path().join("fw.bin");
+    std::fs::write(&bin_path, [1u8, 2, 3, 4]).unwrap();
+
+    let (_, open_help) = help::run(object(
+        json!({ "domain": "ghidra_session", "operation": "open" }),
+    ))
+    .unwrap();
+    for field in [
+        "programName",
+        "processor",
+        "compilerSpec",
+        "loader",
+        "baseAddress",
+        "reimport",
+    ] {
+        assert!(
+            open_help["inputSchema"]["properties"][field].is_object(),
+            "absent field {field}"
+        );
+    }
+
+    let invalid_open_cases = [
+        (
+            json!({ "path": bin_path, "processor": "invalid" }),
+            "processor",
+        ),
+        (
+            json!({ "path": bin_path, "compilerSpec": "default" }),
+            "compilerSpec requires processor",
+        ),
+        (
+            json!({ "path": bin_path, "loader": "../BadLoader" }),
+            "loader",
+        ),
+        (
+            json!({ "path": bin_path, "baseAddress": "0xZZ" }),
+            "baseAddress",
+        ),
+        (
+            json!({ "path": bin_path, "programName": "app" }),
+            "programName",
+        ),
+        (
+            json!({ "path": gpr_path, "processor": "ARM:LE:32:Cortex" }),
+            "not valid when attaching a .gpr project",
+        ),
+        (
+            json!({ "path": gpr_path, "reimport": true }),
+            "not valid when attaching a .gpr project",
+        ),
+        (
+            json!({ "path": gpr_path, "programName": "../escape" }),
+            "programName",
+        ),
+    ];
+    for (params, expected) in invalid_open_cases {
+        let err = super::call(
+            &daemon,
+            "ghidra_session",
+            object(json!({ "operation": "open", "params": params })),
+        )
+        .await
+        .unwrap_err();
+        assert!(reason(&err).contains(expected), "{params}: {err:#}");
+    }
+
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let invalid_upload_cases = [
+        (
+            json!({ "fileName": "fw.bin", "size": 4, "compilerSpec": "gcc" }),
+            "compilerSpec requires processor",
+        ),
+        (
+            json!({ "fileName": "fw.bin", "size": 4, "baseAddress": "-0x100" }),
+            "baseAddress",
+        ),
+        (
+            json!({ "fileName": "board.gpr", "size": 4 }),
+            ".gpr projects",
+        ),
+    ];
+    for (params, expected) in invalid_upload_cases {
+        let err = super::call(
+            &daemon,
+            "ghidra_upload",
+            object(json!({ "operation": "prepare", "md5": md5, "params": params })),
+        )
+        .await
+        .unwrap_err();
+        assert!(reason(&err).contains(expected), "{params}: {err:#}");
+    }
+}
+
 /// Makes sure that `params` accepts `null` and a JSON object string.
 #[tokio::test]
 async fn params_accepts_null_and_json_object_string() {
@@ -676,7 +778,10 @@ fn unknown_parameter_lists_valid_parameters_and_help() {
         "{upload_reason}"
     );
     assert!(
-        upload_reason.contains("Valid parameters: `fileName`, `size`."),
+        upload_reason.contains(concat!(
+            "Valid parameters: `baseAddress`, `compilerSpec`, `fileName`, ",
+            "`loader`, `processor`, `reimport`, `size`."
+        )),
         "{upload_reason}"
     );
     assert!(upload_reason.contains("ghidra_help"), "{upload_reason}");
@@ -768,115 +873,5 @@ async fn bridge_call_moves_envelope_result_without_clones() {
     );
 }
 
-/// Makes sure that `window.get` and `control_flow_graph.get` go to the bridge.
-#[test]
-fn composite_view_and_graph_operations_use_their_bridge_methods() {
-    let md5 = "0123456789abcdef0123456789abcdef";
-
-    let (window_op, window_req) = prepare(
-        "ghidra_listing",
-        object(json!({
-            "operation": "window.get",
-            "md5": md5,
-            "params": {
-                "filter": { "kind": "all" },
-                "page": { "limit": 80 },
-                "scan": { "range": { "start": "ram:00401000" }, "timeout_ms": 15000 }
-            }
-        })),
-    )
-    .expect("valid listing window call");
-    match &window_op.route {
-        Route::Bridge(method) => assert_eq!(method, "listing_window.get"),
-        Route::Local(_) => panic!("ghidra_listing window.get must go to the bridge"),
-    }
-    assert!(window_op.effects.read_only);
-    assert_eq!(window_req.md5.as_deref(), Some(md5));
-
-    let (cfg_op, cfg_req) = prepare(
-        "ghidra_function",
-        object(json!({
-            "operation": "control_flow_graph.get",
-            "md5": md5,
-            "params": {
-                "selector": { "entry": "ram:00401000" },
-                "max_instructions": 2048,
-                "scan": { "timeout_ms": 20000 }
-            }
-        })),
-    )
-    .expect("valid control_flow_graph.get call");
-    match &cfg_op.route {
-        Route::Bridge(method) => assert_eq!(method, "control_flow_graph.get"),
-        Route::Local(_) => panic!("ghidra_function control_flow_graph.get must go to the bridge"),
-    }
-    assert!(cfg_op.effects.read_only);
-    assert_eq!(cfg_req.params["selector"]["entry"], "ram:00401000");
-
-    let cfg_missing = prepare(
-        "ghidra_function",
-        object(json!({
-            "operation": "control_flow_graph.get",
-            "md5": md5,
-            "params": {}
-        })),
-    )
-    .err()
-    .expect("control_flow_graph.get requires selector");
-    assert!(reason(&cfg_missing).contains("requires parameter `selector`"));
-}
-
-/// Makes sure that reference context queries and help entries match composite schemas.
-#[test]
-fn reference_context_and_composite_help_entries_match_catalog() {
-    let md5 = "0123456789abcdef0123456789abcdef";
-
-    let (ref_op, ref_req) = prepare(
-        "ghidra_reference",
-        object(json!({
-            "operation": "context.list",
-            "md5": md5,
-            "params": {
-                "filter": { "entry": "ram:00401000", "type": "UNCONDITIONAL_CALL" },
-                "page": { "limit": 50 },
-                "scan": { "timeout_ms": 10000 }
-            }
-        })),
-    )
-    .expect("valid reference context.list call");
-    match &ref_op.route {
-        Route::Bridge(method) => assert_eq!(method, "reference_context.list"),
-        Route::Local(_) => panic!("ghidra_reference context.list must go to the bridge"),
-    }
-    assert!(ref_op.effects.read_only);
-    assert_eq!(ref_req.params["filter"]["entry"], "ram:00401000");
-
-    let ref_missing = prepare(
-        "ghidra_reference",
-        object(json!({
-            "operation": "context.list",
-            "md5": md5,
-            "params": {}
-        })),
-    )
-    .err()
-    .expect("context.list requires filter");
-    assert!(reason(&ref_missing).contains("requires parameter `filter`"));
-
-    for (domain_name, op_name) in [
-        ("ghidra_listing", "window.get"),
-        ("ghidra_function", "control_flow_graph.get"),
-        ("ghidra_reference", "context.list"),
-    ] {
-        let (_, doc) = help::run(object(json!({
-            "domain": domain_name,
-            "operation": op_name
-        })))
-        .expect("help entry");
-        assert_eq!(doc["md5"], "required");
-        assert_eq!(doc["effects"]["read_only"], true);
-        assert_eq!(doc["inputSchema"]["type"], "object");
-    }
-}
-
 mod checkpoints;
+mod composite;
