@@ -3,8 +3,8 @@
 
 //! Builds the Java bridge submodule with Gradle.
 //!
-//! The bridge outputs `ghidra-bridge.jar` and `Bridge.java` in
-//! `bridge/build/ghidra-script/`. Rust code embeds these two files.
+//! The bridge outputs `ghidra-bridge.jar`, `Bridge.java` and `GhidraMcp.java` in
+//! `bridge/build/ghidra-script/`. Rust code embeds these three files.
 
 use std::env;
 use std::fs;
@@ -16,17 +16,21 @@ use crate::workspace;
 /// The directory of bridge distribution files, relative to the workspace root.
 const BRIDGE_DIST: &str = "bridge/build/ghidra-script";
 
-/// Returns the paths of the bridge JAR and the loader script.
-pub(crate) fn artifact_paths() -> Result<(PathBuf, PathBuf), String> {
+/// Returns the paths of the bridge JAR and the two launcher scripts.
+pub(crate) fn artifact_paths() -> Result<(PathBuf, PathBuf, PathBuf), String> {
     let root = workspace::root()?;
     let dist = root.join(BRIDGE_DIST);
-    Ok((dist.join("ghidra-bridge.jar"), dist.join("Bridge.java")))
+    Ok((
+        dist.join("ghidra-bridge.jar"),
+        dist.join("Bridge.java"),
+        dist.join("GhidraMcp.java"),
+    ))
 }
 
 /// Returns `true` if all bridge artifacts exist.
 pub(crate) fn artifacts_exist() -> Result<bool, String> {
-    let (jar, script) = artifact_paths()?;
-    Ok(jar.is_file() && script.is_file())
+    let (jar, bridge_script, mcp_script) = artifact_paths()?;
+    Ok(jar.is_file() && bridge_script.is_file() && mcp_script.is_file())
 }
 
 /// Makes sure that the bridge artifacts exist. Builds them if they do not exist.
@@ -53,20 +57,19 @@ pub(crate) fn build(force: bool) -> Result<(), String> {
         ));
     }
 
-    let (jar_path, script_path) = artifact_paths()?;
-    if !force && jar_path.is_file() && script_path.is_file() {
+    let (jar_path, bridge_script_path, mcp_script_path) = artifact_paths()?;
+    if !force && jar_path.is_file() && bridge_script_path.is_file() && mcp_script_path.is_file() {
         println!("Bridge artifacts are up to date.");
         return Ok(());
     }
 
     let override_jar = env::var_os("GHIDRA_MCP_BRIDGE_JAR").map(PathBuf::from);
-    let task = if override_jar.is_some() {
-        ":launcher:generateBridgeScript"
+    if override_jar.is_some() {
+        run_gradle(&bridge_dir, ":launcher:generateBridgeScript")?;
+        run_gradle(&bridge_dir, ":launcher:generateMcpScript")?;
     } else {
-        "buildGhidraScript"
-    };
-
-    run_gradle(&bridge_dir, task)?;
+        run_gradle(&bridge_dir, "buildGhidraScript")?;
+    }
 
     if let Some(src_jar) = override_jar {
         let src_jar = if src_jar.is_absolute() {
@@ -90,20 +93,26 @@ pub(crate) fn build(force: bool) -> Result<(), String> {
                 jar_path.display()
             )
         })?;
-        let generated_script =
-            bridge_dir.join("modules/launcher/build/generated/scripts/Bridge.java");
-        if generated_script.is_file() {
-            fs::copy(&generated_script, &script_path).map_err(|err| {
-                format!(
-                    "cannot copy {} to {}: {err}",
-                    generated_script.display(),
-                    script_path.display()
-                )
-            })?;
+        for (name, destination) in [
+            ("Bridge.java", &bridge_script_path),
+            ("GhidraMcp.java", &mcp_script_path),
+        ] {
+            let generated = bridge_dir
+                .join("modules/launcher/build/generated/scripts")
+                .join(name);
+            if generated.is_file() {
+                fs::copy(&generated, destination).map_err(|err| {
+                    format!(
+                        "cannot copy {} to {}: {err}",
+                        generated.display(),
+                        destination.display()
+                    )
+                })?;
+            }
         }
     }
 
-    if !jar_path.is_file() || !script_path.is_file() {
+    if !jar_path.is_file() || !bridge_script_path.is_file() || !mcp_script_path.is_file() {
         return Err(format!(
             "Gradle build succeeded, but artifacts are missing in {}",
             root.join(BRIDGE_DIST).display()

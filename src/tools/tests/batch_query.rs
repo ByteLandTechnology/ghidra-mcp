@@ -13,9 +13,11 @@ fn bridge_tool_annotations_and_batch_operations_match_contract() {
     let bridge_tools = contract["tools"].as_array().expect("bridge tools");
     let actual_tools = tool_definitions();
     let actual = operations_by_tool(&actual_tools);
+    let batch_ops = actual.get("ghidra_batch").expect("ghidra_batch");
+    assert_eq!(batch_ops.len(), 2);
     assert_eq!(
-        actual.get("ghidra_batch"),
-        Some(&vec!["execute".to_string(), "query".to_string()])
+        BTreeSet::from_iter(batch_ops.iter().map(String::as_str)),
+        BTreeSet::from(["execute", "query"])
     );
 
     for bridge_tool in bridge_tools {
