@@ -75,9 +75,9 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         domain: "session",
         name: "open",
         description: concat!(
-            "Open or reuse a binary session without auto-analysis. Set md5 to load an active ",
-            "or saved project, or params.path to import a daemon-local file. Returns at once ",
-            "by default. Set wait=true to wait until ready. Upload remote files with ",
+            "Open or reuse a session without auto-analysis. Set md5 to load a saved session, or ",
+            "params.path to import a daemon-local binary or attach a local .gpr project. Returns ",
+            "at once by default. Set wait=true to wait until ready. Upload remote files with ",
             "ghidra_upload prepare."
         ),
         schema: || {
@@ -85,6 +85,31 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
                 "type": "object",
                 "properties": {
                     "path": { "type": "string" },
+                    "programName": {
+                        "type": "string",
+                        "description": "Program name or folder path in an attached .gpr project"
+                    },
+                    "processor": {
+                        "type": "string",
+                        "description": "Ghidra language ID for -processor during binary import"
+                    },
+                    "compilerSpec": {
+                        "type": "string",
+                        "description": "Ghidra compiler specification ID for -cspec"
+                    },
+                    "loader": {
+                        "type": "string",
+                        "description": "Ghidra loader class name for -loader"
+                    },
+                    "baseAddress": {
+                        "type": "string",
+                        "description": "Hexadecimal load address for -loader-baseAddr"
+                    },
+                    "reimport": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Replace the saved binary project and run -import again"
+                    },
                     "wait": { "type": "boolean", "default": false },
                     "timeoutMs": { "type": "integer", "minimum": 1 }
                 },
@@ -404,6 +429,27 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
                         "type": "integer",
                         "minimum": 1,
                         "description": "The exact file size in bytes"
+                    },
+                    "processor": {
+                        "type": "string",
+                        "description": "Ghidra language ID for -processor during binary import"
+                    },
+                    "compilerSpec": {
+                        "type": "string",
+                        "description": "Ghidra compiler specification ID for -cspec"
+                    },
+                    "loader": {
+                        "type": "string",
+                        "description": "Ghidra loader class name for -loader"
+                    },
+                    "baseAddress": {
+                        "type": "string",
+                        "description": "Hexadecimal load address for -loader-baseAddr"
+                    },
+                    "reimport": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Replace the saved binary project and run -import again"
                     }
                 },
                 "required": ["fileName", "size"],
@@ -563,8 +609,21 @@ fn millis_or(millis: Option<u64>, default: Duration) -> Duration {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenArgs {
-    /// A file on the daemon host.
+    /// A binary or `.gpr` file on the daemon host.
     path: Option<String>,
+    /// Target program name or project path inside an attached `.gpr` project.
+    program_name: Option<String>,
+    /// Ghidra language ID for `-processor`.
+    processor: Option<String>,
+    /// Ghidra compiler specification ID for `-cspec`.
+    compiler_spec: Option<String>,
+    /// Ghidra loader class name for `-loader`.
+    loader: Option<String>,
+    /// Hexadecimal base address for `-loader-baseAddr`.
+    base_address: Option<String>,
+    /// Re-import the binary and discard its saved internal project.
+    #[serde(default)]
+    reimport: bool,
     /// Wait until the session is ready.
     #[serde(default)]
     wait: bool,

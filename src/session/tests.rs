@@ -582,7 +582,7 @@ async fn attach_wait_and_close_send_shutdown_and_invalidate_token() {
     let address = listener.local_addr().unwrap();
     let ws_url = format!("ws://{address}{AGENT_WS_PATH}");
     let state = test_state_with_ws_url(root.path(), ws_url);
-    std::fs::create_dir_all(&state.paths.tmp_dir).unwrap();
+    fs::create_dir_all(&state.paths.tmp_dir).unwrap();
     let uploads = crate::upload::UploadService::new(
         state.clone(),
         [address.to_string(), format!("localhost:{}", address.port())],

@@ -45,6 +45,8 @@ MCP 客户端通过 stdio 或 HTTP 连接守护进程。
 - **用 MD5 标识会话。** 守护进程重用会话，或重新打开已保存的分析。
 - **持久的会话和作业。** 客户端断开连接后，会话和分析作业继续运行。
 - **远程上传。** 不在守护进程主机上的客户端通过单独的 HTTP 端点发送二进制文件。
+- **原始固件导入。** 守护进程支持附带处理器、编译器规范、加载器和基址标志导入 `.bin`、`.hex`、`.ihex` 和 `.srec` 文件。
+- **本地 `.gpr` 项目。** 守护进程就地附加本地 Ghidra `.gpr` 项目，保留其自定义内存映射。
 - **完整的 Ghidra 访问。** Java 桥接提供程序数据、函数、反编译、符号、引用、内存和注释。
 - **单个可执行文件。** 可执行文件包含桥接 JAR 及其启动脚本。
 - **后台作业。** `ghidra_job list`、`ghidra_job get` 和 `ghidra_job wait` 监视长时间运行的分析。
@@ -286,6 +288,81 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
 | 参数无效。 | 用法输出到 stderr。 | 2 |
 | `--help` 或 `--version`。 | 文本输出到 stdout。 | 0 |
 
+### 导入原始固件
+
+`.bin`、`.hex`、`.ihex` 和 `.srec` 等无文件头固件不包含架构文件头。
+您可以向 `ghidra_session open`、`ghidra_upload prepare` 或 `ghidra-mcp session open` 传入可选的导入标志：
+
+| MCP `params` 字段 | CLI 标志 | 用途 |
+| --- | --- | --- |
+| `processor` | `--processor <ID>` | 用于 `-processor` 的 Ghidra 语言 ID，例如 `ARM:LE:32:Cortex`。 |
+| `compilerSpec` | `--compiler-spec <ID>` | 用于 `-cspec` 的 Ghidra 编译器规范 ID。必须同时设置 `processor`。 |
+| `loader` | `--loader <CLASS>` | 用于 `-loader` 的 Ghidra 加载器类名，例如 `BinaryLoader` 或 `IntelHexLoader`。 |
+| `baseAddress` | `--base-address <ADDR>` | 用于 `-loader-baseAddr` 的十六进制加载地址，例如 `0x08000000` 或 `ram:0x08000000`。 |
+| `reimport` | `--reimport` | 删除该二进制文件已保存的 Ghidra 项目，并重新运行 `-import`。 |
+
+使用 `ghidra_session open` 的示例：
+
+```json
+{
+  "operation": "open",
+  "params": {
+    "path": "/path/to/firmware.bin",
+    "processor": "ARM:LE:32:Cortex",
+    "baseAddress": "0x08000000",
+    "wait": true
+  }
+}
+```
+
+使用命令行工具的示例：
+
+```sh
+ghidra-mcp session open /path/to/firmware.bin \
+  --processor ARM:LE:32:Cortex \
+  --base-address 0x08000000 \
+  --wait
+```
+
+- 当文件名以 `.bin`、`.hex`、`.ihex` 或 `.srec` 结尾时，守护进程在 `binary.<ext>` 上保留小写扩展名。
+- 对于 `.srec` 文件，未指定 `loader` 时，守护进程默认选择 `MotorolaHexLoader`。
+- 在启动 `Bridge.java` 之前，`ImportBinary.java` 会将程序映像基址和默认内存块对齐到 `baseAddress`。
+- 守护进程将导入标志保存在 `binary.json` 中。
+- 如果已保存的项目已经存在，而调用传入了不同的导入标志，请将 `reimport` 设为 `true`（`--reimport`）。
+
+### 附加本地 .gpr 项目
+
+您可以直接附加守护进程主机上的 Ghidra `.gpr` 项目，无需复制文件。
+该流程保留在 Ghidra GUI 中配置的自定义映像基址、内存映射和已保存的符号。
+
+使用 `ghidra_session open` 的示例：
+
+```json
+{
+  "operation": "open",
+  "params": {
+    "path": "/path/to/board.gpr",
+    "programName": "firmware/app",
+    "wait": true
+  }
+}
+```
+
+使用命令行工具的示例：
+
+```sh
+ghidra-mcp session open /path/to/board.gpr --program-name firmware/app --wait
+```
+
+- `.gpr` 文件同级目录下必须有 `<name>.rep` 目录，且 `<name>` 不能以 `.` 开头。
+- 守护进程根据规范化后的 `.gpr` 路径计算确定性的 32 位十六进制 `md5`，并写入 `projects/<md5>/attached.json`。
+- 在后续工具调用及 `ghidra_session open` 中使用该 `md5`，即可重新打开项目或切换 `programName`。
+- 如果项目中只有一个 `Program`，`programName`（`--program-name`）是可选参数。
+- 如果项目包含多个程序且未指定 `programName`，`open` 会失败并列出候选程序路径。
+- 在运行 `OpenSavedProject.java` 之前，守护进程以只读方式检查 `<name>.lock` 和 `<name>.lock~`，不修改任何项目文件。
+- 如果 Ghidra GUI 或其他进程持有项目锁，`open` 会立即失败。请先在 Ghidra GUI 中关闭该项目。
+- 二进制导入标志（`processor`、`compilerSpec`、`loader`、`baseAddress` 和 `reimport`）与 `ghidra_upload prepare` 不适用于 `.gpr` 项目。
+
 ### 连接已打开的 Ghidra GUI 程序
 
 要将 Ghidra CodeBrowser 中已打开的程序连接到守护进程，请使用以下步骤：
@@ -325,6 +402,8 @@ ghidra-mcp call ghidra_session '{"operation":"list"}'
    ```
 
    `fileName` 是显示名称，不能包含目录。
+   对于原始固件，`params` 还接受 `processor`、`compilerSpec`、`loader`、`baseAddress` 和 `reimport`（参见[导入原始固件](#导入原始固件)）。
+   守护进程会保留 `fileName` 中的 `.bin`、`.hex`、`.ihex` 和 `.srec` 扩展名。
 3. 读取结果。结果包含以下字段：
    - `method`：`POST`。
    - `url`：HTTP 调用返回绝对地址，例如 `https://host/ghidra/upload`。
@@ -379,9 +458,11 @@ claude mcp add --transport stdio --scope local ghidra-mcp -- /absolute/path/to/g
 
 在代理中请使用以下步骤：
 
-1. 打开二进制文件：
-   - 对于守护进程以前保存过的二进制文件，用 `{"operation":"open","md5":"..."}` 调用 `ghidra_session`。
-   - 对于守护进程主机上的文件，用 `{"operation":"open","params":{"path":"..."}}` 调用 `ghidra_session`。守护进程计算 MD5 并保存二进制文件。
+1. 打开二进制文件或项目：
+   - 对于守护进程以前保存过的会话，用 `{"operation":"open","md5":"..."}` 调用 `ghidra_session`。
+   - 对于守护进程主机上的二进制文件，用 `{"operation":"open","params":{"path":"..."}}` 调用 `ghidra_session`。守护进程计算 MD5 并保存二进制文件。
+   - 对于原始固件，请在 `params` 中添加 `processor` 和 `baseAddress`（参见[导入原始固件](#导入原始固件)）。
+   - 对于本地 Ghidra 项目，请在 `params.path` 中传入 `.gpr` 路径（参见[附加本地 .gpr 项目](#附加本地-gpr-项目)）。
    - 对于远程客户端上的文件，请上传它（参见[从远程客户端上传二进制文件](#从远程客户端上传二进制文件)）。
    - 对于已在 CodeBrowser 中打开的程序，用 `{"operation":"attach"}` 调用 `ghidra_session`，并把 `bridgeArgs` 粘贴到 `Bridge.java` 中。
 2. 如果会话正在启动，请用 `{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}` 调用 `ghidra_job` 等待。
@@ -575,15 +656,18 @@ ipc_handshake_timeout_sec = 5
 GHIDRA_MCP_HOME/                 # 默认：~/.ghidra-mcp
 |-- config.toml
 `-- projects/<md5>/
-    |-- binary                  # 已保存的二进制文件，使用固定名称
-    |-- binary.json             # 原始文件名
+    |-- binary                  # 已保存的二进制文件（或 binary.bin、.hex、.ihex、.srec）
+    |-- binary.json             # 文件名和固件导入标志
+    |-- attached.json           # 附加的 .gpr 路径和程序名
     |-- checkpoints/            # 已保存的项目快照
+    |-- recovery-backups/       # 崩溃恢复备份
     `-- ghidra/
         |-- project.gpr
         `-- project.rep/
 
 <runtime-base>/ghidra-mcp-<uid>/
 |-- projects -> GHIDRA_MCP_HOME/projects
+|-- attached/<md5> -> <gpr-parent>
 |-- sessions/<md5>/session.json
 |-- logs/<md5>/
 |-- tmp/
@@ -600,6 +684,7 @@ GHIDRA_MCP_HOME/                 # 默认：~/.ghidra-mcp
 - 运行时目录的权限为 `0700`。守护进程日志和锁文件的权限为 `0600`。
 - Ghidra 无法打开隐藏目录中的项目。因此，守护进程把 `projects` 符号链接交给 Ghidra。项目文件保留在持久主目录中。
 - 如果 `projects` 路径被其他对象占用，守护进程会报错停止，不会替换该对象。
+- 对于附加的 `.gpr` 会话，守护进程创建指向 `.gpr` 文件父目录的非隐藏符号链接 `attached/<md5>`。
 
 在 Windows 上，默认布局为：
 
@@ -609,7 +694,9 @@ GHIDRA_MCP_HOME/                 # 默认：~/.ghidra-mcp
 |-- projects\<md5>\
 |   |-- binary
 |   |-- binary.json
+|   |-- attached.json
 |   |-- checkpoints\
+|   |-- recovery-backups\
 |   `-- ghidra\
 |       |-- project.gpr
 |       `-- project.rep\

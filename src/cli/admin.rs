@@ -8,6 +8,7 @@
 
 use super::output::{self, print_json, print_table, text};
 use crate::config::McpConfig;
+use crate::import::{is_gpr_path, OpenOptions};
 use crate::mcp::ToolServer;
 use crate::paths::McpPaths;
 use anyhow::{bail, Context, Result};
@@ -46,10 +47,28 @@ pub enum SessionCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Open a session for a file on this computer.
+    /// Open a session for a binary or `.gpr` project on this computer.
     Open {
-        /// The binary file.
+        /// The binary or `.gpr` file.
         path: PathBuf,
+        /// Program name or project path in an attached `.gpr` project.
+        #[arg(long)]
+        program_name: Option<String>,
+        /// Ghidra language ID for `-processor` during binary import.
+        #[arg(long)]
+        processor: Option<String>,
+        /// Ghidra compiler specification ID for `-cspec`.
+        #[arg(long)]
+        compiler_spec: Option<String>,
+        /// Ghidra loader class name for `-loader`.
+        #[arg(long)]
+        loader: Option<String>,
+        /// Hexadecimal load address for `-loader-baseAddr`.
+        #[arg(long)]
+        base_address: Option<String>,
+        /// Replace the saved binary project and run `-import` again.
+        #[arg(long)]
+        reimport: bool,
         /// Wait until the session is ready.
         #[arg(long)]
         wait: bool,
@@ -309,6 +328,60 @@ fn edit(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Validates CLI `session open` arguments and builds `ghidra_session open` parameters.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "CLI subcommand maps 1:1 to session open options"
+)]
+pub(super) fn build_open_params(
+    path: &Path,
+    program_name: Option<&str>,
+    processor: Option<&str>,
+    compiler_spec: Option<&str>,
+    loader: Option<&str>,
+    base_address: Option<&str>,
+    reimport: bool,
+    wait: bool,
+) -> Result<Value> {
+    let options = OpenOptions::from_raw(
+        processor,
+        compiler_spec,
+        loader,
+        base_address,
+        reimport,
+        program_name,
+    )?;
+    options.validate_for_target(is_gpr_path(path))?;
+    options.import.validate_complete()?;
+    // The daemon has a different current directory. Send an absolute path.
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("cannot find {}", path.display()))?;
+    options.validate_for_target(is_gpr_path(&canonical))?;
+    let mut params = Map::new();
+    params.insert("path".into(), canonical.display().to_string().into());
+    params.insert("wait".into(), wait.into());
+    if let Some(program_name) = options.program_name {
+        params.insert("programName".into(), program_name.into());
+    }
+    if let Some(processor) = options.import.processor {
+        params.insert("processor".into(), processor.into());
+    }
+    if let Some(compiler_spec) = options.import.compiler_spec {
+        params.insert("compilerSpec".into(), compiler_spec.into());
+    }
+    if let Some(loader) = options.import.loader {
+        params.insert("loader".into(), loader.into());
+    }
+    if let Some(base_address) = options.import.base_address {
+        params.insert("baseAddress".into(), base_address.into());
+    }
+    if options.reimport {
+        params.insert("reimport".into(), true.into());
+    }
+    Ok(Value::Object(params))
+}
+
 /// Calls a domain tool through the daemon and returns the structured result.
 async fn call(tool: &str, operation: &str, md5: Option<&str>, params: Value) -> Result<Value> {
     let mut arguments = Map::new();
@@ -331,12 +404,27 @@ pub async fn session(command: SessionCommand) -> Result<ExitCode> {
             call("ghidra_session", "get", Some(&md5), json!({})).await?,
             json,
         ),
-        SessionCommand::Open { path, wait, json } => {
-            // The daemon has a different current directory. Send an absolute path.
-            let path = path
-                .canonicalize()
-                .with_context(|| format!("cannot find {}", path.display()))?;
-            let params = json!({ "path": path.display().to_string(), "wait": wait });
+        SessionCommand::Open {
+            path,
+            program_name,
+            processor,
+            compiler_spec,
+            loader,
+            base_address,
+            reimport,
+            wait,
+            json,
+        } => {
+            let params = build_open_params(
+                &path,
+                program_name.as_deref(),
+                processor.as_deref(),
+                compiler_spec.as_deref(),
+                loader.as_deref(),
+                base_address.as_deref(),
+                reimport,
+                wait,
+            )?;
             (call("ghidra_session", "open", None, params).await?, json)
         }
         SessionCommand::Attach {

@@ -7,6 +7,7 @@ use super::{
     millis_or, parse, AnalysisArgs, AttachArgs, Daemon, OpenArgs, Output, Request, ShutdownArgs,
 };
 use crate::error::DomainError;
+use crate::import::{is_gpr_path, OpenOptions};
 use crate::model::{JobStatus, SessionRecord};
 use crate::{analysis, session};
 use anyhow::Result;
@@ -103,9 +104,17 @@ pub(super) fn shutdown_daemon(daemon: &Daemon, request: Request) -> Result<Outpu
     ))
 }
 
-/// Runs `ghidra_session open`: imports a file on the daemon host, or opens a saved binary.
+/// Runs `ghidra_session open`: imports a binary, attaches a `.gpr` project, or reopens an MD5.
 pub(super) async fn open_session(daemon: &Daemon, request: Request) -> Result<Output> {
     let args: OpenArgs = parse(&request.label, request.params)?;
+    let options = OpenOptions::from_raw(
+        args.processor.as_deref(),
+        args.compiler_spec.as_deref(),
+        args.loader.as_deref(),
+        args.base_address.as_deref(),
+        args.reimport,
+        args.program_name.as_deref(),
+    )?;
     let state = &daemon.state;
     let wait = args
         .wait
@@ -113,26 +122,12 @@ pub(super) async fn open_session(daemon: &Daemon, request: Request) -> Result<Ou
     match (args.path, request.md5) {
         (Some(path), None) => {
             let raw = PathBuf::from(path);
-            let path = raw.canonicalize().map_err(|err| {
-                DomainError::missing_target(
-                    "path",
-                    format!("target path cannot be resolved: {err}"),
-                )
-            })?;
-            if !path.is_file() {
-                return Err(
-                    DomainError::missing_target("path", "target path is not a file").into(),
-                );
-            }
-            let path_buf = path.clone();
-            let md5 = tokio::task::spawn_blocking(move || crate::ghidra::file_md5(&path_buf))
-                .await
-                .map_err(|err| DomainError::Internal {
-                    message: format!("file_md5 task panicked: {err}"),
-                })??;
-            session::open(state, md5, Some(&path), wait).await
+            options.validate_for_target(is_gpr_path(&raw))?;
+            session::open_with_options(state, None, Some(&raw), options, wait).await
         }
-        (None, Some(md5)) => session::open(state, md5, None, wait).await,
+        (None, Some(md5)) => {
+            session::open_with_options(state, Some(md5), None, options, wait).await
+        }
         (None, None) => Err(DomainError::invalid_argument(
             "path/md5",
             "`ghidra_session open` requires either params.path or md5",

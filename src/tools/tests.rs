@@ -677,7 +677,10 @@ fn unknown_parameter_lists_valid_parameters_and_help() {
         "{upload_reason}"
     );
     assert!(
-        upload_reason.contains("Valid parameters: `fileName`, `size`."),
+        upload_reason.contains(concat!(
+            "Valid parameters: `baseAddress`, `compilerSpec`, `fileName`, ",
+            "`loader`, `processor`, `reimport`, `size`."
+        )),
         "{upload_reason}"
     );
     assert!(upload_reason.contains("ghidra_help"), "{upload_reason}");
@@ -711,92 +714,6 @@ fn bridge_address_error_preserves_target_and_spaces() {
             param: "/selector/address".to_string(),
             reason: "unable to parse address: bad (valid spaces: [EXTERNAL, ram])".to_string(),
         }
-    );
-}
-
-/// Makes sure that `ghidra_session attach` validates `path` and skips project copies.
-#[tokio::test]
-async fn session_attach_validates_target_and_skips_project_copy() {
-    let root = tempfile::tempdir().unwrap();
-    let daemon = test_daemon(root.path());
-    let sample_path = root.path().join("sample.elf");
-    let sample_bytes = b"\x7fELFtest";
-    std::fs::write(&sample_path, sample_bytes).unwrap();
-    let expected_md5 = format!("{:x}", md5::compute(sample_bytes));
-
-    let both_error = super::call(
-        &daemon,
-        "ghidra_session",
-        object(json!({
-            "operation": "attach",
-            "md5": expected_md5,
-            "params": { "path": sample_path.to_str().unwrap() }
-        })),
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        reason(&both_error).contains("either params.path or md5, not both"),
-        "{both_error:#}"
-    );
-
-    let (_, attached) = super::call(
-        &daemon,
-        "ghidra_session",
-        object(json!({
-            "operation": "attach",
-            "params": { "path": sample_path.to_str().unwrap() }
-        })),
-    )
-    .await
-    .unwrap();
-    assert_eq!(attached["md5"], expected_md5);
-    assert_eq!(attached["sessionId"], expected_md5);
-    assert_eq!(attached["session"]["fileName"], "sample.elf");
-    assert_eq!(attached["session"]["status"], "starting");
-    assert_eq!(attached["session"]["connected"], false);
-    assert!(attached["session"].get("token").is_none());
-
-    let bridge_args = attached["bridgeArgs"].as_str().unwrap();
-    let token = attached["token"].as_str().unwrap();
-    assert!(bridge_args.contains(&format!("session_id={expected_md5}")));
-    assert!(bridge_args.contains(&format!("token={token}")));
-    assert!(!bridge_args.contains("exit_deadline_sec"));
-    assert!(!bridge_args.contains("jar="));
-    assert!(!daemon.state.paths.project_dir(&expected_md5).exists());
-
-    let snapshot = std::fs::read_to_string(daemon.state.paths.session_json(&expected_md5)).unwrap();
-    assert!(!snapshot.contains(token));
-    assert!(!snapshot.contains("agent_token"));
-
-    let url_and_port = super::call(
-        &daemon,
-        "ghidra_session",
-        object(json!({
-            "operation": "attach",
-            "params": { "wsUrl": "ws://127.0.0.1:8765/ws/agent", "port": 8765 }
-        })),
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        reason(&url_and_port).contains("either params.wsUrl or params.port, not both"),
-        "{url_and_port:#}"
-    );
-
-    let orphan_token = super::call(
-        &daemon,
-        "ghidra_session",
-        object(json!({
-            "operation": "attach",
-            "params": { "token": "secret" }
-        })),
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        reason(&orphan_token).contains("requires `params.wsUrl` or `params.port`"),
-        "{orphan_token:#}"
     );
 }
 
@@ -855,4 +772,5 @@ async fn bridge_call_moves_envelope_result_without_clones() {
     );
 }
 
+mod attach;
 mod checkpoints;
