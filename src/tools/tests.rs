@@ -249,11 +249,10 @@ fn public_tool_contract_is_gemini_compatible() {
         tool("ghidra_decompilation")["inputSchema"]["properties"]["params"]["required"],
         json!(["selector"])
     );
-    assert!(
-        tool("ghidra_reference")["inputSchema"]["properties"]["params"]
-            .get("required")
-            .is_none()
-    );
+    let reference_params = &tool("ghidra_reference")["inputSchema"]["properties"]["params"];
+    assert!(reference_params.get("required").is_none());
+    assert!(reference_params["properties"]["filter"].is_object());
+    assert!(reference_params["properties"]["scan"].is_object());
     assert_eq!(
         tool("ghidra_batch")["inputSchema"]["properties"]["params"]["required"],
         json!(["items"])
@@ -589,6 +588,108 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     .expect("shutdown starts after the reply");
 }
 
+/// Checks `ghidra_session open` and `ghidra_upload prepare` validation for import and `.gpr` flags.
+#[tokio::test]
+async fn validates_import_flags_and_gpr_options() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let gpr_dir = root.path().join("sample");
+    std::fs::create_dir_all(gpr_dir.join("board.rep")).unwrap();
+    let gpr_path = gpr_dir.join("board.gpr");
+    std::fs::write(&gpr_path, "<project/>").unwrap();
+    let bin_path = root.path().join("fw.bin");
+    std::fs::write(&bin_path, [1u8, 2, 3, 4]).unwrap();
+
+    let (_, open_help) = help::run(object(
+        json!({ "domain": "ghidra_session", "operation": "open" }),
+    ))
+    .unwrap();
+    for field in [
+        "programName",
+        "processor",
+        "compilerSpec",
+        "loader",
+        "baseAddress",
+        "reimport",
+    ] {
+        assert!(
+            open_help["inputSchema"]["properties"][field].is_object(),
+            "absent field {field}"
+        );
+    }
+
+    let invalid_open_cases = [
+        (
+            json!({ "path": bin_path, "processor": "invalid" }),
+            "processor",
+        ),
+        (
+            json!({ "path": bin_path, "compilerSpec": "default" }),
+            "compilerSpec requires processor",
+        ),
+        (
+            json!({ "path": bin_path, "loader": "../BadLoader" }),
+            "loader",
+        ),
+        (
+            json!({ "path": bin_path, "baseAddress": "0xZZ" }),
+            "baseAddress",
+        ),
+        (
+            json!({ "path": bin_path, "programName": "app" }),
+            "programName",
+        ),
+        (
+            json!({ "path": gpr_path, "processor": "ARM:LE:32:Cortex" }),
+            "not valid when attaching a .gpr project",
+        ),
+        (
+            json!({ "path": gpr_path, "reimport": true }),
+            "not valid when attaching a .gpr project",
+        ),
+        (
+            json!({ "path": gpr_path, "programName": "../escape" }),
+            "programName",
+        ),
+    ];
+    for (params, expected) in invalid_open_cases {
+        let err = super::call(
+            &daemon,
+            "ghidra_session",
+            object(json!({ "operation": "open", "params": params })),
+        )
+        .await
+        .unwrap_err();
+        assert!(reason(&err).contains(expected), "{params}: {err:#}");
+    }
+
+    let md5 = "0123456789abcdef0123456789abcdef";
+    let invalid_upload_cases = [
+        (
+            json!({ "fileName": "fw.bin", "size": 4, "compilerSpec": "gcc" }),
+            "compilerSpec requires processor",
+        ),
+        (
+            json!({ "fileName": "fw.bin", "size": 4, "baseAddress": "-0x100" }),
+            "baseAddress",
+        ),
+        (
+            json!({ "fileName": "board.gpr", "size": 4 }),
+            ".gpr projects",
+        ),
+    ];
+    for (params, expected) in invalid_upload_cases {
+        let err = super::call(
+            &daemon,
+            "ghidra_upload",
+            object(json!({ "operation": "prepare", "md5": md5, "params": params })),
+        )
+        .await
+        .unwrap_err();
+        assert!(reason(&err).contains(expected), "{params}: {err:#}");
+    }
+}
+
 /// Makes sure that `params` accepts `null` and a JSON object string.
 #[tokio::test]
 async fn params_accepts_null_and_json_object_string() {
@@ -677,7 +778,10 @@ fn unknown_parameter_lists_valid_parameters_and_help() {
         "{upload_reason}"
     );
     assert!(
-        upload_reason.contains("Valid parameters: `fileName`, `size`."),
+        upload_reason.contains(concat!(
+            "Valid parameters: `baseAddress`, `compilerSpec`, `fileName`, ",
+            "`loader`, `processor`, `reimport`, `size`."
+        )),
         "{upload_reason}"
     );
     assert!(upload_reason.contains("ghidra_help"), "{upload_reason}");
@@ -769,100 +873,5 @@ async fn bridge_call_moves_envelope_result_without_clones() {
     );
 }
 
-/// Makes sure that `ghidra_help` and `prepare` accept list scopes and relation fields.
-#[test]
-fn list_scopes_and_relation_schemas_are_published() {
-    let md5 = "0123456789abcdef0123456789abcdef";
-
-    let tools = tool_definitions();
-    let reference_tool = tools
-        .iter()
-        .find(|tool| tool["name"] == "ghidra_reference")
-        .expect("ghidra_reference tool");
-    let ref_params = &reference_tool["inputSchema"]["properties"]["params"]["properties"];
-    assert!(ref_params["scan"].is_object());
-    assert_eq!(
-        ref_params["filter"]["properties"]["selector"]["properties"]["kind"]["enum"],
-        json!(["address", "function", "range"])
-    );
-
-    let (_, reference_help) = help::run(object(
-        json!({ "domain": "reference", "operation": "list" }),
-    ))
-    .expect("reference help");
-    assert!(reference_help["inputSchema"]["properties"]["scan"].is_object());
-    assert!(
-        reference_help["inputSchema"]["properties"]["filter"]["properties"]["selector"].is_object()
-    );
-    let ref_fields = reference_help["inputSchema"]["properties"]["projection"]["properties"]
-        ["fields"]["items"]["enum"]
-        .as_array()
-        .expect("reference fields");
-    assert!(ref_fields.contains(&json!("from_function")));
-    assert!(ref_fields.contains(&json!("to_function")));
-
-    let (_, instruction_help) = help::run(object(json!({
-        "domain": "listing",
-        "operation": "instruction.list"
-    })))
-    .expect("instruction help");
-    assert!(
-        instruction_help["inputSchema"]["properties"]["filter"]["properties"]["selector"]
-            .is_object()
-    );
-
-    let (_, code_unit_help) = help::run(object(json!({
-        "domain": "listing",
-        "operation": "code_unit.list"
-    })))
-    .expect("code_unit help");
-    let unit_fields = code_unit_help["inputSchema"]["properties"]["projection"]["properties"]
-        ["fields"]["items"]["enum"]
-        .as_array()
-        .expect("code_unit fields");
-    assert!(unit_fields.contains(&json!("value")));
-    assert!(unit_fields.contains(&json!("representation")));
-
-    let (_, ref_call) = prepare(
-        "ghidra_reference",
-        object(json!({
-            "operation": "list",
-            "md5": md5,
-            "params": {
-                "filter": {
-                    "direction": "from",
-                    "selector": { "kind": "function", "entry": "0x401000" }
-                },
-                "scan": {
-                    "range": { "start": "0x401000", "end": "0x402000" },
-                    "timeout_ms": 5000
-                }
-            }
-        })),
-    )
-    .expect("scoped reference.list call");
-    assert_eq!(
-        ref_call.params["filter"]["selector"]["entry"],
-        json!("0x401000")
-    );
-
-    let (_, instr_call) = prepare(
-        "ghidra_listing",
-        object(json!({
-            "operation": "instruction.list",
-            "md5": md5,
-            "params": {
-                "filter": {
-                    "selector": { "kind": "function", "entry": "0x401000" }
-                }
-            }
-        })),
-    )
-    .expect("scoped instruction.list call");
-    assert_eq!(
-        instr_call.params["filter"]["selector"]["kind"],
-        json!("function")
-    );
-}
-
 mod checkpoints;
+mod scopes;
