@@ -148,12 +148,12 @@ Linux 平台包需要 glibc。在 Alpine 等 musl 系统上，请[从源代码�
 这一个文件就是完整的发行版。
 
 `cargo xtask build` 命令用 Gradle 构建桥接。
-然后它把桥接 JAR 和 `Bridge.java` 嵌入可执行文件。
+然后它把桥接 JAR、`Bridge.java` 和 `GhidraMcp.java` 嵌入可执行文件。
 操作目录在编译时来自桥接契约 `bridge/docs/asyncapi.yaml`。
 
 要嵌入事先构建好的桥接 JAR，请设置 `GHIDRA_MCP_BRIDGE_JAR`。
 相对路径从工作区根目录开始。
-此时构建只生成 `Bridge.java`，不编译桥接。
+此时构建只生成 `Bridge.java` 和 `GhidraMcp.java`，不编译桥接。
 
 ### 查找 Ghidra
 
@@ -250,9 +250,10 @@ ghidra-mcp daemon run --listen 127.0.0.1:18490
 | `ghidra-mcp daemon restart [--force] [--listen ADDR]` | 停止守护进程，然后重新启动。 |
 | `ghidra-mcp daemon status [--json]` | 显示进程 ID、版本、MCP URL、会话和作业。 |
 | `ghidra-mcp daemon logs [-n N] [-f]` | 显示 `daemon.log` 的最后几行。使用 `-f` 时持续显示新行，直到按 Ctrl-C。 |
+| `ghidra-mcp setup [DIR] [--json]` | 将 `Bridge.java`、`GhidraMcp.java` 和 `ghidra-bridge.jar` 写入脚本目录（默认 `~/ghidra_scripts`）。 |
 | `ghidra-mcp paths [--json]` | 显示持久主目录、运行时目录及其中的文件。 |
 | `ghidra-mcp config path\|show\|edit\|check` | 查找、显示、修改或检查 `config.toml`。 |
-| `ghidra-mcp session list\|get\|open\|close` | 管理守护进程的会话。 |
+| `ghidra-mcp session list\|get\|open\|attach\|close\|checkpoint\|reset\|delete` | 管理守护进程的会话和检查点。 |
 | `ghidra-mcp job list\|get\|wait` | 查看守护进程的后台作业。 |
 
 如果有活动会话或正在运行的作业，`daemon stop` 不会停止守护进程。加上 `--force` 才会停止。
@@ -362,6 +363,31 @@ ghidra-mcp session open /path/to/board.gpr --program-name firmware/app --wait
 - 如果 Ghidra GUI 或其他进程持有项目锁，`open` 会立即失败。请先在 Ghidra GUI 中关闭该项目。
 - 二进制导入标志（`processor`、`compilerSpec`、`loader`、`baseAddress` 和 `reimport`）与 `ghidra_upload prepare` 不适用于 `.gpr` 项目。
 
+### 连接已打开的 Ghidra GUI 程序
+
+要将 Ghidra CodeBrowser 中已打开的程序连接到守护进程，请使用以下步骤：
+
+1. 将启动脚本写入 Ghidra 脚本目录（默认 `~/ghidra_scripts`）：
+
+   ```sh
+   ghidra-mcp setup
+   ```
+
+2. 在 CodeBrowser 中打开 Script Manager 并运行 `Bridge.java`。
+   控制台会输出回环监听地址（默认为 `ws://127.0.0.1:8765/ws/agent`）。
+3. 将守护进程挂接到该监听地址：
+
+   ```sh
+   ghidra-mcp session attach ws://127.0.0.1:8765/ws/agent
+   ```
+
+   也可以传入 `--port 8765`，或同时传入本地文件路径与 `--port 8765` 以复用文件 MD5。
+   该命令不会复制二进制文件。
+4. `Bridge.java` 发送 `ghidra.ready` 后，会话进入 `ready` 状态。
+   连接断开时，CodeBrowser 保持打开，守护进程不会启动 `analyzeHeadless`。
+
+如果省略 `--ws-url` 和 `--port`，`session attach` 会改为输出 `ws_url=... session_id=... token=...` 出站连接参数。
+
 ### 从远程客户端上传二进制文件
 
 当客户端不在守护进程主机上时，请使用此步骤。
@@ -438,6 +464,7 @@ claude mcp add --transport stdio --scope local ghidra-mcp -- /absolute/path/to/g
    - 对于原始固件，请在 `params` 中添加 `processor` 和 `baseAddress`（参见[导入原始固件](#导入原始固件)）。
    - 对于本地 Ghidra 项目，请在 `params.path` 中传入 `.gpr` 路径（参见[附加本地 .gpr 项目](#附加本地-gpr-项目)）。
    - 对于远程客户端上的文件，请上传它（参见[从远程客户端上传二进制文件](#从远程客户端上传二进制文件)）。
+   - 对于已在 CodeBrowser 中打开的程序，用 `{"operation":"attach"}` 调用 `ghidra_session`，并把 `bridgeArgs` 粘贴到 `Bridge.java` 中。
 2. 如果会话正在启动，请用 `{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}` 调用 `ghidra_job` 等待。
    您可以用 `ghidra_job get` 监视作业。
 3. 用 `ghidra_session get` 确认就绪状态。
@@ -518,7 +545,7 @@ ipc_handshake_timeout_sec = 5
 
 | 工具 | 操作 | 运行位置 |
 | --- | --- | --- |
-| `ghidra_session` | `open`、`list`、`get`、`close`、`checkpoint.create`、`checkpoint.list`、`checkpoint.restore`、`reset`、`delete` | 守护进程。 |
+| `ghidra_session` | `open`、`attach`、`list`、`get`、`close`、`checkpoint.create`、`checkpoint.list`、`checkpoint.restore`、`reset`、`delete` | 守护进程。 |
 | `ghidra_upload` | `prepare` | 守护进程。 |
 | `ghidra_job` | `list`、`get`、`wait` | 守护进程。 |
 | `ghidra_daemon` | `status`、`shutdown` | 守护进程。 |
