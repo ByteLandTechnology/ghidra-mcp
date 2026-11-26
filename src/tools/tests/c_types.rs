@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// Makes sure that `ghidra_data_type parse_c` schema and call preparation work.
+/// Checks `ghidra_data_type parse_c` schema, route, and parameter validation.
 #[test]
 fn data_type_parse_c_schema_and_call_preparation_work() {
     let md5 = "0123456789abcdef0123456789abcdef";
@@ -18,9 +18,11 @@ fn data_type_parse_c_schema_and_call_preparation_work() {
     assert_eq!(parse_help["effects"]["mutates_program"], true);
     assert_eq!(parse_help["effects"]["idempotent"], false);
     assert_eq!(parse_help["inputSchema"]["required"], json!(["source"]));
-    assert!(parse_help["inputSchema"]["properties"]["category_path"].is_object());
+    let props = &parse_help["inputSchema"]["properties"];
+    assert_eq!(props["source"], json!({ "type": "string", "minLength": 1 }));
+    assert!(props["category_path"].is_object());
     assert_eq!(
-        parse_help["inputSchema"]["properties"]["conflict_mode"]["enum"],
+        props["conflict_mode"]["enum"],
         json!(["keep", "rename", "replace"])
     );
 
@@ -43,12 +45,39 @@ fn data_type_parse_c_schema_and_call_preparation_work() {
     ));
     assert_eq!(parse_req.params["category_path"], "/parsed");
     assert_eq!(parse_req.params["conflict_mode"], "keep");
+
+    let missing_err = prepare(
+        "ghidra_data_type",
+        object(json!({ "operation": "parse_c", "md5": md5, "params": {} })),
+    )
+    .err()
+    .expect("missing required parameter");
+    assert!(reason(&missing_err).contains("requires parameter `source`"));
 }
 
-/// Makes sure that C type strings and atomic prototype fields work on `ghidra_function`.
+/// Checks C type strings and atomic prototype fields across write schemas.
 #[test]
 fn atomic_prototype_and_c_type_schemas_are_available() {
     let md5 = "0123456789abcdef0123456789abcdef";
+    for (domain, operation) in [
+        ("ghidra_function", "patch"),
+        ("ghidra_data_type", "create"),
+        ("ghidra_global_variable", "create"),
+    ] {
+        let (_, op_help) = help::run(object(json!({
+            "domain": domain,
+            "operation": operation,
+        })))
+        .expect("operation help");
+        let variants = op_help["inputSchema"]["$defs"]["data_type_reference"]["oneOf"]
+            .as_array()
+            .expect("data_type_reference oneOf");
+        assert_eq!(variants.len(), 5, "{domain} {operation}");
+        assert!(variants
+            .iter()
+            .any(|item| item == &json!({ "type": "string", "minLength": 1 })));
+    }
+
     let (_, patch_help) = help::run(object(json!({
         "domain": "ghidra_function",
         "operation": "patch",
@@ -57,13 +86,6 @@ fn atomic_prototype_and_c_type_schemas_are_available() {
     let patch_props = &patch_help["inputSchema"]["properties"]["patch"]["properties"];
     assert!(patch_props["signature"].is_object());
     assert!(patch_props["parameters"].is_object());
-    let dt_ref_variants = patch_help["inputSchema"]["$defs"]["data_type_reference"]["oneOf"]
-        .as_array()
-        .expect("data_type_reference oneOf");
-    assert_eq!(dt_ref_variants.len(), 5);
-    assert!(dt_ref_variants
-        .iter()
-        .any(|item| item == &json!({ "type": "string", "minLength": 1 })));
 
     let (_, sig_req) = prepare(
         "ghidra_function",
@@ -112,4 +134,21 @@ fn atomic_prototype_and_c_type_schemas_are_available() {
         params_req.params["patch"]["parameters"][0]["data_type"],
         "int (*)[4]"
     );
+
+    let (_, global_req) = prepare(
+        "ghidra_global_variable",
+        object(json!({
+            "operation": "create",
+            "md5": md5,
+            "params": {
+                "resource": {
+                    "address": "0x404000",
+                    "name": "g_banner",
+                    "data_type": "const char *",
+                },
+            },
+        })),
+    )
+    .expect("valid global_variable create");
+    assert_eq!(global_req.params["resource"]["data_type"], "const char *");
 }
