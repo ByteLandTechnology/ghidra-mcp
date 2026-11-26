@@ -23,7 +23,7 @@
 //! |---|---|
 //! | Front ends | [`cli`], [`daemon`], [`mcp`], [`mcp_http`], [`upload`] |
 //! | Tools | [`tools`] (`ghidra_help` and the domain tools) |
-//! | Domain | [`session`], [`analysis`], [`project`], [`checkpoint`] |
+//! | Domain | [`session`], [`analysis`], [`project`], [`checkpoint`], [`import`] |
 //! | Bridge | [`bridge`], [`jsonrpc`] |
 //! | State | [`state`], [`model`] |
 //! | Platform | [`config`], [`paths`], [`java_path`], [`process`], [`ghidra`] |
@@ -38,6 +38,7 @@ mod config;
 mod daemon;
 mod error;
 mod ghidra;
+mod import;
 mod java_path;
 mod jsonrpc;
 mod mcp;
