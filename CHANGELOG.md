@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v2.2.0...v2.3.0) (2026-11-26)
+
+
+### Features
+
+* add firmware import flags and attach local .gpr projects ([#57](https://github.com/ByteLandTechnology/ghidra-mcp/issues/57)) ([dbf2f1a](https://github.com/ByteLandTechnology/ghidra-mcp/commit/dbf2f1a6ff3d107e080a5583022b8acab74bac7e))
+
 ## [2.2.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v2.1.0...v2.2.0) (2026-11-25)
 
 
