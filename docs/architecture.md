@@ -30,7 +30,7 @@ One executable has all the roles:
 |---|---|---|---|
 | **Daemon** (`daemon run`) | The first proxy or CLI call, or the user. | All the state. | One daemon runs for each runtime directory. A file lock enforces this rule. The daemon runs until you stop it. |
 | **Stdio proxy** (no arguments) | An MCP client. | No state. | The proxy sends each tool call to the daemon. If necessary, it starts the daemon. |
-| **CLI** (the other commands) | The user. | No state. | `tools`, `paths` and `config` do not connect to the daemon. `daemon status` and `daemon stop` do not start a daemon. The other commands call the tools through the daemon. If necessary, they start it. |
+| **CLI** (the other commands) | The user. | No state. | `tools`, `setup`, `paths` and `config` do not connect to the daemon. `daemon status` and `daemon stop` do not start a daemon. The other commands call the tools through the daemon. If necessary, they start it. |
 | **Ghidra** (`analyzeHeadless`) | The daemon, one for each open session. | The analysis. | Ghidra runs the bridge as a post-script. |
 
 Clients connect to the daemon through a **local socket**.
@@ -42,7 +42,7 @@ The client starts the new daemon as a detached process. Then the daemon continue
 
 The **bridge** is a Java program in the `bridge/` submodule.
 The command `cargo xtask build` builds the bridge with Gradle.
-Then it embeds the bridge JAR and the launcher script `Bridge.java` in the executable.
+Then it embeds the bridge JAR and the launcher scripts `Bridge.java` and `GhidraMcp.java` in the executable.
 Before each launch, the daemon writes the two files into the runtime directory.
 It gives them to `analyzeHeadless -postScript`.
 The bridge then connects to the daemon through a WebSocket and serves the analysis API.
@@ -62,7 +62,7 @@ A module uses only the modules in the layers below it:
 | `mcp_http` | Streamable HTTP, legacy SSE sessions, CORS and HTTP compatibility. |
 | `upload` | Upload credentials and the `POST /upload` endpoint. |
 | `tools` | The MCP tools: the domain catalog, the local operations, the call validation and `ghidra_help`. |
-| `session` | Open, launch, wait, relaunch, call, checkpoint, reset, delete, and close for sessions. |
+| `session` | Open, attach, launch, wait, relaunch, call, checkpoint, reset, delete, and close for sessions. |
 | `checkpoint` | Synchronized snapshots of `project.gpr` and `project.rep/`, retention limits, and atomic restore. |
 | `analysis` | Auto-analysis as a background job. |
 | `project` | Saved binaries, attached `.gpr` projects, project reset, deletion, and preparation. |
@@ -117,6 +117,14 @@ The daemon uses a connected session again, or joins a launch in progress, or sta
 [Session lifecycle](#session-lifecycle) describes the launch.
 
 `ghidra_session open` returns the launch job immediately. If the client sets `wait`, it waits for the job.
+
+### Attach a GUI session
+
+`ghidra_session attach` connects a program that is open in Ghidra CodeBrowser without file copies.
+With `wsUrl` or `port`, the daemon connects as a client to the loopback `Bridge.java` listener (`ws://127.0.0.1:8765/ws/agent` by default).
+Without `wsUrl` or `port`, the daemon creates a session credential and returns outbound `bridgeArgs` without `exit_deadline_sec`.
+It accepts an `md5`, hashes a local `path` in place, or allocates a 32-character hexadecimal ID.
+When an attached session disconnects, the daemon marks it `disconnected` and does not start `analyzeHeadless`.
 
 ### Upload a binary
 
