@@ -79,9 +79,15 @@ impl McpPaths {
         fs::create_dir_all(&self.projects_dir)?;
         ensure_runtime_directory(&self.runtime_dir)?;
         fs::create_dir_all(&self.tmp_dir)?;
+        fs::create_dir_all(self.attached_dir())?;
         #[cfg(unix)]
         ensure_project_link(self)?;
         Ok(())
+    }
+
+    /// Returns the runtime directory that holds non-hidden `.gpr` launch aliases.
+    pub fn attached_dir(&self) -> PathBuf {
+        self.runtime_dir.join("attached")
     }
 
     /// Returns the persistent directory of one binary: `binary`, `binary.json`, `ghidra/`
@@ -107,8 +113,90 @@ impl McpPaths {
     }
 
     /// Returns the path of the saved binary that the daemon gives to Ghidra for the import.
-    pub fn binary_launch_path(&self, md5: &str) -> PathBuf {
-        self.launch_project_dir(md5).join("binary")
+    pub fn binary_launch_file(&self, md5: &str, saved_name: &str) -> PathBuf {
+        self.launch_project_dir(md5).join(saved_name)
+    }
+
+    /// Returns the crash recovery backup directory for one session.
+    pub fn recovery_backups_dir(&self, md5: &str) -> PathBuf {
+        self.project_dir(md5).join("recovery-backups")
+    }
+
+    /// Creates or reuses a non-hidden launch directory alias for an attached `.gpr` parent.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the daemon cannot canonicalize `project_parent` or create the symbolic link.
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::unused_self,
+            reason = "Unix places the alias in the runtime directory; both platforms share the API"
+        )
+    )]
+    pub fn ensure_gpr_launch_alias(&self, md5: &str, project_parent: &Path) -> Result<PathBuf> {
+        let canonical_parent = fs::canonicalize(project_parent)?;
+        #[cfg(unix)]
+        {
+            let attached_base = if has_hidden_component(&self.runtime_dir) {
+                let fallback = PathBuf::from(format!("/tmp/ghidra-mcp-{}", current_uid()));
+                ensure_private_directory(&fallback)?;
+                fallback.join("attached")
+            } else {
+                self.attached_dir()
+            };
+            fs::create_dir_all(&attached_base)?;
+            let link = attached_base.join(md5);
+            ensure_attached_gpr_link(&link, &canonical_parent)?;
+            Ok(link)
+        }
+        #[cfg(windows)]
+        {
+            let _ = md5;
+            Ok(crate::java_path::java_path(&canonical_parent)?)
+        }
+    }
+
+    /// Removes the symbolic link alias for an attached `.gpr` session on Unix.
+    ///
+    /// # Errors
+    ///
+    /// Fails if a symbolic link removal fails for a reason other than `NotFound`.
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::unused_self,
+            clippy::unnecessary_wraps,
+            reason = "Unix removes the runtime symbolic link; both platforms share the API"
+        )
+    )]
+    pub fn remove_gpr_launch_alias(&self, md5: &str) -> Result<()> {
+        #[cfg(unix)]
+        {
+            let mut candidates = vec![self.attached_dir().join(md5)];
+            if has_hidden_component(&self.runtime_dir) {
+                candidates.push(
+                    PathBuf::from(format!("/tmp/ghidra-mcp-{}", current_uid()))
+                        .join("attached")
+                        .join(md5),
+                );
+            }
+            for link in candidates {
+                match fs::symlink_metadata(&link) {
+                    Ok(meta) if meta.file_type().is_symlink() => match fs::remove_file(&link) {
+                        Ok(()) => {}
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(err) => return Err(err.into()),
+                    },
+                    Ok(_) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+        #[cfg(windows)]
+        let _ = md5;
+        Ok(())
     }
 
     /// Returns the project directory of a binary as Ghidra sees it.
@@ -398,6 +486,40 @@ fn ensure_project_link(paths: &McpPaths) -> Result<()> {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     return ensure_project_link(paths);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+/// Makes or updates the non-hidden symbolic link `<runtime>/attached/<md5>` for an attached
+/// `.gpr` project directory so Unix Ghidra accepts hidden home directories.
+#[cfg(unix)]
+fn ensure_attached_gpr_link(link: &Path, target: &Path) -> Result<()> {
+    match fs::symlink_metadata(link) {
+        Ok(metadata) => {
+            ensure!(
+                metadata.file_type().is_symlink(),
+                "attached project alias path is occupied by a non-symlink: {}",
+                link.display()
+            );
+            if fs::read_link(link)? == target {
+                return Ok(());
+            }
+            let parent = link.parent().context("attached alias has no parent")?;
+            let staged = parent.join(format!(".alias-{}.tmp", uuid::Uuid::new_v4().simple()));
+            let _ = fs::remove_file(&staged);
+            std::os::unix::fs::symlink(target, &staged)?;
+            fs::rename(&staged, link)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match std::os::unix::fs::symlink(target, link) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    return ensure_attached_gpr_link(link, target);
                 }
                 Err(error) => return Err(error.into()),
             }
