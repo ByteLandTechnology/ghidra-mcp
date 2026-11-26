@@ -45,6 +45,8 @@ The MD5 of a binary identifies its session for all clients.
 - **Sessions identified by MD5.** The daemon uses a session again or opens the saved analysis again.
 - **Persistent sessions and jobs.** Sessions and analysis jobs continue after a client disconnects.
 - **Remote upload.** A client that is not on the daemon host sends a binary through a separate HTTP endpoint.
+- **Raw firmware import.** The daemon imports `.bin`, `.hex`, `.ihex` and `.srec` files with processor, compiler, loader and base address flags.
+- **Local `.gpr` projects.** The daemon attaches a local Ghidra `.gpr` project in place and keeps its custom memory map.
 - **Full Ghidra access.** The Java bridge gives program data, functions, decompilation, symbols, references, memory and comments.
 - **One executable.** The executable contains the bridge JAR and its launcher script.
 - **Background jobs.** `ghidra_job list`, `ghidra_job get` and `ghidra_job wait` monitor a long analysis.
@@ -289,6 +291,81 @@ The command writes `structuredContent` as formatted JSON.
 | The arguments are not valid. | The usage on stderr. | 2 |
 | `--help` or `--version`. | The text on stdout. | 0 |
 
+### Import raw firmware
+
+Headerless firmware files such as `.bin`, `.hex`, `.ihex` and `.srec` have no architecture header.
+Pass optional import flags to `ghidra_session open`, `ghidra_upload prepare` or `ghidra-mcp session open`:
+
+| MCP `params` field | CLI flag | Purpose |
+| --- | --- | --- |
+| `processor` | `--processor <ID>` | Ghidra language ID for `-processor`, for example `ARM:LE:32:Cortex`. |
+| `compilerSpec` | `--compiler-spec <ID>` | Ghidra compiler specification ID for `-cspec`. Needs `processor`. |
+| `loader` | `--loader <CLASS>` | Ghidra loader class for `-loader`, such as `BinaryLoader` or `IntelHexLoader`. |
+| `baseAddress` | `--base-address <ADDR>` | Hexadecimal load address for `-loader-baseAddr`, such as `0x08000000` or `ram:0x08000000`. |
+| `reimport` | `--reimport` | Delete the saved Ghidra project for this binary and run `-import` again. |
+
+Example with `ghidra_session open`:
+
+```json
+{
+  "operation": "open",
+  "params": {
+    "path": "/path/to/firmware.bin",
+    "processor": "ARM:LE:32:Cortex",
+    "baseAddress": "0x08000000",
+    "wait": true
+  }
+}
+```
+
+Example with the command-line tool:
+
+```sh
+ghidra-mcp session open /path/to/firmware.bin \
+  --processor ARM:LE:32:Cortex \
+  --base-address 0x08000000 \
+  --wait
+```
+
+- When a file name ends in `.bin`, `.hex`, `.ihex` or `.srec`, the daemon keeps that lowercase extension on `binary.<ext>`.
+- For `.srec` files, the daemon selects `MotorolaHexLoader` when `loader` has no value.
+- `ImportBinary.java` aligns the program image base and the default memory blocks with `baseAddress` before `Bridge.java` starts.
+- The daemon saves the import flags in `binary.json`.
+- If a saved project already exists and a call gives different import flags, set `reimport` to `true` (`--reimport`).
+
+### Attach a local .gpr project
+
+You can attach a Ghidra `.gpr` project on the daemon host without a file copy.
+This workflow keeps custom image bases, memory maps and saved symbols from Ghidra GUI.
+
+Example with `ghidra_session open`:
+
+```json
+{
+  "operation": "open",
+  "params": {
+    "path": "/path/to/board.gpr",
+    "programName": "firmware/app",
+    "wait": true
+  }
+}
+```
+
+Example with the command-line tool:
+
+```sh
+ghidra-mcp session open /path/to/board.gpr --program-name firmware/app --wait
+```
+
+- The `.gpr` file must have its `<name>.rep` directory beside it, and `<name>` must not start with `.`.
+- The daemon calculates a deterministic 32-character hexadecimal `md5` from the canonical `.gpr` path and writes `projects/<md5>/attached.json`.
+- Use that `md5` in subsequent tool calls and in `ghidra_session open` to reopen the project or change `programName`.
+- If the project has one `Program`, `programName` (`--program-name`) is optional.
+- If the project has multiple programs and `programName` is absent, `open` fails and lists the candidate program paths.
+- Before `OpenSavedProject.java` runs, the daemon checks `<name>.lock` and `<name>.lock~` in read-only mode and modifies no project files.
+- If Ghidra GUI or another process holds the project lock, `open` fails at once. Close the project in Ghidra GUI first.
+- Binary import flags (`processor`, `compilerSpec`, `loader`, `baseAddress` and `reimport`) and `ghidra_upload prepare` do not apply to `.gpr` projects.
+
 ### Upload a binary from a remote client
 
 Use this procedure when the client is not on the daemon host.
@@ -303,6 +380,8 @@ Use this procedure when the client is not on the daemon host.
    ```
 
    `fileName` is a display name. It must not contain a directory.
+   For raw firmware, `params` also accepts `processor`, `compilerSpec`, `loader`, `baseAddress` and `reimport` (see [Import raw firmware](#import-raw-firmware)).
+   The daemon keeps `.bin`, `.hex`, `.ihex` and `.srec` extensions from `fileName`.
 3. Read the result. It contains these fields:
    - `method`: `POST`.
    - `url`: An absolute URL for HTTP calls, for example `https://host/ghidra/upload`.
@@ -361,9 +440,11 @@ The status must be `Status: ✓ Connected`.
 
 Use this procedure in an agent:
 
-1. Open the binary:
-   - For a binary that the daemon saved before, call `ghidra_session` with `{"operation":"open","md5":"..."}`.
-   - For a file on the daemon host, call `ghidra_session` with `{"operation":"open","params":{"path":"..."}}`. The daemon calculates the MD5 and saves the binary.
+1. Open the binary or project:
+   - For a session that the daemon saved before, call `ghidra_session` with `{"operation":"open","md5":"..."}`.
+   - For a binary on the daemon host, call `ghidra_session` with `{"operation":"open","params":{"path":"..."}}`. The daemon calculates the MD5 and saves the binary.
+   - For raw firmware, add `processor` and `baseAddress` in `params` (see [Import raw firmware](#import-raw-firmware)).
+   - For a local Ghidra project, pass its `.gpr` path in `params.path` (see [Attach a local .gpr project](#attach-a-local-gpr-project)).
    - For a file on a remote client, upload it (see [Upload a binary from a remote client](#upload-a-binary-from-a-remote-client)).
 2. If the session starts, call `ghidra_job` with `{"operation":"wait","params":{"jobId":"...","timeoutMs":...}}`.
    You can use `ghidra_job get` to monitor the job.
@@ -558,15 +639,18 @@ On Unix, the persistent data and the runtime data are in different locations:
 GHIDRA_MCP_HOME/                 # default: ~/.ghidra-mcp
 |-- config.toml
 `-- projects/<md5>/
-    |-- binary                  # The saved binary, with a fixed name
-    |-- binary.json             # The original file name
+    |-- binary                  # Saved binary (or binary.bin, .hex, .ihex, .srec)
+    |-- binary.json             # File name and firmware import flags
+    |-- attached.json           # Attached .gpr path and program name
     |-- checkpoints/            # Saved project snapshots
+    |-- recovery-backups/       # Crash recovery backups
     `-- ghidra/
         |-- project.gpr
         `-- project.rep/
 
 <runtime-base>/ghidra-mcp-<uid>/
 |-- projects -> GHIDRA_MCP_HOME/projects
+|-- attached/<md5> -> <gpr-parent>
 |-- sessions/<md5>/session.json
 |-- logs/<md5>/
 |-- tmp/
@@ -583,6 +667,7 @@ GHIDRA_MCP_HOME/                 # default: ~/.ghidra-mcp
 - The runtime directory has the mode `0700`. The daemon log and the lock file have the mode `0600`.
 - Ghidra cannot open a project in a hidden directory. For this reason, the daemon gives Ghidra the `projects` symbolic link. The project files stay in the persistent home.
 - If the `projects` path holds a different object, the daemon stops with an error. It does not replace the object.
+- For an attached `.gpr` session, the daemon creates the non-hidden symbolic link `attached/<md5>` to the parent directory of the `.gpr` file.
 
 On Windows, the default layout is:
 
@@ -592,7 +677,9 @@ On Windows, the default layout is:
 |-- projects\<md5>\
 |   |-- binary
 |   |-- binary.json
+|   |-- attached.json
 |   |-- checkpoints\
+|   |-- recovery-backups\
 |   `-- ghidra\
 |       |-- project.gpr
 |       `-- project.rep\
