@@ -97,6 +97,9 @@ pub struct SessionRecord {
     pub ws_connected: bool,
     /// The reason for the last failure or disconnection.
     pub last_error: Option<String>,
+    /// `true` if a GUI script owns the session without an `analyzeHeadless` process.
+    #[serde(default)]
+    pub attached: bool,
 }
 
 /// State transitions. Each status change uses one of these methods. For this
@@ -111,7 +114,26 @@ impl SessionRecord {
             status: SessionStatus::Launching,
             ws_connected: false,
             last_error: None,
+            attached: false,
         }
+    }
+
+    /// Makes a record for an outbound GUI attach credential.
+    pub fn attaching(md5: String, file_name: String, agent_token: String) -> Self {
+        Self {
+            session_id: md5,
+            file_name,
+            agent_token,
+            status: SessionStatus::Starting,
+            ws_connected: false,
+            last_error: None,
+            attached: true,
+        }
+    }
+
+    /// Returns `true` if the daemon can relaunch `analyzeHeadless` for this session.
+    pub fn can_recover(&self) -> bool {
+        !self.attached && self.status.is_recoverable()
     }
 
     /// Records that `analyzeHeadless` started.
@@ -219,6 +241,8 @@ pub mod job_kind {
     pub const ANALYZE_BINARY: &str = "analyze-binary";
     /// The relaunch of the bridge of a known session.
     pub const RECOVER_SESSION_BRIDGE: &str = "recover-session-bridge";
+    /// An outbound `Bridge.java` attach from an open GUI session.
+    pub const ATTACH_SESSION: &str = "attach-session";
     /// A Ghidra auto-analysis.
     pub const START_ANALYSIS: &str = "start-analysis";
 }

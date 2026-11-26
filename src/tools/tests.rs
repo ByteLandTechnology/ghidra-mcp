@@ -191,6 +191,7 @@ fn session_md5_is_never_a_parameter() {
             .expect("operation")
     };
     assert!(rule("session", "open") == Md5Rule::Optional);
+    assert!(rule("session", "attach") == Md5Rule::Optional);
     assert!(rule("session", "get") == Md5Rule::Required);
     assert!(rule("session", "close") == Md5Rule::Required);
     assert!(rule("session", "checkpoint.create") == Md5Rule::Required);
@@ -588,108 +589,6 @@ async fn daemon_shutdown_needs_force_for_live_work() {
     .expect("shutdown starts after the reply");
 }
 
-/// Checks `ghidra_session open` and `ghidra_upload prepare` validation for import and `.gpr` flags.
-#[tokio::test]
-async fn validates_import_flags_and_gpr_options() {
-    let root = tempfile::tempdir().unwrap();
-    let daemon = test_daemon(root.path());
-    let gpr_dir = root.path().join("sample");
-    std::fs::create_dir_all(gpr_dir.join("board.rep")).unwrap();
-    let gpr_path = gpr_dir.join("board.gpr");
-    std::fs::write(&gpr_path, "<project/>").unwrap();
-    let bin_path = root.path().join("fw.bin");
-    std::fs::write(&bin_path, [1u8, 2, 3, 4]).unwrap();
-
-    let (_, open_help) = help::run(object(
-        json!({ "domain": "ghidra_session", "operation": "open" }),
-    ))
-    .unwrap();
-    for field in [
-        "programName",
-        "processor",
-        "compilerSpec",
-        "loader",
-        "baseAddress",
-        "reimport",
-    ] {
-        assert!(
-            open_help["inputSchema"]["properties"][field].is_object(),
-            "absent field {field}"
-        );
-    }
-
-    let invalid_open_cases = [
-        (
-            json!({ "path": bin_path, "processor": "invalid" }),
-            "processor",
-        ),
-        (
-            json!({ "path": bin_path, "compilerSpec": "default" }),
-            "compilerSpec requires processor",
-        ),
-        (
-            json!({ "path": bin_path, "loader": "../BadLoader" }),
-            "loader",
-        ),
-        (
-            json!({ "path": bin_path, "baseAddress": "0xZZ" }),
-            "baseAddress",
-        ),
-        (
-            json!({ "path": bin_path, "programName": "app" }),
-            "programName",
-        ),
-        (
-            json!({ "path": gpr_path, "processor": "ARM:LE:32:Cortex" }),
-            "not valid when attaching a .gpr project",
-        ),
-        (
-            json!({ "path": gpr_path, "reimport": true }),
-            "not valid when attaching a .gpr project",
-        ),
-        (
-            json!({ "path": gpr_path, "programName": "../escape" }),
-            "programName",
-        ),
-    ];
-    for (params, expected) in invalid_open_cases {
-        let err = super::call(
-            &daemon,
-            "ghidra_session",
-            object(json!({ "operation": "open", "params": params })),
-        )
-        .await
-        .unwrap_err();
-        assert!(reason(&err).contains(expected), "{params}: {err:#}");
-    }
-
-    let md5 = "0123456789abcdef0123456789abcdef";
-    let invalid_upload_cases = [
-        (
-            json!({ "fileName": "fw.bin", "size": 4, "compilerSpec": "gcc" }),
-            "compilerSpec requires processor",
-        ),
-        (
-            json!({ "fileName": "fw.bin", "size": 4, "baseAddress": "-0x100" }),
-            "baseAddress",
-        ),
-        (
-            json!({ "fileName": "board.gpr", "size": 4 }),
-            ".gpr projects",
-        ),
-    ];
-    for (params, expected) in invalid_upload_cases {
-        let err = super::call(
-            &daemon,
-            "ghidra_upload",
-            object(json!({ "operation": "prepare", "md5": md5, "params": params })),
-        )
-        .await
-        .unwrap_err();
-        assert!(reason(&err).contains(expected), "{params}: {err:#}");
-    }
-}
-
 /// Makes sure that `params` accepts `null` and a JSON object string.
 #[tokio::test]
 async fn params_accepts_null_and_json_object_string() {
@@ -873,5 +772,6 @@ async fn bridge_call_moves_envelope_result_without_clones() {
     );
 }
 
+mod attach;
 mod checkpoints;
 mod listing_mutations;

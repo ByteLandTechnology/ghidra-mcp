@@ -244,6 +244,9 @@ claude mcp get ghidra-mcp
 
 当会话就绪时，`status` 字段显示 `ready`。
 
+要挂接已在 Ghidra CodeBrowser 中打开的程序，请先运行一次 `ghidra-mcp setup`。
+在 Script Manager 中运行 `Bridge.java`，然后用 `{"operation":"attach","params":{"port":8765}}` 调用 `ghidra_session`。
+
 ### 2. 启动后台分析
 
 使用 `ghidra_analysis` 在打开的二进制文件上启动自动分析：

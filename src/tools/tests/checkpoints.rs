@@ -189,3 +189,48 @@ async fn checkpoint_reset_and_delete_reject_invalid_md5_before_lock_allocation()
         assert_eq!(daemon.state.lifecycle_lock_count(), 0);
     }
 }
+
+/// Checks that GUI-attached sessions refuse `checkpoint.create` without a `program.save` call
+/// and support `delete` cleanup.
+#[tokio::test]
+async fn attached_gui_session_rejects_checkpoint_create_and_supports_delete() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = test_daemon(root.path());
+    let md5 = "abcdef0123456789abcdef0123456789";
+
+    let mut record =
+        crate::model::SessionRecord::attaching(md5.into(), "gui.bin".into(), "tok".into());
+    record.mark_ready();
+    daemon.state.put_session(&record).unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    assert!(daemon.state.attach_bridge(
+        md5,
+        crate::state::ConnectionHandle {
+            conn_id: "gui-conn".to_string(),
+            sender: tx,
+        },
+    ));
+
+    let err = super::super::call(
+        &daemon,
+        "ghidra_session",
+        object(json!({ "operation": "checkpoint.create", "md5": md5 })),
+    )
+    .await
+    .unwrap_err();
+    assert!(reason(&err).contains("attached to Ghidra GUI"), "{err:#}");
+    assert!(rx.try_recv().is_err());
+
+    let (_, del_res) = super::super::call(
+        &daemon,
+        "ghidra_session",
+        object(json!({ "operation": "delete", "md5": md5 })),
+    )
+    .await
+    .expect("delete attached session");
+    assert_eq!(del_res["deleted"], true);
+    assert!(rx.try_recv().is_err());
+    assert!(daemon.state.find_session(md5).is_none());
+    assert!(!daemon.state.paths.session_dir(md5).exists());
+}

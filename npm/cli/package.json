@@ -1,6 +1,6 @@
 {
   "name": "@ghidra-mcp/cli",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Headless Ghidra analysis for MCP clients. Clients can start sessions, decompile code, examine symbols, and change Ghidra programs.",
   "license": "MIT",
   "repository": {
@@ -25,11 +25,11 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@ghidra-mcp/darwin-arm64": "2.2.0",
-    "@ghidra-mcp/darwin-x64": "2.2.0",
-    "@ghidra-mcp/linux-arm64": "2.2.0",
-    "@ghidra-mcp/linux-x64": "2.2.0",
-    "@ghidra-mcp/win32-arm64": "2.2.0",
-    "@ghidra-mcp/win32-x64": "2.2.0"
+    "@ghidra-mcp/darwin-arm64": "2.3.0",
+    "@ghidra-mcp/darwin-x64": "2.3.0",
+    "@ghidra-mcp/linux-arm64": "2.3.0",
+    "@ghidra-mcp/linux-x64": "2.3.0",
+    "@ghidra-mcp/win32-arm64": "2.3.0",
+    "@ghidra-mcp/win32-x64": "2.3.0"
   }
 }
