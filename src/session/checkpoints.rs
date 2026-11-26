@@ -79,6 +79,13 @@ pub async fn checkpoint_create(
     }
     let mut saved_live = false;
     if let Some(session) = state.find_session(&md5) {
+        if session.attached {
+            return Err(DomainError::invalid_argument(
+                "md5",
+                format!("session {md5} is attached to Ghidra GUI; save the project in Ghidra"),
+            )
+            .into());
+        }
         if session.status.is_launching() {
             return Err(DomainError::invalid_argument(
                 "md5",
@@ -277,6 +284,7 @@ pub async fn reset(
             let mut record = state.find_session(&md5).unwrap_or_else(|| {
                 SessionRecord::launching(md5.clone(), file_name.clone(), String::new())
             });
+            record.attached = false;
             record.mark_closed(true);
             state.put_session(&record)?;
             (file_name, None)

@@ -101,6 +101,107 @@ fn management_commands_parse() {
     assert!(parse(&["session", "delete", "0123"]).is_ok());
 }
 
+/// Makes sure that `session attach` and `setup` parse their arguments.
+#[test]
+fn attach_and_setup_commands_parse() {
+    let cli = parse(&["session", "attach"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Attach {
+            target: None,
+            ws_url: None,
+            port: None,
+            token: None,
+            file_name: None,
+            wait: false,
+            timeout_ms: None,
+            json: false,
+        }))
+    ));
+    let cli = parse(&[
+        "session",
+        "attach",
+        "/tmp/sample.bin",
+        "--file-name",
+        "sample.bin",
+        "--wait",
+        "--timeout-ms",
+        "5000",
+        "--json",
+    ])
+    .unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Attach {
+            target: Some(_),
+            ws_url: None,
+            port: None,
+            token: None,
+            file_name: Some(_),
+            wait: true,
+            timeout_ms: Some(5000),
+            json: true,
+        }))
+    ));
+    let cli = parse(&[
+        "session", "attach", "--port", "8766", "--token", "secret", "--json",
+    ])
+    .unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Session(SessionCommand::Attach {
+            target: None,
+            ws_url: None,
+            port: Some(8766),
+            token: Some(_),
+            json: true,
+            ..
+        }))
+    ));
+    let cli = parse(&["setup"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Setup {
+            dir: None,
+            json: false,
+        })
+    ));
+    let cli = parse(&["setup", "/tmp/scripts", "--json"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Setup {
+            dir: Some(_),
+            json: true,
+        })
+    ));
+}
+
+/// Makes sure that `install_user_scripts` writes the GUI scripts and JAR.
+#[test]
+fn setup_extracts_launcher_scripts_and_jar() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("ghidra_scripts");
+    let installed = crate::bridge::install_user_scripts(&target).unwrap();
+    assert_eq!(installed.directory, target);
+    for path in &installed.files {
+        let metadata = std::fs::metadata(path).unwrap();
+        assert!(
+            metadata.is_file() && metadata.len() > 0,
+            "{}",
+            path.display()
+        );
+    }
+    let bridge_script = std::fs::read_to_string(target.join("Bridge.java")).unwrap();
+    let mcp_script = std::fs::read_to_string(target.join("GhidraMcp.java")).unwrap();
+    assert!(bridge_script.contains("startFromScript"));
+    assert!(mcp_script.contains("startMcpFromScript"));
+    assert!(bridge_script.contains("ghidra-bridge.jar"));
+    assert!(mcp_script.contains("ghidra-bridge.jar"));
+
+    let again = crate::bridge::install_user_scripts(&target).unwrap();
+    assert_eq!(again.files, installed.files);
+}
+
 /// Makes sure that the durations have a short text form.
 #[test]
 fn durations_are_short() {

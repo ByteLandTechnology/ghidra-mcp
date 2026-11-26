@@ -789,12 +789,31 @@ fn load_sessions(paths: &McpPaths) -> Result<HashMap<String, SessionEntry>> {
 /// Makes isolated daemon state without Ghidra processes or shared environment changes.
 #[cfg(test)]
 pub(crate) fn test_state(root: &std::path::Path) -> Arc<McpState> {
-    test_state_with_config(root, McpConfig::default())
+    test_state_with_options(root, McpConfig::default(), String::new())
+}
+
+/// Makes isolated daemon state with an explicit bridge WebSocket URL.
+#[cfg(test)]
+pub(crate) fn test_state_with_ws_url(
+    root: &std::path::Path,
+    bridge_ws_url: String,
+) -> Arc<McpState> {
+    test_state_with_options(root, McpConfig::default(), bridge_ws_url)
 }
 
 /// Makes isolated daemon state with custom configuration settings for tests.
 #[cfg(test)]
 pub(crate) fn test_state_with_config(root: &std::path::Path, config: McpConfig) -> Arc<McpState> {
+    test_state_with_options(root, config, String::new())
+}
+
+/// Makes isolated daemon state with custom configuration settings and WebSocket URL.
+#[cfg(test)]
+fn test_state_with_options(
+    root: &std::path::Path,
+    config: McpConfig,
+    bridge_ws_url: String,
+) -> Arc<McpState> {
     Arc::new(McpState {
         paths: McpPaths {
             config_toml: root.join("config.toml"),
@@ -803,7 +822,7 @@ pub(crate) fn test_state_with_config(root: &std::path::Path, config: McpConfig) 
             tmp_dir: root.join("tmp"),
         },
         config,
-        bridge_ws_url: String::new(),
+        bridge_ws_url,
         lifecycle_locks: Mutex::default(),
         notify: Notify::new(),
         shutting_down: AtomicBool::new(false),

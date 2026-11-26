@@ -50,7 +50,11 @@ async fn job_cancel_refuses_launch_jobs_and_returns_finished_analysis_jobs() {
     let daemon = test_daemon(root.path());
     let md5 = "0123456789abcdef0123456789abcdef";
 
-    for kind in [job_kind::ANALYZE_BINARY, job_kind::RECOVER_SESSION_BRIDGE] {
+    for kind in [
+        job_kind::ANALYZE_BINARY,
+        job_kind::ATTACH_SESSION,
+        job_kind::RECOVER_SESSION_BRIDGE,
+    ] {
         let launch_job = daemon.state.insert_job(kind, Some(md5.into()));
         let error = call(
             &daemon,

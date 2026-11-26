@@ -44,8 +44,10 @@ use std::time::Duration;
 use tokio::sync::OwnedMutexGuard;
 use tokio::time::Instant;
 
+mod attach;
 mod checkpoints;
 
+pub use attach::{attach, attach_endpoint, DEFAULT_ATTACHED_NAME};
 pub use checkpoints::{checkpoint_create, checkpoint_list, checkpoint_restore, delete, reset};
 
 /// The time that Ghidra has to exit after its bridge session ends. After this time,
@@ -306,7 +308,7 @@ async fn finish_open(
             }
             let launching_job = current
                 .as_ref()
-                .filter(|session| session.status.is_launching())
+                .filter(|session| !session.attached && session.status.is_launching())
                 .and_then(|_| state.launch_job(&md5));
             // Join a launch that is in progress. Do not start a second launch.
             if let Some(job_id) = launching_job {
@@ -434,7 +436,7 @@ pub async fn ensure_connected(state: &Arc<McpState>, md5: &str) -> Result<()> {
     if session.status.is_launching() {
         return wait_for_launch(state, &md5).await;
     }
-    if session.status.is_recoverable() {
+    if session.can_recover() {
         return recover(state, &md5).await;
     }
     Err(DomainError::disconnected(&md5).into())
@@ -442,10 +444,17 @@ pub async fn ensure_connected(state: &Arc<McpState>, md5: &str) -> Result<()> {
 
 /// Waits for the launch that owns the session. Then the bridge must have a connection.
 async fn wait_for_launch(state: &McpState, md5: &str) -> Result<()> {
+    let session = state.session(md5)?;
     let job_id = state
         .launch_job(md5)
         .ok_or_else(|| DomainError::disconnected(md5))?;
-    wait_ready(state, md5, &job_id, state.config.launch_timeout()).await?;
+    if session.attached {
+        state
+            .await_job(&job_id, Some(state.config.launch_timeout()))
+            .await?;
+    } else {
+        wait_ready(state, md5, &job_id, state.config.launch_timeout()).await?;
+    }
     if !state.session(md5)?.ws_connected {
         return Err(DomainError::disconnected(md5).into());
     }
@@ -468,7 +477,7 @@ async fn recover(state: &Arc<McpState>, md5: &str) -> Result<()> {
             drop(guard);
             return wait_for_launch(state, &md5).await;
         }
-        if !current.status.is_recoverable() {
+        if !current.can_recover() {
             return Err(DomainError::disconnected(&md5).into());
         }
         begin_launch(state, &md5, job_kind::RECOVER_SESSION_BRIDGE).await?
