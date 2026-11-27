@@ -58,6 +58,9 @@ const GHIDRA_EXIT_DEADLINE: Duration = Duration::from_mins(2);
 /// Marker prefix emitted by `OpenSavedProject.java` and `ImportBinary.java` on open errors.
 const OPEN_ERROR_MARKER: &str = "GHIDRA_MCP_OPEN_ERROR: ";
 
+/// The minimum time for a request that builds the Sleigh assembler.
+const ASSEMBLER_RPC_TIMEOUT: Duration = Duration::from_mins(2);
+
 /// Opens or reuses a session by `md5` with default options.
 #[cfg(test)]
 pub async fn open(
@@ -419,11 +422,28 @@ pub async fn call(
 ) -> Result<RpcEnvelope> {
     let md5 = normalize_md5(md5)?;
     ensure_connected(state, &md5).await?;
-    let envelope = bridge::request(state, &md5, method, params, state.config.timeouts.rpc).await?;
+    let timeout = rpc_timeout(state.config.timeouts.rpc, method, &params);
+    let envelope = bridge::request(state, &md5, method, params, timeout).await?;
     if let Some(err) = &envelope.error {
         return Err(DomainError::from_bridge(envelope.status, err).into());
     }
     Ok(envelope)
+}
+
+/// Returns the request time limit for a bridge method.
+fn rpc_timeout(default: Duration, method: &str, params: &Value) -> Duration {
+    let uses_assembler = method == "instruction.assemble"
+        || (method == "batch.execute"
+            && params["items"].as_array().is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item["method"].as_str() == Some("instruction.assemble"))
+            }));
+    if uses_assembler {
+        default.max(ASSEMBLER_RPC_TIMEOUT)
+    } else {
+        default
+    }
 }
 
 /// Makes sure that the session has a bridge connection.

@@ -472,6 +472,37 @@ fn synchronizes_concurrent_bridge_runtime_installs() {
         .is_file());
 }
 
+/// Checks that assembler requests use at least the assembler time limit.
+#[test]
+fn assembler_requests_use_at_least_the_assembler_timeout() {
+    let default = Duration::from_secs(30);
+    assert_eq!(rpc_timeout(default, "program.get", &json!({})), default);
+    assert_eq!(
+        rpc_timeout(default, "instruction.assemble", &json!({})),
+        ASSEMBLER_RPC_TIMEOUT
+    );
+    assert_eq!(
+        rpc_timeout(Duration::from_mins(5), "instruction.assemble", &json!({})),
+        Duration::from_mins(5)
+    );
+    assert_eq!(
+        rpc_timeout(
+            default,
+            "batch.execute",
+            &json!({ "items": [{ "id": "1", "method": "code_unit.clear" }] })
+        ),
+        default
+    );
+    assert_eq!(
+        rpc_timeout(
+            default,
+            "batch.execute",
+            &json!({ "items": [{ "id": "1", "method": "instruction.assemble" }] })
+        ),
+        ASSEMBLER_RPC_TIMEOUT
+    );
+}
+
 /// Makes sure that an attached GUI session completes `ghidra.ready`, serves RPC calls,
 /// and never starts headless recovery after disconnect.
 #[tokio::test]

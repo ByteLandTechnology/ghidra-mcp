@@ -630,6 +630,40 @@ To apply C++ names to all mangled primary symbols, use `ghidra_symbol`:
 The operation changes names and namespaces only. It keeps function signatures and data types.
 Function, symbol, and call results also give `demangled_name` without a change to the program.
 
+To assemble Sleigh instructions, decode undefined bytes, or clear code units, use `ghidra_listing`:
+
+```json
+{
+  "operation": "instruction.assemble",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "selector": { "address": "ram:00100000" },
+    "instructions": ["XOR EAX, EAX", "RET"],
+    "pad_nop": true
+  }
+}
+{
+  "operation": "instruction.disassemble",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "selector": { "kind": "range", "start": "ram:00100000", "end": "ram:0010000f" },
+    "follow_flow": true
+  }
+}
+{
+  "operation": "code_unit.clear",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": {
+    "selector": { "kind": "address", "address": "ram:00100000" }
+  }
+}
+```
+
+`instruction.assemble` clears code units that overlap the assembled bytes.
+Set `pad_nop` to `true` to fill leftover instruction bytes with `NOP` instructions.
+`code_unit.clear` removes defined instructions and data, and keeps labels and bytes.
+In `ghidra_memory` `write`, set `clear_existing` to `true` to clear code units before the write, and set `disassemble` to `true` to decode the written bytes.
+
 Before the first call to an operation, call `ghidra_help` with the domain and operation.
 Its `inputSchema` describes the contents of `params`, not the top-level tool arguments.
 Check the required fields and their nested structure before the call.
