@@ -152,3 +152,33 @@ fn atomic_prototype_and_c_type_schemas_are_available() {
     .expect("valid global_variable create");
     assert_eq!(global_req.params["resource"]["data_type"], "const char *");
 }
+
+/// Checks that compact `tools/list` schemas accept polymorphic C type fields.
+#[test]
+fn compact_tool_schemas_keep_c_type_fields_untyped() {
+    let tools = tool_definitions();
+    let params_props = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("no tool {name}"))["inputSchema"]["properties"]["params"]
+            ["properties"]
+            .clone()
+    };
+
+    let fn_props = params_props("ghidra_function");
+    let fn_patch = &fn_props["patch"]["properties"];
+    assert!(fn_patch["signature"].is_object());
+    assert!(fn_patch["parameters"].is_object());
+    assert_eq!(fn_patch["return_type"], json!({}));
+    assert_eq!(fn_patch["data_type"], json!({}));
+    assert_eq!(fn_props["resource"]["properties"]["data_type"], json!({}));
+
+    let dt_props = params_props("ghidra_data_type");
+    assert!(dt_props["conflict_mode"].is_object());
+    assert_eq!(dt_props["resource"]["properties"]["base_type"], json!({}));
+
+    let gv_props = params_props("ghidra_global_variable");
+    assert_eq!(gv_props["resource"]["properties"]["data_type"], json!({}));
+    assert_eq!(gv_props["patch"]["properties"]["data_type"], json!({}));
+}

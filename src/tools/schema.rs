@@ -17,8 +17,8 @@ const SINGLE_OPERATION_MAX_DEPTH: usize = 4;
 /// Maximum object depth for multi-operation summaries and `batch`.
 const SUMMARY_MAX_DEPTH: usize = 2;
 
-/// Internal reference URI for recursive Ghidra data type references.
-const DATA_TYPE_REF: &str = "#/$defs/data_type_reference";
+/// Prefix of local JSON Schema `$defs` references.
+const DEF_PREFIX: &str = "#/$defs/";
 
 /// Scalar JSON Schema keywords copied onto flattened leaf nodes.
 const SCALAR_KEYS: &[&str] = &[
@@ -41,7 +41,10 @@ pub(super) fn params_schema(domain_name: &str, operations: &[Operation]) -> Valu
     };
     let flattened: Vec<Value> = operations
         .iter()
-        .map(|operation| flatten(&operation.schema, 0, max_depth))
+        .map(|operation| {
+            let definitions = schema_definitions(&operation.schema);
+            flatten(&operation.schema, definitions, 0, max_depth)
+        })
         .collect();
     let merged = if flattened.len() == 1 {
         flattened.into_iter().next().unwrap_or_default()
@@ -75,16 +78,26 @@ pub(super) fn params_schema(domain_name: &str, operations: &[Operation]) -> Valu
     Value::Object(params)
 }
 
+/// Returns the local `$defs` map of `schema` when present.
+fn schema_definitions(schema: &Value) -> Option<&Map<String, Value>> {
+    schema.get("$defs").and_then(Value::as_object)
+}
+
 /// Flattens one JSON Schema node without union, reference, or extra-property keys.
-fn flatten(schema: &Value, depth: usize, max_depth: usize) -> Value {
+fn flatten(
+    schema: &Value,
+    definitions: Option<&Map<String, Value>>,
+    depth: usize,
+    max_depth: usize,
+) -> Value {
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        return flatten_reference(reference, depth, max_depth);
+        return flatten_reference(reference, definitions, depth, max_depth);
     }
     if let Some(branches) = union_branches(schema) {
         let non_null: Vec<Value> = branches
             .iter()
             .filter(|branch| branch.get("type").and_then(Value::as_str) != Some("null"))
-            .map(|branch| flatten(branch, depth, max_depth))
+            .map(|branch| flatten(branch, definitions, depth, max_depth))
             .collect();
         return match non_null.len() {
             0 => Value::Object(Map::new()),
@@ -96,48 +109,48 @@ fn flatten(schema: &Value, depth: usize, max_depth: usize) -> Value {
         return copy_description_only(schema);
     };
     match schema_type {
-        "object" => flatten_object(schema, depth, max_depth),
-        "array" => flatten_array(schema, depth, max_depth),
+        "object" => flatten_object(schema, definitions, depth, max_depth),
+        "array" => flatten_array(schema, definitions, depth, max_depth),
         "string" | "integer" | "number" | "boolean" => flatten_scalar(schema, schema_type),
         other => json!({ "type": other }),
     }
 }
 
-/// Expands a recursive data type reference down to `max_depth`.
-fn flatten_reference(reference: &str, depth: usize, max_depth: usize) -> Value {
-    if reference != DATA_TYPE_REF || depth >= max_depth {
+/// Expands a local `$defs` reference down to `max_depth`.
+fn flatten_reference(
+    reference: &str,
+    definitions: Option<&Map<String, Value>>,
+    depth: usize,
+    max_depth: usize,
+) -> Value {
+    let Some(name) = reference.strip_prefix(DEF_PREFIX) else {
         return json!({ "type": "object" });
+    };
+    let Some(target) = definitions.and_then(|defs| defs.get(name)) else {
+        return json!({ "type": "object" });
+    };
+    if depth >= max_depth {
+        if let Some(branches) = union_branches(target) {
+            return match common_type(branches) {
+                Some(shared) => json!({ "type": shared }),
+                None => Value::Object(Map::new()),
+            };
+        }
+        return match target.get("type").and_then(Value::as_str) {
+            Some(schema_type) => json!({ "type": schema_type }),
+            None => Value::Object(Map::new()),
+        };
     }
-    let mut properties = Map::new();
-    properties.insert(
-        "kind".into(),
-        json!({
-            "type": "string",
-            "enum": ["array", "named", "pointer", "untyped_pointer"]
-        }),
-    );
-    properties.insert("name".into(), json!({ "type": "string", "minLength": 1 }));
-    properties.insert(
-        "target".into(),
-        flatten_reference(reference, depth + 1, max_depth),
-    );
-    properties.insert(
-        "element".into(),
-        flatten_reference(reference, depth + 1, max_depth),
-    );
-    properties.insert(
-        "count".into(),
-        json!({ "type": "integer", "minimum": 1, "maximum": i32::MAX }),
-    );
-    json!({
-        "type": "object",
-        "properties": properties,
-        "required": ["kind"]
-    })
+    flatten(target, definitions, depth + 1, max_depth)
 }
 
 /// Flattens an object schema up to `max_depth`.
-fn flatten_object(schema: &Value, depth: usize, max_depth: usize) -> Value {
+fn flatten_object(
+    schema: &Value,
+    definitions: Option<&Map<String, Value>>,
+    depth: usize,
+    max_depth: usize,
+) -> Value {
     if schema.get("additionalProperties") == Some(&Value::Bool(true)) {
         return with_description(json!({ "type": "object" }), schema);
     }
@@ -152,7 +165,10 @@ fn flatten_object(schema: &Value, depth: usize, max_depth: usize) -> Value {
     }
     let mut properties = Map::new();
     for (key, child) in raw_properties {
-        properties.insert(key.clone(), flatten(child, depth + 1, max_depth));
+        properties.insert(
+            key.clone(),
+            flatten(child, definitions, depth + 1, max_depth),
+        );
     }
     let mut result = Map::new();
     result.insert("type".into(), json!("object"));
@@ -169,12 +185,20 @@ fn flatten_object(schema: &Value, depth: usize, max_depth: usize) -> Value {
 }
 
 /// Flattens an array schema and its item schema.
-fn flatten_array(schema: &Value, depth: usize, max_depth: usize) -> Value {
+fn flatten_array(
+    schema: &Value,
+    definitions: Option<&Map<String, Value>>,
+    depth: usize,
+    max_depth: usize,
+) -> Value {
     let mut result = Map::new();
     result.insert("type".into(), json!("array"));
     copy_if_present(schema, &mut result, "description");
     if let Some(items) = schema.get("items") {
-        result.insert("items".into(), flatten(items, depth, max_depth));
+        result.insert(
+            "items".into(),
+            flatten(items, definitions, depth, max_depth),
+        );
     }
     copy_if_present(schema, &mut result, "minItems");
     copy_if_present(schema, &mut result, "maxItems");
