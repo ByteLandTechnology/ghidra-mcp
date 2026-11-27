@@ -238,10 +238,11 @@ fn public_tool_contract_is_gemini_compatible() {
             .find(|item| item["name"] == name)
             .unwrap_or_else(|| panic!("no tool {name}"))
     };
-    assert!(tool("ghidra_listing")["description"]
+    let listing_description = tool("ghidra_listing")["description"]
         .as_str()
-        .expect("listing description")
-        .contains("data units"));
+        .expect("listing description");
+    assert!(listing_description.contains("data units"));
+    assert!(listing_description.contains("basic blocks"));
     assert_eq!(
         tool("ghidra_upload")["inputSchema"]["properties"]["params"]["required"],
         json!(["fileName", "size"])
@@ -250,10 +251,10 @@ fn public_tool_contract_is_gemini_compatible() {
         tool("ghidra_decompilation")["inputSchema"]["properties"]["params"]["required"],
         json!(["selector"])
     );
-    assert_eq!(
-        tool("ghidra_reference")["inputSchema"]["properties"]["params"]["required"],
-        json!(["filter"])
-    );
+    let reference_params = &tool("ghidra_reference")["inputSchema"]["properties"]["params"];
+    assert!(reference_params.get("required").is_none());
+    assert!(reference_params["properties"]["filter"].is_object());
+    assert!(reference_params["properties"]["scan"].is_object());
     assert_eq!(
         tool("ghidra_batch")["inputSchema"]["properties"]["params"]["required"],
         json!(["items"])
@@ -774,3 +775,4 @@ async fn bridge_call_moves_envelope_result_without_clones() {
 
 mod attach;
 mod checkpoints;
+mod graph;
