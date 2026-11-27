@@ -774,3 +774,4 @@ async fn bridge_call_moves_envelope_result_without_clones() {
 
 mod attach;
 mod checkpoints;
+mod locals;
