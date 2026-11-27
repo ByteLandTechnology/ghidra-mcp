@@ -250,10 +250,10 @@ fn public_tool_contract_is_gemini_compatible() {
         tool("ghidra_decompilation")["inputSchema"]["properties"]["params"]["required"],
         json!(["selector"])
     );
-    assert_eq!(
-        tool("ghidra_reference")["inputSchema"]["properties"]["params"]["required"],
-        json!(["filter"])
-    );
+    let reference_params = &tool("ghidra_reference")["inputSchema"]["properties"]["params"];
+    assert!(reference_params.get("required").is_none());
+    assert!(reference_params["properties"]["filter"].is_object());
+    assert!(reference_params["properties"]["scan"].is_object());
     assert_eq!(
         tool("ghidra_batch")["inputSchema"]["properties"]["params"]["required"],
         json!(["items"])
@@ -774,3 +774,4 @@ async fn bridge_call_moves_envelope_result_without_clones() {
 
 mod attach;
 mod checkpoints;
+mod scopes;
