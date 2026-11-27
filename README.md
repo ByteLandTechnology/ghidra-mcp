@@ -630,6 +630,29 @@ To apply C++ names to all mangled primary symbols, use `ghidra_symbol`:
 The operation changes names and namespaces only. It keeps function signatures and data types.
 Function, symbol, and call results also give `demangled_name` without a change to the program.
 
+To list or filter strings, use `ghidra_listing` with `string.list`:
+
+```json
+{
+  "operation": "string.list",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": { "filter": { "regex": "https?://", "include_candidates": true } }
+}
+```
+
+By default, the operation returns each defined string and its encoding without raw bytes.
+Set `include_candidates` to `true` to scan undefined initialized bytes too.
+
+To search initialized memory with `??` byte wildcards, use `ghidra_memory` with `find`:
+
+```json
+{
+  "operation": "find",
+  "md5": "0123456789abcdef0123456789abcdef",
+  "params": { "filter": { "pattern": "48 8B ?? ??" } }
+}
+```
+
 Before the first call to an operation, call `ghidra_help` with the domain and operation.
 Its `inputSchema` describes the contents of `params`, not the top-level tool arguments.
 Check the required fields and their nested structure before the call.

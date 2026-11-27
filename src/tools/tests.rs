@@ -238,10 +238,11 @@ fn public_tool_contract_is_gemini_compatible() {
             .find(|item| item["name"] == name)
             .unwrap_or_else(|| panic!("no tool {name}"))
     };
-    assert!(tool("ghidra_listing")["description"]
+    let listing_description = tool("ghidra_listing")["description"]
         .as_str()
-        .expect("listing description")
-        .contains("data units"));
+        .expect("listing description");
+    assert!(listing_description.contains("data units"));
+    assert!(listing_description.contains("strings"));
     assert_eq!(
         tool("ghidra_upload")["inputSchema"]["properties"]["params"]["required"],
         json!(["fileName", "size"])
@@ -774,3 +775,4 @@ async fn bridge_call_moves_envelope_result_without_clones() {
 
 mod attach;
 mod checkpoints;
+mod search;
