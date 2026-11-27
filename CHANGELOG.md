@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v2.3.0...v2.4.0) (2026-11-26)
+
+
+### Features
+
+* add setup command and GUI session attach ([#68](https://github.com/ByteLandTechnology/ghidra-mcp/issues/68)) ([3771443](https://github.com/ByteLandTechnology/ghidra-mcp/commit/37714438ef7e643a1e8474b609f1838f6c3f0147))
+
 ## [2.3.0](https://github.com/ByteLandTechnology/ghidra-mcp/compare/v2.2.0...v2.3.0) (2026-11-26)
 
 
