@@ -49,7 +49,7 @@ MCP クライアントは stdio または HTTP でデーモンに接続します
 - **ローカル `.gpr` プロジェクト。** デーモンは、ローカルの Ghidra `.gpr` プロジェクトをその場でアタッチし、カスタムメモリマップを保持します。
 - **Ghidra への完全なアクセス。** Java ブリッジが、プログラムデータ、関数、逆コンパイル、シンボル、参照、メモリ、コメントを提供します。
 - **単一の実行ファイル。** 実行ファイルには、ブリッジ JAR とその起動スクリプトが含まれます。
-- **バックグラウンドジョブ。** `ghidra_job list`、`ghidra_job get`、`ghidra_job wait` で長時間の解析を監視します。
+- **バックグラウンドジョブ。** `ghidra_job list`、`ghidra_job get`、`ghidra_job wait`、`ghidra_job cancel` で長時間の解析を監視またはキャンセルします。
 
 デフォルトでは、セッションはプログラムを変更できます。
 コーディングエージェントは、プログラムを変更する操作を使用する前に、ユーザーの承認を得る必要があります。
@@ -254,7 +254,7 @@ Unix では、`SIGINT`、`SIGTERM`、`SIGHUP` でも停止します。
 | `ghidra-mcp paths [--json]` | 永続ホーム、ランタイムディレクトリ、およびその中のファイルを表示します。 |
 | `ghidra-mcp config path\|show\|edit\|check` | `config.toml` の場所の確認、表示、編集、検査を行います。 |
 | `ghidra-mcp session list\|get\|open\|attach\|close\|checkpoint\|reset\|delete` | デーモンのセッションとチェックポイントを管理します。 |
-| `ghidra-mcp job list\|get\|wait` | デーモンのバックグラウンドジョブを確認します。 |
+| `ghidra-mcp job list\|get\|wait\|cancel` | デーモンのバックグラウンドジョブを確認またはキャンセルします。 |
 
 稼働中のセッションや実行中のジョブがある場合、`daemon stop` はデーモンを停止しません。停止するには `--force` を付けます。
 デーモンが実行されていない場合、`daemon status` はステータス 3 で終了し、`daemon stop` は成功します。
@@ -548,9 +548,9 @@ ipc_handshake_timeout_sec = 5
 | --- | --- | --- |
 | `ghidra_session` | `open`、`attach`、`list`、`get`、`close`、`checkpoint.create`、`checkpoint.list`、`checkpoint.restore`、`reset`、`delete` | デーモン。 |
 | `ghidra_upload` | `prepare` | デーモン。 |
-| `ghidra_job` | `list`、`get`、`wait` | デーモン。 |
+| `ghidra_job` | `list`、`get`、`wait`、`cancel` | デーモン。 |
 | `ghidra_daemon` | `status`、`shutdown` | デーモン。 |
-| `ghidra_analysis` | `start`、`get` | `start`：デーモン、次にブリッジ。`get`：ブリッジ。 |
+| `ghidra_analysis` | `start`、`get`、`cancel` | `start`：デーモン、次にブリッジ。`get`、`cancel`：ブリッジ。 |
 | `ghidra_bridge`、`ghidra_program`、`ghidra_address`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_decompilation`、`ghidra_symbol`、`ghidra_reference`、`ghidra_comment`、`ghidra_data_type`、`ghidra_batch` | そのドメインのブリッジメソッド。 | セッションのブリッジ。 |
 
 ブリッジ契約 `bridge/docs/asyncapi.yaml` が、ブリッジメソッド、そのスキーマ、`read_only` 効果を定義します。

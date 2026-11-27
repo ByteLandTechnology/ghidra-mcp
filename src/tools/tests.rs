@@ -114,7 +114,7 @@ fn tool_definitions_have_routes_and_annotations() {
         tool("ghidra_memory")["annotations"]["destructiveHint"],
         true
     );
-    assert_eq!(tool("ghidra_job")["annotations"]["readOnlyHint"], true);
+    assert_eq!(tool("ghidra_job")["annotations"]["readOnlyHint"], false);
     assert_eq!(
         tool("ghidra_session")["annotations"]["destructiveHint"],
         true
@@ -773,4 +773,5 @@ async fn bridge_call_moves_envelope_result_without_clones() {
 }
 
 mod attach;
+mod cancel;
 mod checkpoints;

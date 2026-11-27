@@ -49,7 +49,7 @@ MCP 客户端通过 stdio 或 HTTP 连接守护进程。
 - **本地 `.gpr` 项目。** 守护进程就地附加本地 Ghidra `.gpr` 项目，保留其自定义内存映射。
 - **完整的 Ghidra 访问。** Java 桥接提供程序数据、函数、反编译、符号、引用、内存和注释。
 - **单个可执行文件。** 可执行文件包含桥接 JAR 及其启动脚本。
-- **后台作业。** `ghidra_job list`、`ghidra_job get` 和 `ghidra_job wait` 监视长时间运行的分析。
+- **后台作业。** `ghidra_job list`、`ghidra_job get`、`ghidra_job wait` 和 `ghidra_job cancel` 监视或取消长时间运行的分析。
 
 默认情况下，会话可以修改程序。
 编码代理在使用会修改程序的操作之前，必须获得用户的批准。
@@ -254,7 +254,7 @@ ghidra-mcp daemon run --listen 127.0.0.1:18490
 | `ghidra-mcp paths [--json]` | 显示持久主目录、运行时目录及其中的文件。 |
 | `ghidra-mcp config path\|show\|edit\|check` | 查找、显示、修改或检查 `config.toml`。 |
 | `ghidra-mcp session list\|get\|open\|attach\|close\|checkpoint\|reset\|delete` | 管理守护进程的会话和检查点。 |
-| `ghidra-mcp job list\|get\|wait` | 查看守护进程的后台作业。 |
+| `ghidra-mcp job list\|get\|wait\|cancel` | 查看或取消守护进程的后台作业。 |
 
 如果有活动会话或正在运行的作业，`daemon stop` 不会停止守护进程。加上 `--force` 才会停止。
 没有守护进程运行时，`daemon status` 以状态 3 退出，`daemon stop` 视为成功。
@@ -547,9 +547,9 @@ ipc_handshake_timeout_sec = 5
 | --- | --- | --- |
 | `ghidra_session` | `open`、`attach`、`list`、`get`、`close`、`checkpoint.create`、`checkpoint.list`、`checkpoint.restore`、`reset`、`delete` | 守护进程。 |
 | `ghidra_upload` | `prepare` | 守护进程。 |
-| `ghidra_job` | `list`、`get`、`wait` | 守护进程。 |
+| `ghidra_job` | `list`、`get`、`wait`、`cancel` | 守护进程。 |
 | `ghidra_daemon` | `status`、`shutdown` | 守护进程。 |
-| `ghidra_analysis` | `start`、`get` | `start`：守护进程，然后是桥接。`get`：桥接。 |
+| `ghidra_analysis` | `start`、`get`、`cancel` | `start`：守护进程，然后是桥接。`get`、`cancel`：桥接。 |
 | `ghidra_bridge`、`ghidra_program`、`ghidra_address`、`ghidra_memory`、`ghidra_listing`、`ghidra_global_variable`、`ghidra_function`、`ghidra_decompilation`、`ghidra_symbol`、`ghidra_reference`、`ghidra_comment`、`ghidra_data_type`、`ghidra_batch` | 该领域的桥接方法。 | 会话的桥接。 |
 
 桥接契约 `bridge/docs/asyncapi.yaml` 给出桥接方法、它们的模式和 `read_only` 效果。

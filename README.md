@@ -49,7 +49,7 @@ The MD5 of a binary identifies its session for all clients.
 - **Local `.gpr` projects.** The daemon attaches a local Ghidra `.gpr` project in place and keeps its custom memory map.
 - **Full Ghidra access.** The Java bridge gives program data, functions, decompilation, symbols, references, memory and comments.
 - **One executable.** The executable contains the bridge JAR and its launcher scripts.
-- **Background jobs.** `ghidra_job list`, `ghidra_job get` and `ghidra_job wait` monitor a long analysis.
+- **Background jobs.** `ghidra_job list`, `ghidra_job get`, `ghidra_job wait` and `ghidra_job cancel` monitor or stop a long analysis.
 
 Sessions can change the program by default.
 Coding agents must get approval from the user before they use an operation that changes the program.
@@ -256,7 +256,7 @@ Use these commands to manage the shared daemon:
 | `ghidra-mcp paths [--json]` | Show the persistent home, the runtime directory and their files. |
 | `ghidra-mcp config path\|show\|edit\|check` | Find, show, change or check `config.toml`. |
 | `ghidra-mcp session list\|get\|open\|attach\|close\|checkpoint\|reset\|delete` | Manage the sessions and checkpoints of the daemon. |
-| `ghidra-mcp job list\|get\|wait` | Examine the background jobs of the daemon. |
+| `ghidra-mcp job list\|get\|wait\|cancel` | Examine or cancel the background jobs of the daemon. |
 
 If a session is live or a job runs, `daemon stop` does not stop the daemon.
 To stop it, add `--force`.
@@ -555,9 +555,9 @@ A domain tool has these arguments:
 | --- | --- | --- |
 | `ghidra_session` | `open`, `attach`, `list`, `get`, `close`, `checkpoint.create`, `checkpoint.list`, `checkpoint.restore`, `reset`, `delete` | The daemon. |
 | `ghidra_upload` | `prepare` | The daemon. |
-| `ghidra_job` | `list`, `get`, `wait` | The daemon. |
+| `ghidra_job` | `list`, `get`, `wait`, `cancel` | The daemon. |
 | `ghidra_daemon` | `status`, `shutdown` | The daemon. |
-| `ghidra_analysis` | `start`, `get` | `start`: the daemon, then the bridge. `get`: the bridge. |
+| `ghidra_analysis` | `start`, `get`, `cancel` | `start`: the daemon, then the bridge. `get`, `cancel`: the bridge. |
 | `ghidra_bridge`, `ghidra_program`, `ghidra_address`, `ghidra_memory`, `ghidra_listing`, `ghidra_global_variable`, `ghidra_function`, `ghidra_decompilation`, `ghidra_symbol`, `ghidra_reference`, `ghidra_comment`, `ghidra_data_type`, `ghidra_batch` | The bridge methods of the domain. | The bridge of the session. |
 
 The bridge contract `bridge/docs/asyncapi.yaml` gives the bridge methods, their schemas and their `read_only` effects.

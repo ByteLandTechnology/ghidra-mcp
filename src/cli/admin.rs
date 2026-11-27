@@ -209,6 +209,20 @@ pub enum JobCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Cancel an analysis job, then write it.
+    Cancel {
+        /// The job ID.
+        id: String,
+        /// Wait until the job stops.
+        #[arg(long)]
+        wait: bool,
+        /// The maximum wait in milliseconds, instead of the launch timeout.
+        #[arg(long)]
+        timeout_ms: Option<u64>,
+        /// Write JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Extracts the bundled Ghidra scripts and JAR into a user script directory.
@@ -672,6 +686,18 @@ pub async fn job(command: JobCommand) -> Result<ExitCode> {
                 params["timeoutMs"] = timeout.into();
             }
             (call("ghidra_job", "wait", None, params).await?, json)
+        }
+        JobCommand::Cancel {
+            id,
+            wait,
+            timeout_ms,
+            json,
+        } => {
+            let mut params = json!({ "jobId": id, "wait": wait });
+            if let Some(timeout) = timeout_ms {
+                params["timeoutMs"] = timeout.into();
+            }
+            (call("ghidra_job", "cancel", None, params).await?, json)
         }
     };
     if json {

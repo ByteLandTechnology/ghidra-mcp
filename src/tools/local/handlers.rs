@@ -4,7 +4,8 @@
 //! Execution handlers for multi-step local operations in [`super::LOCAL_OPERATIONS`].
 
 use super::{
-    millis_or, parse, AnalysisArgs, AttachArgs, Daemon, OpenArgs, Output, Request, ShutdownArgs,
+    millis_or, parse, AnalysisArgs, AttachArgs, CancelJobArgs, Daemon, OpenArgs, Output, Request,
+    ShutdownArgs,
 };
 use crate::error::DomainError;
 use crate::import::{is_gpr_path, OpenOptions};
@@ -239,6 +240,22 @@ pub(super) async fn start_analysis(daemon: &Daemon, request: Request) -> Result<
         format!("Analysis completed for session {md5}")
     } else {
         format!("Analysis started for session {md5}")
+    };
+    Ok((text, json!({ "job": job })))
+}
+
+/// Runs `ghidra_job cancel`.
+pub(super) async fn cancel_job(daemon: &Daemon, request: Request) -> Result<Output> {
+    let args: CancelJobArgs = parse(&request.label, request.params)?;
+    let state = &daemon.state;
+    let wait = args
+        .wait
+        .then(|| millis_or(args.timeout_ms, state.config.launch_timeout()));
+    let job = analysis::cancel_job(state, &args.job_id, wait).await?;
+    let text = if job.status == JobStatus::Running {
+        format!("Requested cancellation of job {}", job.id)
+    } else {
+        format!("Job {} stopped", job.id)
     };
     Ok((text, json!({ "job": job })))
 }

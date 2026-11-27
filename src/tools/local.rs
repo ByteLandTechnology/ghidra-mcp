@@ -14,7 +14,9 @@ use serde_json::{json, Map, Value};
 use std::time::Duration;
 
 mod handlers;
-use handlers::{attach_session, daemon_status, open_session, shutdown_daemon, start_analysis};
+use handlers::{
+    attach_session, cancel_job, daemon_status, open_session, shutdown_daemon, start_analysis,
+};
 
 /// An operation that the daemon runs.
 pub(super) struct LocalOperation {
@@ -539,6 +541,36 @@ pub(super) const LOCAL_OPERATIONS: &[LocalOperation] = &[
         },
     },
     LocalOperation {
+        domain: "job",
+        name: "cancel",
+        description: concat!(
+            "Cancel a start-analysis background job. Returns at once by default. ",
+            "Set wait=true to wait until the job stops."
+        ),
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "jobId": { "type": "string" },
+                    "wait": { "type": "boolean", "default": false },
+                    "timeoutMs": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["jobId"],
+                "additionalProperties": false
+            })
+        },
+        md5: Md5Rule::Absent,
+        basis: Basis::Own(Effects {
+            read_only: false,
+            mutates_program: false,
+            destructive: false,
+            idempotent: true,
+            allowed_during_analysis: true,
+            requires_transaction: false,
+        }),
+        run: |daemon, request| Box::pin(cancel_job(daemon, request)),
+    },
+    LocalOperation {
         domain: "daemon",
         name: "status",
         description: concat!(
@@ -723,6 +755,19 @@ struct JobArgs {
     /// The job.
     job_id: String,
     /// The maximum wait of `ghidra_job wait`, instead of the launch timeout.
+    timeout_ms: Option<u64>,
+}
+
+/// The parameters of `ghidra_job cancel`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CancelJobArgs {
+    /// The job.
+    job_id: String,
+    /// Wait until the job stops.
+    #[serde(default)]
+    wait: bool,
+    /// The maximum wait, instead of the launch timeout.
     timeout_ms: Option<u64>,
 }
 
